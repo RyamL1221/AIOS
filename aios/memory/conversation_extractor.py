@@ -45,11 +45,23 @@ class ConversationExtractor:
         agent_name: str,
         user_message: str,
         assistant_message: str,
+        user_id: str | None = None,
     ) -> None:
         """Store a conversation pair in a background daemon thread.
 
         No-op when ``auto_extract`` is disabled.  Errors are logged
         at WARNING level and never raised.
+
+        Args:
+            agent_name: The requesting agent's name.
+            user_message: The user's message content.
+            assistant_message: The assistant's response.
+            user_id: Optional real user identifier resolved
+                by the ContextInjector.  When provided, the
+                conversation memory is stored under this
+                user_id instead of the agent name, keeping
+                it in the same Mem0 scope as profile/task
+                memories written by other agents.
         """
         if not self.enabled:
             return
@@ -57,7 +69,12 @@ class ConversationExtractor:
         try:
             thread = threading.Thread(
                 target=self._store_conversation,
-                args=(agent_name, user_message, assistant_message),
+                args=(
+                    agent_name,
+                    user_message,
+                    assistant_message,
+                    user_id,
+                ),
                 daemon=True,
             )
             thread.start()
@@ -76,6 +93,7 @@ class ConversationExtractor:
         agent_name: str,
         user_message: str,
         assistant_message: str,
+        user_id: str | None = None,
     ) -> None:
         """Synchronous storage called from the background thread."""
         try:
@@ -85,21 +103,33 @@ class ConversationExtractor:
                 user_message, assistant_message,
             )
 
+            # Use the resolved user_id when available so
+            # the conversation memory lands in the same
+            # Mem0 scope as profile/task memories written
+            # by other agents for this user.  Fall back to
+            # agent_name for backward compatibility.
+            effective_user_id = user_id or agent_name
+
             memory_note = MemoryNote(
                 content=content,
                 context="conversation",
                 category="conversation",
             )
-            # Attach provider-specific metadata so Mem0Provider
-            # picks up the correct user_id scope.
-            memory_note.metadata = {"user_id": agent_name}
+            memory_note.metadata = {
+                "user_id": effective_user_id,
+                "owner_agent": agent_name,
+                "memory_type": "conversation",
+                "sharing_policy": "private",
+            }
 
             result = self.memory_manager.provider.add_memory(
                 memory_note
             )
 
             logger.info(
-                "Stored conversation memory for user_id=%s: %s",
+                "Stored conversation memory for "
+                "user_id=%s (agent=%s): %s",
+                effective_user_id,
                 agent_name,
                 content[:80],
             )

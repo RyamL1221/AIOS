@@ -86,6 +86,7 @@ class ContextInjector:
                 "memory_types": [],
                 "prompt_tokens_before": tokens,
                 "prompt_tokens_after": tokens,
+                "resolved_user_id": None,
             })
 
         diagnostics: dict = {
@@ -96,6 +97,7 @@ class ContextInjector:
             "memory_types": [],
             "prompt_tokens_before": 0,
             "prompt_tokens_after": 0,
+            "resolved_user_id": None,
         }
 
         try:
@@ -213,6 +215,14 @@ class ContextInjector:
                 diagnostics["prompt_tokens_after"] = (
                     diagnostics["prompt_tokens_before"]
                 )
+                diagnostics["resolved_user_id"] = (
+                    derived_user_id
+                    if (
+                        derived_user_id
+                        and derived_user_id != agent_name
+                    )
+                    else None
+                )
                 return (query, diagnostics)
 
             # candidate_count = merged set before filtering
@@ -314,6 +324,14 @@ class ContextInjector:
                 ),
                 agent_name,
                 derived_user_id or agent_name,
+            )
+            diagnostics["resolved_user_id"] = (
+                derived_user_id
+                if (
+                    derived_user_id
+                    and derived_user_id != agent_name
+                )
+                else None
             )
             return (query, diagnostics)
 

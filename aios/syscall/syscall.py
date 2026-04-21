@@ -689,8 +689,21 @@ class SyscallExecutor:
                     if hasattr(assistant_msg, "response_message"):
                         assistant_msg = assistant_msg.response_message
                     if user_msg and assistant_msg:
+                        # Propagate the real user_id resolved
+                        # during injection so the conversation
+                        # memory lands in the correct Mem0 scope.
+                        resolved_uid = (
+                            injection_diag.get(
+                                "resolved_user_id"
+                            )
+                            if self.context_injector
+                            else None
+                        )
                         self.conversation_extractor.extract_async(
-                            agent_name, user_msg, str(assistant_msg)
+                            agent_name,
+                            user_msg,
+                            str(assistant_msg),
+                            user_id=resolved_uid,
                         )
 
                 return llm_response
