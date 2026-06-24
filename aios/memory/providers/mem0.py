@@ -222,6 +222,135 @@ class Mem0Provider(MemoryProvider):
         if env_var:
             return os.environ.get(env_var)
         return None
+
+    # ------------------------------------------------------------------
+    # Dynamic LLM synchronization
+    # ------------------------------------------------------------------
+
+    # Mapping from AIOS kernel backend names to Mem0 LLM provider names.
+    _BACKEND_TO_MEM0_PROVIDER: Dict[str, str] = {
+        "openai": "openai",
+        "azure": "azure_openai",
+        "azure_openai": "azure_openai",
+        "anthropic": "anthropic",
+        "gemini": "gemini",
+        "ollama": "ollama",
+        "groq": "groq",
+        "deepseek": "deepseek",
+        "vllm": "vllm",
+        "litellm": "litellm",
+    }
+
+    def sync_llm_from_query(
+        self,
+        llms: "list[dict] | None",
+    ) -> None:
+        """Synchronize the Mem0 client's LLM with the agent's
+        runtime model selection.
+
+        This allows the kernel to propagate the agent's chosen
+        LLM (specified in ``LLMQuery.llms``) to the Mem0
+        provider so that Mem0's internal fact extraction uses the
+        same model as the assistant agent — without requiring a
+        static ``mem0.llm`` entry in ``config.yaml``.
+
+        The method is idempotent: if the requested model is
+        already active, it short-circuits without reconstructing
+        the LLM object.
+
+        Args:
+            llms: The ``LLMQuery.llms`` field — a list of dicts
+                each containing at minimum ``name`` (model name)
+                and optionally ``backend`` (AIOS backend
+                identifier). ``None`` or empty list is a no-op.
+        """
+        if not llms or not self.client:
+            return
+
+        # Use the first entry in the list (primary model).
+        primary = llms[0]
+        model_name = primary.get("name")
+        backend = primary.get("backend", "")
+
+        if not model_name:
+            return
+
+        # Map AIOS backend → Mem0 provider name.
+        mem0_provider = self._BACKEND_TO_MEM0_PROVIDER.get(
+            backend, ""
+        )
+        if not mem0_provider:
+            # Unknown backend — cannot map, leave Mem0 LLM as-is.
+            logger.debug(
+                "Cannot map AIOS backend '%s' to a Mem0 LLM "
+                "provider; skipping sync.",
+                backend,
+            )
+            return
+
+        # Idempotency check: skip if already using this model.
+        current_llm = getattr(self.client, "llm", None)
+        if current_llm is not None:
+            current_model = getattr(
+                current_llm, "model", None
+            ) or getattr(
+                getattr(current_llm, "config", None),
+                "model",
+                None,
+            )
+            if current_model == model_name:
+                return
+
+        # Build new Mem0 LLM config and create the instance.
+        try:
+            from mem0.utils.factory import LlmFactory
+
+            llm_config: Dict[str, Any] = {"model": model_name}
+
+            # Resolve API key for the target provider.
+            api_key = self._get_api_key(
+                # Mem0 provider names mostly align with
+                # ConfigManager key names. For azure_openai,
+                # fall back to "openai" since AIOS stores the
+                # key under that name.
+                "openai" if mem0_provider.startswith("azure")
+                else mem0_provider
+            )
+            if api_key:
+                llm_config["api_key"] = api_key
+
+            # For Ollama, include the hostname from kernel config.
+            if mem0_provider == "ollama":
+                from aios.config.config_manager import (
+                    config as global_config,
+                )
+                llms_cfg = global_config.get_llms_config() or {}
+                for m in llms_cfg.get("models", []):
+                    if (
+                        m.get("backend") == "ollama"
+                        and m.get("hostname")
+                    ):
+                        llm_config[
+                            "ollama_base_url"
+                        ] = m["hostname"]
+                        break
+
+            new_llm = LlmFactory.create(
+                mem0_provider, llm_config
+            )
+            self.client.llm = new_llm
+            logger.info(
+                "Mem0 LLM synced to %s/%s",
+                mem0_provider,
+                model_name,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to sync Mem0 LLM to %s/%s: %s",
+                mem0_provider,
+                model_name,
+                e,
+            )
     
     def add_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
         """Add a memory note to Mem0 storage.
@@ -433,12 +562,14 @@ class Mem0Provider(MemoryProvider):
             )
 
             # Use user_id from params when provided;
-            # fall back to the configured default otherwise.
+            # fall back to agent_name (which scopes to the
+            # memories stored by ConversationExtractor for
+            # this agent), then to the configured default.
             user_id = query.params.get("user_id")
             search_user_id = (
                 user_id
                 if user_id is not None
-                else self.default_user_id
+                else (agent_name or self.default_user_id)
             )
 
             agent_id = query.params.get(
@@ -556,12 +687,14 @@ class Mem0Provider(MemoryProvider):
         sharing_policy = query.params.get("sharing_policy")
 
         # Use user_id from params when provided;
-        # fall back to the configured default otherwise.
+        # fall back to agent_name (which scopes to the
+        # memories stored by ConversationExtractor for
+        # this agent), then to the configured default.
         user_id = query.params.get("user_id")
         search_user_id = (
             user_id
             if user_id is not None
-            else self.default_user_id
+            else (agent_name or self.default_user_id)
         )
 
         agent_id = query.params.get(

@@ -319,6 +319,15 @@ def initialize_components() -> dict:
                         components["memory"], memory_config
                     )
                 )
+                # Hand the executor a direct reference to the
+                # MemoryManager so ``_execute_syscall`` can stamp
+                # ``barrier_seq`` / ``barrier_snapshot`` on memory
+                # syscalls at acceptance time (see
+                # ``MemoryWriteBarrier``). The executor falls back
+                # to ``context_injector.memory_manager`` when this
+                # attribute is unset, so launch wiring stays
+                # robust to ordering changes.
+                syscall_executor.memory_manager = components["memory"]
                 print(
                     "✅ Personalization components "
                     "(ContextInjector, ConversationExtractor) "
@@ -331,6 +340,7 @@ def initialize_components() -> dict:
                 )
                 syscall_executor.context_injector = None
                 syscall_executor.conversation_extractor = None
+                syscall_executor.memory_manager = None
 
         components["tool"] = initialize_tool_manager()
 
@@ -741,6 +751,14 @@ async def handle_query(request: QueryRequest):
             )
             return execute_request(request.agent_name, query)
         elif request.query_type == "memory":
+            logger.info(
+                "MEMORY QUERY RECEIVED: agent=%s, op=%s, "
+                "metadata_user_id=%s",
+                request.agent_name,
+                request.query_data.operation_type,
+                (request.query_data.params or {})
+                .get("metadata", {}).get("user_id", "<none>"),
+            )
             query = MemoryQuery(
                 params=request.query_data.params,
                 operation_type=request.query_data.operation_type

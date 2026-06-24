@@ -12,6 +12,7 @@ from cerebrum.llm.apis import LLMQuery
 from cerebrum.memory.apis import MemoryQuery
 
 from aios.memory.memory_formatter import format_memory
+from aios.memory.write_barrier import WaitOutcome
 
 if TYPE_CHECKING:
     from aios.memory.manager import MemoryManager
@@ -89,6 +90,7 @@ class ContextInjector:
                 "prompt_tokens_before": tokens,
                 "prompt_tokens_after": tokens,
                 "resolved_user_id": None,
+                "barrier_waits": [],
             })
 
         diagnostics: dict = {
@@ -100,6 +102,7 @@ class ContextInjector:
             "prompt_tokens_before": 0,
             "prompt_tokens_after": 0,
             "resolved_user_id": None,
+            "barrier_waits": [],
         }
 
         try:
@@ -120,19 +123,53 @@ class ContextInjector:
                 )
                 return (query, diagnostics)
 
-            # Retrieve memories scoped to this agent.
-            # Pass ``user_id=agent_name`` so the Mem0
-            # provider searches under the scope that
-            # ConversationExtractor writes to.
+            # === Resolve user_id BEFORE own-memory query ===
+            # Consult the MemoryManager's registry to find
+            # the most recently written user_id. This ensures
+            # the own-memory query is scoped to the correct
+            # end-user rather than using agent_name (which
+            # would return ALL users' conversations).
+            resolved_user_id = self._resolve_user_id(
+                agent_name
+            )
+
+            # Use resolved_user_id for own-memory query when
+            # available; fall back to agent_name for backward
+            # compatibility (empty known_user_ids).
+            own_query_user_id = (
+                resolved_user_id or agent_name
+            )
+
+            # Retrieve memories scoped to the resolved
+            # end-user (or agent_name as fallback).
             mem_query = MemoryQuery(
                 operation_type="retrieve_memory",
                 params={
                     "content": user_text,
                     "k": self.max_memories,
                     "agent_name": agent_name,
-                    "user_id": agent_name,
+                    "user_id": own_query_user_id,
                 },
             )
+            # Wait for any pending writes scoped to
+            # own_query_user_id to drain before retrieval.
+            # Kernel-internal retrievals bypass the syscall
+            # path, so the executor's acceptance-time
+            # stamping never runs for them; this inline
+            # wait restores write-before-read ordering.
+            # The outcome is recorded in
+            # ``diagnostics["barrier_waits"]`` when the
+            # wait actually ran (i.e., not BYPASSED) so
+            # callers can correlate retrieval latency with
+            # barrier activity.
+            own_wait_outcome = self._await_pending_writes(
+                own_query_user_id
+            )
+            if own_wait_outcome is not WaitOutcome.BYPASSED:
+                diagnostics["barrier_waits"].append({
+                    "user_id": own_query_user_id,
+                    "outcome": own_wait_outcome.name,
+                })
             response = (
                 self.memory_manager.provider.retrieve_memory(
                     mem_query
@@ -143,41 +180,25 @@ class ContextInjector:
             if response.success and response.search_results:
                 own_results = response.search_results
                 logger.info(
-                    "Retrieved %d own memories for agent=%s",
+                    "Retrieved %d own memories for agent=%s"
+                    " (user_id=%s)",
                     len(own_results),
                     agent_name,
+                    own_query_user_id,
                 )
 
             # --- Cross-agent shared memory retrieval ---
-            # Derive user_id from own memories first; fall
-            # back to the kernel's known_user_ids registry
-            # so that shared retrieval works even when the
-            # requesting agent has no memories of its own.
-            derived_user_id = (
-                self._extract_user_id_from_results(
-                    own_results
-                )
-            )
+            # The pre-resolved user_id is authoritative for
+            # the shared-memory path. No post-retrieval
+            # derivation needed.
+            derived_user_id = resolved_user_id
 
-            # If own memories didn't yield a real user_id
-            # (or yielded the agent name), consult the
-            # MemoryManager's registry of user_ids that
-            # other agents have written.
-            if (
-                not derived_user_id
-                or derived_user_id == agent_name
-            ):
-                known = getattr(
-                    self.memory_manager,
-                    "known_user_ids",
-                    set(),
+            # Record resolved_user_id in diagnostics when
+            # it differs from agent_name.
+            if resolved_user_id and resolved_user_id != agent_name:
+                diagnostics["resolved_user_id"] = (
+                    resolved_user_id
                 )
-                # Pick the first known user_id that
-                # isn't the agent's own name.
-                for uid in known:
-                    if uid and uid != agent_name:
-                        derived_user_id = uid
-                        break
 
             results = list(own_results)
 
@@ -185,6 +206,30 @@ class ContextInjector:
                 derived_user_id
                 and derived_user_id != agent_name
             ):
+                # Wait for any pending writes scoped to the
+                # cross-agent ``user_id`` to drain before the
+                # shared retrieval. Mirrors the agent-scoped
+                # wait above (task 7.2) and closes the
+                # auto-inject race documented in
+                # test_write_barrier_exploration.py case 2:
+                # without this wait, ``ProfileAgent`` /
+                # ``TaskAgent`` shared writes parked at the
+                # provider would be missed by the injector
+                # because kernel-internal retrievals bypass
+                # the syscall path's acceptance-time stamping.
+                # Outcome is recorded in
+                # ``diagnostics["barrier_waits"]`` when the wait
+                # actually ran (i.e., not BYPASSED).
+                shared_wait_outcome = (
+                    self._await_pending_writes(
+                        derived_user_id
+                    )
+                )
+                if shared_wait_outcome is not WaitOutcome.BYPASSED:
+                    diagnostics["barrier_waits"].append({
+                        "user_id": derived_user_id,
+                        "outcome": shared_wait_outcome.name,
+                    })
                 shared = self._retrieve_shared_memories(
                     user_text, derived_user_id, agent_name
                 )
@@ -218,14 +263,6 @@ class ContextInjector:
                 )
                 diagnostics["prompt_tokens_after"] = (
                     diagnostics["prompt_tokens_before"]
-                )
-                diagnostics["resolved_user_id"] = (
-                    derived_user_id
-                    if (
-                        derived_user_id
-                        and derived_user_id != agent_name
-                    )
-                    else None
                 )
                 return (query, diagnostics)
 
@@ -367,14 +404,6 @@ class ContextInjector:
                 agent_name,
                 derived_user_id or agent_name,
             )
-            diagnostics["resolved_user_id"] = (
-                derived_user_id
-                if (
-                    derived_user_id
-                    and derived_user_id != agent_name
-                )
-                else None
-            )
             return (query, diagnostics)
 
         except Exception:
@@ -408,6 +437,36 @@ class ContextInjector:
             uid = meta.get("user_id")
             if uid:
                 return uid
+        return None
+
+    def _resolve_user_id(
+        self, agent_name: str
+    ) -> Optional[str]:
+        """Resolve the active end-user's user_id from the
+        MemoryManager's registry.
+
+        Checks ``latest_user_id`` first (most recently written),
+        then falls back to iterating ``known_user_ids`` for any
+        entry that differs from ``agent_name``.
+
+        Returns ``None`` when no valid user_id is found, signaling
+        the caller to fall back to ``agent_name`` (backward
+        compatibility for single-user deployments).
+        """
+        manager = self.memory_manager
+
+        # Prefer the latest_user_id (most recently written).
+        latest = getattr(manager, "latest_user_id", None)
+        if latest and latest != agent_name:
+            return latest
+
+        # Fallback: check the set-based known_user_ids for
+        # any entry that isn't the agent's own name.
+        known = getattr(manager, "known_user_ids", set())
+        for uid in known:
+            if uid and uid != agent_name:
+                return uid
+
         return None
 
     def _retrieve_shared_memories(
@@ -488,6 +547,48 @@ class ContextInjector:
                 merged.append(mem)
 
         return merged
+
+    # ------------------------------------------------------------------
+    # Write-barrier helpers
+    # ------------------------------------------------------------------
+
+    def _await_pending_writes(self, user_id):
+        """Snapshot + wait against the per-user write barrier.
+
+        Kernel-internal retrievals issued by ``inject`` bypass the
+        ``MemorySyscall`` path, so the executor's acceptance-time
+        stamping never runs for them. This helper performs the
+        equivalent ``snapshot`` / ``wait_until_drained`` pair inline,
+        immediately before each ``provider.retrieve_memory`` call,
+        so a retrieval scoped to ``user_id = U`` cannot be served
+        while ``create_memory`` operations for the same ``user_id``
+        accepted before it remain uncommitted.
+
+        Short-circuits to ``WaitOutcome.BYPASSED`` (without
+        acquiring any lock) when:
+
+        - ``user_id`` is empty/``None`` -- legacy agent-scoped
+          retrievals never wait (Clause 3.3).
+        - ``self.memory_manager`` has no ``barrier`` attribute --
+          defense-in-depth for test doubles or older managers.
+        - The barrier is disabled via
+          ``memory.write_barrier.enabled: false`` -- the kill-switch
+          path takes the existing fast path byte-for-byte.
+
+        The empty-user_id and missing-barrier short-circuits keep
+        this helper cheap on the fast path so it can be called
+        unconditionally before each retrieval.
+
+        Returns the ``WaitOutcome`` so the caller can record
+        non-BYPASSED waits in ``diagnostics["barrier_waits"]``.
+        """
+        if not user_id:
+            return WaitOutcome.BYPASSED
+        barrier = getattr(self.memory_manager, "barrier", None)
+        if barrier is None:
+            return WaitOutcome.BYPASSED
+        seq = barrier.snapshot(user_id)
+        return barrier.wait_until_drained(user_id, seq)
 
     # ------------------------------------------------------------------
     # Internal helpers

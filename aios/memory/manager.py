@@ -6,12 +6,17 @@ interface to the memory management system. It uses pluggable memory providers
 to enable different storage backends (in-house, Mem0, Zep).
 """
 import logging
+import time
+from collections import OrderedDict
 from typing import Optional, Dict, Any, Set
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.config.config_manager import config as global_config
 from .providers import ProviderFactory, MemoryProvider
+from .providers.in_house import InHouseProvider
+from .providers.zep import ZepProvider
+from .write_barrier import MemoryWriteBarrier
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +40,13 @@ class MemoryManager:
             the store, enabling cross-agent shared retrieval without
             requiring the requesting agent to already have its own
             memories.
+        barrier (MemoryWriteBarrier): Per-user_id write barrier that
+            tracks accepted-but-uncommitted ``create_memory``
+            operations and lets retrievals scoped to the same
+            ``user_id`` wait until those writes drain. Read by
+            ``SyscallExecutor`` (acceptance-time stamping) and
+            ``ContextInjector`` (inline waits). Configured via
+            ``memory.write_barrier.*``.
     """
     
     def __init__(
@@ -55,7 +67,10 @@ class MemoryManager:
         
         # Registry of user_ids seen in memory metadata.
         # Populated by add_memory; read by ContextInjector.
-        self.known_user_ids: Set[str] = set()
+        # Keys: user_id strings. Values: monotonic timestamp of
+        # last write. OrderedDict preserves insertion order; we
+        # move-to-end on each write for recency tracking.
+        self._known_user_ids: OrderedDict[str, float] = OrderedDict()
         
         # Get configuration
         memory_config = global_config.get_memory_config() or {}
@@ -71,6 +86,33 @@ class MemoryManager:
         
         # Create the provider using the factory
         self.provider = ProviderFactory.create(provider_type, provider_config)
+
+        # Per-user_id write barrier. Owns the pending-write registry
+        # consulted by SyscallExecutor (acceptance-time stamping) and
+        # ContextInjector (inline waits). Reads memory.write_barrier.*
+        # once at construction; defaults are coded in the barrier so
+        # omitting the section is safe.
+        barrier_config = memory_config.get("write_barrier", {}) or {}
+        self.barrier = MemoryWriteBarrier(config=barrier_config)
+
+    @property
+    def known_user_ids(self) -> Set[str]:
+        """Backward-compatible set view for existing code."""
+        return set(self._known_user_ids.keys())
+
+    @property
+    def latest_user_id(self) -> Optional[str]:
+        """Return the most recently written user_id, or None."""
+        if not self._known_user_ids:
+            return None
+        # Last key in OrderedDict = most recently moved-to-end
+        return next(reversed(self._known_user_ids))
+
+    def _register_user_id(self, user_id: str) -> None:
+        """Register a user_id with current timestamp, moving to
+        end of the ordered registry."""
+        self._known_user_ids[user_id] = time.monotonic()
+        self._known_user_ids.move_to_end(user_id)
     
     def _get_provider_config(
         self,
@@ -98,6 +140,30 @@ class MemoryManager:
         elif provider_type == "zep":
             return memory_config.get("zep", {})
         return {}
+
+    def _provider_supports_barrier(self) -> bool:
+        """Return True for providers that participate in the
+        per-user write barrier.
+
+        The barrier is meaningful only for providers whose writes
+        commit asynchronously (Mem0Provider and Mem0-shaped test
+        doubles). InHouseProvider and ZepProvider commit
+        synchronously inside their own ``add_memory`` calls, so
+        the barrier wait would only add latency without changing
+        ordering -- Clause 3.5 of the design requires those paths
+        stay byte-for-byte identical to the pre-fix behaviour.
+
+        We use an *exclusion* check (``not isinstance(...,
+        (InHouseProvider, ZepProvider))``) rather than a positive
+        ``isinstance(self.provider, Mem0Provider)`` so Mem0-shaped
+        test doubles -- which subclass ``MemoryProvider`` directly
+        -- still take the barrier path. This is also a
+        defense-in-depth backstop on top of the barrier's own
+        ``_enabled`` check.
+        """
+        return not isinstance(
+            self.provider, (InHouseProvider, ZepProvider)
+        )
     
     def _analyze_query_to_memory(self, query: MemoryQuery) -> 'MemoryNote':
         """
@@ -183,16 +249,62 @@ class MemoryManager:
         
         if operation_type == "add_memory":
             memory_note = self._analyze_query_to_memory(query)
+            # Ensure metadata has a user_id so the memory is
+            # scoped properly in Mem0's ChromaDB.  When the SDK
+            # caller didn't provide an explicit user_id, fall
+            # back to the requesting agent's name — this keeps
+            # add and retrieve consistent (both scope to
+            # agent_name by default).
+            if memory_note.metadata is None:
+                memory_note.metadata = {}
+            if not memory_note.metadata.get("user_id"):
+                memory_note.metadata["user_id"] = (
+                    memory_syscall.agent_name
+                )
             # Track user_id for cross-agent discovery.
             uid = (memory_note.metadata or {}).get("user_id")
-            if uid and uid != query.params.get("agent_name", ""):
-                self.known_user_ids.add(uid)
-                logger.debug(
-                    "Registered user_id=%s (known: %s)",
+            logger.info(
+                "add_memory: agent=%s, uid_from_metadata=%s, "
+                "latest_user_id=%s, known=%s",
+                memory_syscall.agent_name,
+                uid,
+                self.latest_user_id,
+                self.known_user_ids,
+            )
+            if uid and uid != memory_syscall.agent_name:
+                self._register_user_id(uid)
+                logger.info(
+                    "Registered user_id=%s (latest=%s, "
+                    "known=%s)",
                     uid,
+                    self.latest_user_id,
                     self.known_user_ids,
                 )
-            return self.provider.add_memory(memory_note)
+            # Drain the per-user write barrier on commit (or
+            # failure / exception) so any retrieval scoped to the
+            # same ``user_id`` waiting on this write's ``seq_no``
+            # is released. ``barrier_seq`` is stamped on the
+            # syscall by ``SyscallExecutor`` (task 6); when absent
+            # (e.g., a direct call from a test that bypasses the
+            # executor), the sentinel ``0`` makes ``release`` a
+            # no-op so the fast path stays free.
+            barrier_seq = getattr(memory_syscall, "barrier_seq", 0)
+            barrier_user_id = memory_note.metadata.get("user_id")
+            resp = None
+            try:
+                resp = self.provider.add_memory(memory_note)
+                return resp
+            finally:
+                # ``finally`` guarantees waiters are notified even
+                # if the provider raised; failed writes still
+                # release waiters so a provider error does not
+                # strand retrievals.
+                success = bool(
+                    resp and getattr(resp, "success", False)
+                )
+                self.barrier.release(
+                    barrier_user_id, barrier_seq, success=success
+                )
         
         elif operation_type == "remove_memory":
             return self.provider.remove_memory(query.params["memory_id"])
@@ -206,10 +318,65 @@ class MemoryManager:
         
         elif operation_type == "retrieve_memory":
             query.params["agent_name"] = memory_syscall.agent_name
+            if not query.params.get("user_id"):
+                latest = self.latest_user_id
+                if latest and latest != memory_syscall.agent_name:
+                    query.params["user_id"] = latest
+                    logger.info(
+                        "Injected user_id=%s into retrieve for agent=%s",
+                        latest,
+                        memory_syscall.agent_name,
+                    )
+            # Wait for any accepted-but-uncommitted ``create_memory``
+            # writes scoped to the same ``user_id`` and stamped at or
+            # below ``barrier_snapshot`` to drain before serving this
+            # retrieval. ``barrier_snapshot`` is stamped on the syscall
+            # by ``SyscallExecutor`` (task 6); when absent (sentinel
+            # ``0``) or when no ``user_id`` was supplied, skip the
+            # wait entirely so the fast path stays free.
+            # Provider-type guard (task 5.5): InHouseProvider and
+            # ZepProvider commit synchronously and MUST NOT consult
+            # the barrier (Clause 3.5).
+            barrier_snapshot = getattr(
+                memory_syscall, "barrier_snapshot", 0
+            )
+            barrier_user_id = query.params.get("user_id")
+            if (
+                barrier_snapshot
+                and barrier_user_id
+                and self._provider_supports_barrier()
+            ):
+                self.barrier.wait_until_drained(
+                    barrier_user_id, barrier_snapshot
+                )
             return self.provider.retrieve_memory(query)
         
         elif operation_type == "retrieve_memory_raw":
             query.params["agent_name"] = memory_syscall.agent_name
+            if not query.params.get("user_id"):
+                latest = self.latest_user_id
+                if latest and latest != memory_syscall.agent_name:
+                    query.params["user_id"] = latest
+                    logger.info(
+                        "Injected user_id=%s into retrieve for agent=%s",
+                        latest,
+                        memory_syscall.agent_name,
+                    )
+            # See ``retrieve_memory`` above -- same barrier wait
+            # contract for the raw-retrieval path, including the
+            # provider-type guard from task 5.5.
+            barrier_snapshot = getattr(
+                memory_syscall, "barrier_snapshot", 0
+            )
+            barrier_user_id = query.params.get("user_id")
+            if (
+                barrier_snapshot
+                and barrier_user_id
+                and self._provider_supports_barrier()
+            ):
+                self.barrier.wait_until_drained(
+                    barrier_user_id, barrier_snapshot
+                )
             return self.provider.retrieve_memory_raw(query)
         
         else:
@@ -223,3 +390,20 @@ class MemoryManager:
         """
         if self.provider:
             self.provider.close()
+
+    def sync_llm_from_query(
+        self,
+        llms: "list[dict] | None",
+    ) -> None:
+        """Propagate the agent's runtime LLM selection to the
+        memory provider.
+
+        Delegates to the provider's ``sync_llm_from_query`` method
+        so that providers with an internal LLM (e.g., Mem0) can use
+        the same model as the assistant agent.
+
+        Args:
+            llms: The ``LLMQuery.llms`` field.
+        """
+        if self.provider:
+            self.provider.sync_llm_from_query(llms)
