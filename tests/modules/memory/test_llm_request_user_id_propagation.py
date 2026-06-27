@@ -612,6 +612,129 @@ class TestLLMRequestUserIdPropagation(unittest.TestCase):
             "either location",
         )
 
+    # ----------------------------------------------------------
+    # Step 8: Empty/None user_id does not create fake identity
+    # ----------------------------------------------------------
+
+    def test_empty_nested_user_id_not_promoted(self) -> None:
+        """An empty string user_id inside query_data must NOT
+        be promoted — it is falsy and should not create a
+        usable identity.
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+                "user_id": "",
+            },
+        })
+
+        # The validator uses `query_data.get('user_id')` which
+        # is falsy for "" — promotion should not occur.
+        self.assertFalse(
+            bool(request.user_id),
+            "Empty string user_id should not be promoted to "
+            "a truthy top-level value",
+        )
+
+    def test_empty_nested_user_id_no_request_user_id_attr(
+        self,
+    ) -> None:
+        """When nested user_id is '', the downstream
+        _request_user_id attribute must NOT be set on the
+        LLMQuery.
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+                "user_id": "",
+            },
+        })
+
+        # Replicate launch.py logic
+        query = LLMQuery(
+            messages=[{"role": "user", "content": "hello"}],
+            action_type="chat",
+        )
+        if request.user_id:
+            query._request_user_id = request.user_id
+
+        self.assertIsNone(
+            getattr(query, "_request_user_id", None),
+            "_request_user_id must not be set when nested "
+            "user_id is an empty string",
+        )
+
+    def test_none_nested_user_id_not_promoted(self) -> None:
+        """An explicit None user_id inside query_data must NOT
+        be promoted.
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+                "user_id": None,
+            },
+        })
+
+        self.assertIsNone(
+            request.user_id,
+            "None user_id in query_data should not be "
+            "promoted to top-level",
+        )
+
+    def test_none_nested_user_id_no_request_user_id_attr(
+        self,
+    ) -> None:
+        """When nested user_id is None, the downstream
+        _request_user_id attribute must NOT be set.
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+                "user_id": None,
+            },
+        })
+
+        query = LLMQuery(
+            messages=[{"role": "user", "content": "hello"}],
+            action_type="chat",
+        )
+        if request.user_id:
+            query._request_user_id = request.user_id
+
+        self.assertIsNone(
+            getattr(query, "_request_user_id", None),
+            "_request_user_id must not be set when nested "
+            "user_id is None",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
