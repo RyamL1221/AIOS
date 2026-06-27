@@ -641,6 +641,260 @@ class TestCrossAgentMemoryInjectionE2E(unittest.TestCase):
             "I see you like Python!",
         )
 
+    # ----------------------------------------------------------
+    # Negative tests: unsafe identity behavior
+    # ----------------------------------------------------------
+
+    def test_no_shared_retrieval_call_without_user_id(
+        self,
+    ) -> None:
+        """When user_id is absent, no retrieval call should
+        be made with sharing_policy="shared". The injector
+        must not attempt cross-agent shared retrieval.
+        """
+        query = LLMQuery(
+            messages=[
+                {"role": "user", "content": "What do I like?"}
+            ],
+            action_type="chat",
+            message_return_type="text",
+        )
+        # No _request_user_id set
+
+        self.executor.execute_llm_syscall = MagicMock(
+            return_value={"response": "Mocked"}
+        )
+
+        self.executor.execute_request(
+            "assistant_agent", query
+        )
+
+        # There must be ZERO calls with sharing_policy="shared"
+        shared_calls = [
+            c for c in self.provider.retrieve_calls
+            if c.get("sharing_policy") == "shared"
+        ]
+        self.assertEqual(
+            len(shared_calls), 0,
+            f"Without user_id, no shared retrieval should "
+            f"occur. Found shared calls: {shared_calls}",
+        )
+
+    def test_empty_string_user_id_treated_as_absent(
+        self,
+    ) -> None:
+        """An empty string user_id should be treated the same
+        as None — no shared memory retrieval triggered.
+        """
+        query = LLMQuery(
+            messages=[
+                {"role": "user", "content": "What do I like?"}
+            ],
+            action_type="chat",
+            message_return_type="text",
+        )
+        query._request_user_id = ""
+
+        self.executor.execute_llm_syscall = MagicMock(
+            return_value={"response": "Mocked"}
+        )
+
+        self.executor.execute_request(
+            "assistant_agent", query
+        )
+
+        # No shared retrieval calls should exist
+        shared_calls = [
+            c for c in self.provider.retrieve_calls
+            if c.get("sharing_policy") == "shared"
+        ]
+        self.assertEqual(
+            len(shared_calls), 0,
+            f"Empty string user_id should not trigger shared "
+            f"retrieval. Found: {shared_calls}",
+        )
+
+        # Verify retrieval used agent_name fallback (not "")
+        retrieve_user_ids = [
+            c["user_id"] for c in self.provider.retrieve_calls
+        ]
+        self.assertNotIn(
+            "",
+            retrieve_user_ids,
+            "Empty string should never be used as user_id",
+        )
+
+    def test_agent_name_never_in_shared_retrieval_user_id(
+        self,
+    ) -> None:
+        """Across multiple requests with and without user_id,
+        "assistant_agent" must NEVER appear as user_id in a
+        shared retrieval call (sharing_policy="shared").
+        """
+        # Request 1: with explicit user_id
+        q1 = LLMQuery(
+            messages=[
+                {"role": "user", "content": "Request 1"}
+            ],
+            action_type="chat",
+            message_return_type="text",
+        )
+        q1._request_user_id = "alex_123"
+
+        # Request 2: without user_id
+        q2 = LLMQuery(
+            messages=[
+                {"role": "user", "content": "Request 2"}
+            ],
+            action_type="chat",
+            message_return_type="text",
+        )
+        # No _request_user_id
+
+        self.executor.execute_llm_syscall = MagicMock(
+            return_value={"response": "Mocked"}
+        )
+
+        self.executor.execute_request(
+            "assistant_agent", q1
+        )
+        self.executor.execute_request(
+            "assistant_agent", q2
+        )
+
+        # Inspect all shared retrieval calls
+        shared_calls = [
+            c for c in self.provider.retrieve_calls
+            if c.get("sharing_policy") == "shared"
+        ]
+
+        for call in shared_calls:
+            self.assertNotEqual(
+                call["user_id"],
+                "assistant_agent",
+                f"'assistant_agent' must NEVER be the user_id "
+                f"in a shared retrieval call. Call: {call}",
+            )
+
+    def test_user_id_equal_to_agent_name_does_not_trigger_shared(
+        self,
+    ) -> None:
+        """If user_id equals the agent_name (pathological case),
+        shared retrieval should NOT be triggered because
+        _resolve_user_id returns None for this case.
+        """
+        query = LLMQuery(
+            messages=[
+                {"role": "user", "content": "What do I like?"}
+            ],
+            action_type="chat",
+            message_return_type="text",
+        )
+        # Set user_id to the agent name itself
+        query._request_user_id = "assistant_agent"
+
+        self.executor.execute_llm_syscall = MagicMock(
+            return_value={"response": "Mocked"}
+        )
+
+        self.executor.execute_request(
+            "assistant_agent", query
+        )
+
+        # No shared retrieval should occur
+        shared_calls = [
+            c for c in self.provider.retrieve_calls
+            if c.get("sharing_policy") == "shared"
+        ]
+        self.assertEqual(
+            len(shared_calls), 0,
+            f"user_id=agent_name should not trigger shared "
+            f"retrieval. Found: {shared_calls}",
+        )
+
+    def test_cross_user_isolation_bidirectional(self) -> None:
+        """Neither user should see the other's memories when
+        requests are made sequentially.
+        """
+        # Seed memory for jordan_456
+        self.provider.seed(
+            content="Jordan prefers Go",
+            metadata={
+                "user_id": "jordan_456",
+                "owner_agent": "profile_agent",
+                "sharing_policy": "shared",
+                "memory_type": "profile",
+            },
+        )
+
+        # Request for alex_123
+        q1 = LLMQuery(
+            messages=[
+                {"role": "user", "content": "My language?"}
+            ],
+            action_type="chat",
+            message_return_type="text",
+        )
+        q1._request_user_id = "alex_123"
+
+        captured_1 = {}
+
+        def mock_llm_1(agent_name, q):
+            captured_1["messages"] = list(q.messages)
+            return {"response": "Mocked"}
+
+        self.executor.execute_llm_syscall = mock_llm_1
+        self.executor.execute_request(
+            "assistant_agent", q1
+        )
+
+        # Request for jordan_456
+        q2 = LLMQuery(
+            messages=[
+                {"role": "user", "content": "My language?"}
+            ],
+            action_type="chat",
+            message_return_type="text",
+        )
+        q2._request_user_id = "jordan_456"
+
+        captured_2 = {}
+
+        def mock_llm_2(agent_name, q):
+            captured_2["messages"] = list(q.messages)
+            return {"response": "Mocked"}
+
+        self.executor.execute_llm_syscall = mock_llm_2
+        self.executor.execute_request(
+            "assistant_agent", q2
+        )
+
+        # Alex's prompt should have Python, not Go
+        sys_1 = [
+            m for m in captured_1["messages"]
+            if m.get("role") == "system"
+        ]
+        content_1 = sys_1[0]["content"] if sys_1 else ""
+        self.assertIn("Python", content_1)
+        self.assertNotIn(
+            "Go",
+            content_1,
+            "Alex should NOT see Jordan's Go memory",
+        )
+
+        # Jordan's prompt should have Go, not Python
+        sys_2 = [
+            m for m in captured_2["messages"]
+            if m.get("role") == "system"
+        ]
+        content_2 = sys_2[0]["content"] if sys_2 else ""
+        self.assertIn("Go", content_2)
+        self.assertNotIn(
+            "Python",
+            content_2,
+            "Jordan should NOT see Alex's Python memory",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
