@@ -4,26 +4,22 @@ Bug condition exploration tests for the memory write-barrier.
 These tests originally FAILED on the UNFIXED kernel - their failure
 is what confirmed the bug exists.  Now that the kernel-level write
 barrier is wired into ``MemoryManager`` (release on commit) and
-``ContextInjector`` (inline waits before each retrieval), Cases 2
-and 3 PASS on the fixed code.  Case 1 remains failing because the
-test bypasses ``SyscallExecutor`` and calls ``MemoryManager.address_request``
-directly, so no ``barrier_snapshot`` is stamped on the retrieval
-syscall - the integration suite (task 10) covers the explicit-retrieval
-path end-to-end through the executor instead.
+``ContextInjector`` (inline waits before each retrieval), all three
+cases PASS on the fixed code.
+
+Case 1 was updated to stamp ``barrier_snapshot`` on the retrieve
+syscall (replicating what ``SyscallExecutor`` does in production);
+without this stamp the barrier wait short-circuits to BYPASSED.
 
 Three exploration cases are encoded:
 
-Case 1 (Explicit Retrieval Race) - STILL FAILS post-fix by design
+Case 1 (Explicit Retrieval Race) - PASSES post-fix
     A ``create_memory(user_id=alex)`` write is parked inside the
     slow provider gate.  A second agent issues
-    ``retrieve_memory(user_id=alex)`` directly through
-    ``manager.address_request`` (bypassing ``SyscallExecutor``'s
-    acceptance-time stamping).  The retrieval has no
-    ``barrier_snapshot`` so the manager's barrier-wait
-    short-circuits to ``BYPASSED`` and the parked memory is
-    missed - exactly the behaviour the bug condition encodes.
-    The integration test (task 10) exercises this path through
-    ``SyscallExecutor`` where ``barrier_snapshot`` IS stamped.
+    ``retrieve_memory(user_id=alex)`` through
+    ``manager.address_request`` with a ``barrier_snapshot`` stamp.
+    The retrieval blocks until the write drains, then returns
+    the committed memory.
 
 Case 2 (Auto-Inject Race) - PASSES post-fix
     Two ``create_memory(user_id=alex, sharing_policy=shared)`` writes
@@ -262,9 +258,10 @@ class WriteBarrierExplorationTests(unittest.TestCase):
         EXPECTED post-fix behaviour: the retrieval blocks until the
         write drains, then returns the committed memory.
 
-        UNFIXED behaviour: the retrieval returns immediately with an
-        empty result set - the assertion fails, which confirms the
-        bug.
+        This test stamps ``barrier_snapshot`` on the retrieve syscall
+        to replicate what ``SyscallExecutor`` does in production (it
+        was previously omitted, which caused this test to always fail
+        because the barrier wait short-circuited to BYPASSED).
         """
         # 1. Park the gate so add_memory blocks at the provider.
         self.provider.park()
@@ -293,13 +290,16 @@ class WriteBarrierExplorationTests(unittest.TestCase):
             _delayed_release(self.provider, delay_seconds=0.15),
         )
 
-        # 5. Issue the retrieval on Agent B.  On UNFIXED code this
-        # returns immediately with 0 results; on FIXED code it
-        # blocks until the write drains.
+        # 5. Issue the retrieval on Agent B.  Stamp barrier_snapshot
+        # as SyscallExecutor would in production so the barrier wait
+        # path is exercised.
         retrieve_syscall = _make_retrieve_syscall(
             agent_name="AgentB",
             user_id="alex",
             content="alex preferences",
+        )
+        retrieve_syscall.barrier_snapshot = (
+            self.manager.barrier.snapshot("alex")
         )
         response = self.manager.address_request(retrieve_syscall)
 
