@@ -518,6 +518,12 @@ class Mem0Provider(MemoryProvider):
             
             # Fall back to original memory_note ID if Mem0 doesn't return one
             memory_id = memory_id or memory_note.id
+
+            # Wait until the memory is visible through get_all()
+            # so downstream retrievals (and the write barrier)
+            # observe the committed state.
+            if memory_id:
+                self._await_searchable(memory_id, user_id)
             
             return MemoryResponse(success=True, memory_id=memory_id)
             
