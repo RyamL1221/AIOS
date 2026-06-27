@@ -8,7 +8,7 @@ and intelligent memory organization.
 import logging
 import os
 import time
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
@@ -375,6 +375,41 @@ class Mem0Provider(MemoryProvider):
 
         return []
 
+    def _extract_memory_id(
+        self, result: object
+    ) -> Optional[str]:
+        """Extract a memory ID from Mem0 add() responses.
+
+        Mem0 response shapes can vary by version/configuration.
+        Supported shapes:
+        - {"id": "abc123"}
+        - {"memory_id": "abc123"}
+        - {"results": [{"id": "abc123"}]}
+        - {"results": [{"memory_id": "abc123"}]}
+        - [{"id": "abc123"}]
+        - [{"memory_id": "abc123"}]
+        """
+        if isinstance(result, dict):
+            for key in ("id", "memory_id"):
+                value = result.get(key)
+                if value:
+                    return str(value)
+
+            for list_key in ("results", "memories", "data"):
+                value = result.get(list_key)
+                if isinstance(value, list):
+                    extracted = self._extract_memory_id(value)
+                    if extracted:
+                        return extracted
+
+        if isinstance(result, list):
+            for item in result:
+                extracted = self._extract_memory_id(item)
+                if extracted:
+                    return extracted
+
+        return None
+
     def _await_searchable(
         self,
         memory_id: str,
@@ -506,17 +541,10 @@ class Mem0Provider(MemoryProvider):
             result = self.client.add(memory_note.content, **add_kwargs)
             
             # Extract memory ID from result
-            # Mem0 returns different formats depending on version
-            memory_id = None
-            if isinstance(result, dict):
-                memory_id = result.get("id") or result.get("memory_id")
-                # Handle results list format
-                if not memory_id and "results" in result:
-                    results = result["results"]
-                    if results and len(results) > 0:
-                        memory_id = results[0].get("id")
-            
-            # Fall back to original memory_note ID if Mem0 doesn't return one
+            memory_id = self._extract_memory_id(result)
+
+            # Fall back to original memory_note ID if Mem0
+            # doesn't return one
             memory_id = memory_id or memory_note.id
 
             # Wait until the memory is visible through get_all()
@@ -524,6 +552,12 @@ class Mem0Provider(MemoryProvider):
             # observe the committed state.
             if memory_id:
                 self._await_searchable(memory_id, user_id)
+            else:
+                logger.warning(
+                    "add_memory: Mem0 write succeeded but no "
+                    "memory_id was returned user_id=%s",
+                    user_id,
+                )
             
             return MemoryResponse(success=True, memory_id=memory_id)
             
