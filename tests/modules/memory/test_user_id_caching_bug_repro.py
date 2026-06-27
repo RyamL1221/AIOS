@@ -1,34 +1,19 @@
 """
-Bug Reproduction: User Identity Caching in MemoryManager
+Regression Tests: Per-Request User Identity in Memory Context Injection
 
-This test proves that the kernel memory manager's `latest_user_id`-based
-resolution causes the WRONG user_id to be used for retrieval when multiple
-sequential trials serve different synthetic users within the same kernel
-process.
+This module tests two distinct behaviors of the user_id resolution
+system in ``ContextInjector._resolve_user_id()``:
 
-The bug manifests as follows:
-  - Trial 1 writes memories for user "jordan_matthews_75157bae"
-  - Trial 2 writes memories for user "julia_romero_a3e82c1f"
-  - Trial 3 writes memories for user "olivia_ramirez_d9f04b72"
-  - At each trial, `ContextInjector._resolve_user_id()` returns
-    `latest_user_id` which is ALWAYS the most recently written user_id
-    across ALL trials — not the user_id that belongs to the CURRENT
-    request.
+1. **Legacy fallback** (no explicit ``user_id`` on the request):
+   Uses ``MemoryManager.latest_user_id`` as a best-effort guess.
+   This path is preserved for backward compatibility but is UNSAFE
+   for multi-user scenarios (return-visit contamination).
 
-This means:
-  - Trial 1: Correctly resolves "jordan_matthews_75157bae" (it's the only one)
-  - Trial 2: Resolves "julia_romero_a3e82c1f" (latest write), BUT if
-    trial 1's user later comes back, they get julia's memories
-  - Trial 3: Resolves "olivia_ramirez_d9f04b72" (latest write), overriding
-    ALL previous users' scoping
-
-The core architectural flaw: `_resolve_user_id()` uses a GLOBAL
-`latest_user_id` property which reflects the kernel's most recent write,
-not the current request's user. There is no per-request user_id context.
+2. **Request-scoped** (explicit ``user_id`` passed to ``inject()``):
+   Uses the per-request identity directly, preventing cross-user
+   memory contamination regardless of what ``latest_user_id`` says.
 
 Run:
-    python tests/modules/memory/test_user_id_caching_bug_repro.py
-    # or
     pytest tests/modules/memory/test_user_id_caching_bug_repro.py -v
 """
 from __future__ import annotations
@@ -55,7 +40,7 @@ from aios.memory.write_barrier import MemoryWriteBarrier
 
 
 # ------------------------------------------------------------------
-# Synthetic users for the 5 sequential trials
+# Synthetic users for multi-trial scenarios
 # ------------------------------------------------------------------
 
 SYNTHETIC_USERS = [
@@ -71,7 +56,9 @@ SYNTHETIC_USERS = [
     },
     {
         "user_id": "olivia_ramirez_d9f04b72",
-        "profile": "Olivia Ramirez is a DevOps engineer who uses Terraform.",
+        "profile": (
+            "Olivia Ramirez is a DevOps engineer who uses Terraform."
+        ),
         "memory_type": "profile",
     },
     {
@@ -81,20 +68,23 @@ SYNTHETIC_USERS = [
     },
     {
         "user_id": "maya_patel_e8a3f620",
-        "profile": "Maya Patel is a security researcher who codes in Rust.",
+        "profile": (
+            "Maya Patel is a security researcher who codes in Rust."
+        ),
         "memory_type": "profile",
     },
 ]
 
 
 # ------------------------------------------------------------------
-# Recording provider: tracks all retrieve_memory calls with user_ids
+# Test infrastructure
 # ------------------------------------------------------------------
 
 
 class TracingProvider(MemoryProvider):
     """Provider that records all operations and returns memories
-    scoped by user_id, simulating correct ChromaDB WHERE filtering."""
+    scoped by user_id, simulating correct ChromaDB WHERE filtering.
+    """
 
     def __init__(self) -> None:
         self._store: Dict[str, List[dict]] = {}
@@ -153,7 +143,6 @@ class TracingProvider(MemoryProvider):
             "params": dict(query.params),
             "timestamp": time.monotonic(),
         })
-        # Return only memories stored under the requested user_id
         results = []
         for item in self._store.get(user_id, []):
             results.append({
@@ -178,18 +167,15 @@ class TracingProvider(MemoryProvider):
         pass
 
 
-# ------------------------------------------------------------------
-# Minimal MemoryManager mock with real OrderedDict tracking
-# ------------------------------------------------------------------
-
-
 class FakeMemoryManager:
-    """Mirrors the real MemoryManager's user_id registry behavior."""
+    """Mirrors the real MemoryManager's user_id registry."""
 
     def __init__(self, provider: TracingProvider) -> None:
         self.provider = provider
         self.barrier = MemoryWriteBarrier(config={})
-        self._known_user_ids: OrderedDict[str, float] = OrderedDict()
+        self._known_user_ids: OrderedDict[str, float] = (
+            OrderedDict()
+        )
 
     @property
     def known_user_ids(self) -> set:
@@ -206,20 +192,24 @@ class FakeMemoryManager:
         self._known_user_ids.move_to_end(user_id)
 
 
-# ------------------------------------------------------------------
-# Bug Reproduction Test
-# ------------------------------------------------------------------
+# ==================================================================
+# SECTION 1: Legacy Fallback Behavior (backward compatibility)
+#
+# These tests document how _resolve_user_id() behaves when NO
+# explicit request_user_id is provided. The global latest_user_id
+# is used as the fallback. This is preserved for callers that
+# don't yet supply a per-request user_id.
+# ==================================================================
 
 
-class TestUserIdCachingBug(unittest.TestCase):
-    """Reproduces the user identity caching bug across 5 sequential
-    trials in a single kernel process.
+class TestLegacyFallbackBehavior(unittest.TestCase):
+    """Tests for the legacy fallback path where no explicit
+    request_user_id is passed to inject().
 
-    The bug: `_resolve_user_id()` returns `latest_user_id` which is
-    the GLOBALLY most recently written user_id, not the user_id that
-    belongs to the CURRENT request. This means after Trial N writes
-    user X, ALL subsequent retrievals (including for earlier users)
-    resolve to user X.
+    In this mode, ``_resolve_user_id()`` returns
+    ``latest_user_id`` which is the most recently written
+    user_id across ALL users. This is a backward-compat path
+    and is UNSAFE for multi-user return-visit scenarios.
     """
 
     def setUp(self) -> None:
@@ -249,29 +239,36 @@ class TestUserIdCachingBug(unittest.TestCase):
                     return content
         return ""
 
-    # ==============================================================
-    # CORE REPRODUCTION: 5 sequential trials, same kernel process
-    # ==============================================================
+    def test_legacy_fallback_uses_latest_user_id_when_request_user_id_missing(
+        self,
+    ) -> None:
+        """Without explicit user_id, _resolve_user_id returns the
+        globally latest user_id (last registered).
 
-    def test_sequential_trials_user_id_stale_caching(self) -> None:
-        """Prove that after registering multiple users sequentially,
-        the injector ALWAYS resolves to the LAST registered user_id,
-        not the one associated with the current request.
+        This is the backward-compat fallback for callers that
+        haven't been updated to pass per-request identity.
+        """
+        self.manager._register_user_id("jordan_matthews_75157bae")
+        self.manager._register_user_id("olivia_ramirez_d9f04b72")
 
-        This demonstrates the caching bug: there is no mechanism
-        to associate a specific incoming request with a specific
-        user_id. The global `latest_user_id` is the only signal.
+        resolved = self.injector._resolve_user_id(
+            "assistant_agent"
+        )
+        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
+
+    def test_legacy_fallback_sequential_forward_works_by_coincidence(
+        self,
+    ) -> None:
+        """Sequential register-then-retrieve works in fallback mode
+        because latest_user_id happens to match the most recent
+        user. This does NOT protect against return visits.
         """
         results = []
-
         for i, user in enumerate(SYNTHETIC_USERS):
             uid = user["user_id"]
-            profile = user["profile"]
-
-            # 1. Simulate ProfileAgent writing shared memory for this user
             self.provider.store_for_user(
                 user_id=uid,
-                content=profile,
+                content=user["profile"],
                 metadata={
                     "user_id": uid,
                     "owner_agent": "profile_agent",
@@ -279,372 +276,29 @@ class TestUserIdCachingBug(unittest.TestCase):
                     "memory_type": "profile",
                 },
             )
-
-            # 2. Register the user_id (as address_request would)
             self.manager._register_user_id(uid)
-
-            # 3. Simulate AssistantAgent making a chat request
-            query = self._make_query(
-                f"Trial {i+1}: Tell me about myself"
-            )
-            result_query, diag = self.injector.inject(
+            query = self._make_query(f"Trial {i + 1}")
+            _, diag = self.injector.inject(
                 "assistant_agent", query
             )
+            results.append(diag["resolved_user_id"])
 
-            results.append({
-                "trial": i + 1,
-                "expected_user_id": uid,
-                "resolved_user_id": diag["resolved_user_id"],
-                "latest_user_id_at_time": self.manager.latest_user_id,
-                "injected_count": diag["injected_count"],
-            })
+        # Each trial resolves correctly only because the register
+        # immediately precedes the retrieve (coincidental ordering).
+        for i, uid in enumerate(
+            u["user_id"] for u in SYNTHETIC_USERS
+        ):
+            self.assertEqual(results[i], uid)
 
-        # --- Assertions ---
-        # Each trial should resolve its own user_id.
-        # In the CURRENT (buggy) architecture, all trials resolve
-        # to latest_user_id which IS correct for the sequential
-        # forward case (since each trial registers THEN retrieves).
-        for r in results:
-            self.assertEqual(
-                r["resolved_user_id"],
-                r["expected_user_id"],
-                f"Trial {r['trial']}: resolved_user_id mismatch. "
-                f"Expected {r['expected_user_id']}, "
-                f"got {r['resolved_user_id']}",
-            )
+    def test_legacy_fallback_return_visit_uses_latest_not_requesting_user(
+        self,
+    ) -> None:
+        """Documents the known limitation of fallback mode:
+        when an earlier user returns WITHOUT passing user_id,
+        they get the latest user's memories instead of their own.
 
-        # Print log for inspection
-        print("\n=== Sequential Trial Results ===")
-        for r in results:
-            status = (
-                "OK"
-                if r["resolved_user_id"] == r["expected_user_id"]
-                else "BUG"
-            )
-            print(
-                f"  Trial {r['trial']}: "
-                f"expected={r['expected_user_id']}, "
-                f"resolved={r['resolved_user_id']}, "
-                f"injected={r['injected_count']} [{status}]"
-            )
-
-    # ==============================================================
-    # KEY BUG: "Return visit" — earlier user comes back but gets
-    # the LATEST user's memories
-    # ==============================================================
-
-    def test_return_visit_gets_wrong_user_memories(self) -> None:
-        """THE ACTUAL BUG: After Trial 3, if Jordan (Trial 1's user)
-        comes back, the injector resolves to Olivia (Trial 3's user)
-        because latest_user_id == olivia's id.
-
-        This is the critical data contamination scenario.
-        """
-        # --- Setup: Register 3 users in sequence ---
-        users = SYNTHETIC_USERS[:3]
-        for user in users:
-            uid = user["user_id"]
-            self.provider.store_for_user(
-                user_id=uid,
-                content=user["profile"],
-                metadata={
-                    "user_id": uid,
-                    "owner_agent": "profile_agent",
-                    "sharing_policy": "shared",
-                    "memory_type": "profile",
-                },
-            )
-            self.manager._register_user_id(uid)
-
-        # At this point:
-        #   latest_user_id = "olivia_ramirez_d9f04b72" (last registered)
-        #   known_user_ids = {jordan, julia, olivia}
-        self.assertEqual(
-            self.manager.latest_user_id,
-            "olivia_ramirez_d9f04b72",
-        )
-
-        # --- Now Jordan comes back for a NEW request ---
-        # In real life, the LLMQuery would carry Jordan's identity
-        # somehow. But the current architecture has NO per-request
-        # user_id — only the global latest_user_id.
-
-        query = self._make_query(
-            "Hey, what programming language do I prefer?"
-        )
-        result_query, diag = self.injector.inject(
-            "assistant_agent", query
-        )
-
-        # THE BUG: resolved_user_id will be OLIVIA, not JORDAN
-        resolved = diag["resolved_user_id"]
-        injected_content = self._get_system_content(result_query)
-
-        print("\n=== Return Visit Bug Reproduction ===")
-        print(f"  Jordan's user_id: jordan_matthews_75157bae")
-        print(f"  latest_user_id:   {self.manager.latest_user_id}")
-        print(f"  resolved_user_id: {resolved}")
-        print(f"  Injected content: {injected_content[:200]}")
-
-        # Document the bug: resolved_user_id is OLIVIA's, not Jordan's
-        # This proves memory contamination — Jordan gets Olivia's profile
-        self.assertEqual(
-            resolved,
-            "olivia_ramirez_d9f04b72",
-            "BUG NOT REPRODUCED: Expected the injector to resolve "
-            "Olivia's user_id (the latest) instead of Jordan's. "
-            "If this fails, the bug may have been fixed.",
-        )
-
-        # Confirm the WRONG memories would be injected:
-        # Jordan should get "backend engineer who loves Go"
-        # But instead gets "DevOps engineer who uses Terraform" (Olivia's)
-        if injected_content:
-            self.assertIn(
-                "Terraform",
-                injected_content,
-                "Expected Olivia's profile (Terraform) to be "
-                "injected since resolved_user_id is Olivia's",
-            )
-            self.assertNotIn(
-                "Go",
-                injected_content,
-                "Jordan's profile (Go) should NOT appear since "
-                "the retrieval is scoped to Olivia's user_id",
-            )
-
-    # ==============================================================
-    # Prove the stale caching via retrieve_log inspection
-    # ==============================================================
-
-    def test_retrieve_log_shows_stale_user_id(self) -> None:
-        """Inspect the provider's retrieve_log to prove that
-        the user_id passed to retrieve_memory is always
-        latest_user_id, not per-request.
-        """
-        users = SYNTHETIC_USERS[:3]
-
-        # Register all 3 users and seed their memories
-        for user in users:
-            uid = user["user_id"]
-            self.provider.store_for_user(
-                user_id=uid,
-                content=user["profile"],
-                metadata={
-                    "user_id": uid,
-                    "owner_agent": "profile_agent",
-                    "sharing_policy": "shared",
-                    "memory_type": "profile",
-                },
-            )
-            self.manager._register_user_id(uid)
-
-        # Now simulate 3 requests — all SHOULD be for different users
-        # but the injector has no way to know which user is asking.
-        # It will always use latest_user_id for all 3.
-        self.provider.retrieve_log.clear()
-
-        for trial_num in range(3):
-            query = self._make_query(
-                f"Request {trial_num + 1}: What do I like?"
-            )
-            self.injector.inject("assistant_agent", query)
-
-        # All 3 retrieval queries should have used the SAME user_id
-        # (olivia's — the latest). This is the bug.
-        print("\n=== Retrieve Log (Stale user_id) ===")
-        unique_user_ids_in_retrieves = set()
-        for i, entry in enumerate(self.provider.retrieve_log):
-            uid_used = entry["user_id_in_query"]
-            unique_user_ids_in_retrieves.add(uid_used)
-            print(
-                f"  Retrieve #{i+1}: user_id={uid_used}, "
-                f"agent={entry['agent_name']}"
-            )
-
-        # BUG: All retrieves use the same user_id (olivia's)
-        # because latest_user_id never changes between requests.
-        self.assertEqual(
-            len(unique_user_ids_in_retrieves),
-            1,
-            "Expected all retrieves to use the SAME (stale) user_id. "
-            "If they differ, the resolution mechanism has been changed.",
-        )
-        # And that single user_id is olivia's (the latest)
-        self.assertIn(
-            "olivia_ramirez_d9f04b72",
-            unique_user_ids_in_retrieves,
-        )
-
-    # ==============================================================
-    # Document where the bad value is introduced
-    # ==============================================================
-
-    def test_identify_bug_location(self) -> None:
-        """Trace exactly where the stale user_id is introduced.
-
-        The bug is in ContextInjector._resolve_user_id() at the line:
-            latest = getattr(manager, "latest_user_id", None)
-            if latest and latest != agent_name:
-                return latest
-
-        This returns a GLOBAL property of the MemoryManager, not
-        anything from the current request. There is no per-request
-        user_id context passed into inject().
-        """
-        # Register two users
-        self.manager._register_user_id("jordan_matthews_75157bae")
-        self.manager._register_user_id("julia_romero_a3e82c1f")
-
-        # _resolve_user_id returns the global latest, regardless
-        # of which user is actually making the current request.
-        resolved = self.injector._resolve_user_id("assistant_agent")
-
-        self.assertEqual(
-            resolved,
-            "julia_romero_a3e82c1f",
-            "Expected _resolve_user_id to return the globally latest "
-            "user_id (julia), proving it doesn't consider the current "
-            "request's identity.",
-        )
-
-        # The value is NOT introduced during:
-        #   - request parsing (no per-request user_id exists)
-        #   - create_memory (that correctly scopes writes)
-        #
-        # The value IS introduced during:
-        #   - memory manager resolution (_resolve_user_id)
-        #   - which feeds into retrieve injection (own_query_user_id)
-        #
-        # Root cause: The LLMQuery carries no user_id field,
-        # and inject() receives no user_id parameter, so the
-        # only signal is the global latest_user_id property.
-
-        print("\n=== Bug Location Identification ===")
-        print("  Bug introduced in: ContextInjector._resolve_user_id()")
-        print(f"  latest_user_id: {self.manager.latest_user_id}")
-        print(f"  resolved for request: {resolved}")
-        print("  Root cause: No per-request user_id context.")
-        print("  The global latest_user_id is the ONLY signal.")
-        print("")
-        print("  Affected paths:")
-        print("    1. retrieve injection (own_query_user_id)")
-        print("    2. shared memory retrieval user_id")
-        print("    3. diagnostics['resolved_user_id']")
-        print("    4. ConversationExtractor user_id propagation")
-
-
-# ------------------------------------------------------------------
-# Summary report (when run standalone)
-# ------------------------------------------------------------------
-
-
-def run_and_report() -> None:
-    """Run all tests and print a summary of findings."""
-    print("=" * 70)
-    print("USER IDENTITY CACHING BUG - REPRODUCTION HARNESS")
-    print("=" * 70)
-    print()
-    print("This harness proves that the AIOS kernel memory manager")
-    print("reuses the FIRST (or rather, LATEST) resolved user_id")
-    print("across all requests, instead of per-request scoping.")
-    print()
-    print("5 synthetic users:")
-    for u in SYNTHETIC_USERS:
-        print(f"  - {u['user_id']}")
-    print()
-    print("-" * 70)
-
-    # Run the tests
-    loader = unittest.TestLoader()
-    suite = loader.loadTestsFromTestCase(TestUserIdCachingBug)
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-
-    print()
-    print("-" * 70)
-    print("FINDINGS SUMMARY:")
-    print("-" * 70)
-    print()
-    print("1. SEQUENTIAL FORWARD CASE: Works correctly because each")
-    print("   trial registers THEN retrieves (latest_user_id matches).")
-    print()
-    print("2. RETURN VISIT CASE: BROKEN. When an earlier user returns,")
-    print("   they get the LATEST user's memories because _resolve_user_id")
-    print("   always returns the globally latest_user_id.")
-    print()
-    print("3. BUG LOCATION: ContextInjector._resolve_user_id()")
-    print("   Line: `latest = getattr(manager, 'latest_user_id', None)`")
-    print("   This is a global property, not per-request.")
-    print()
-    print("4. ROOT CAUSE: The LLMQuery object carries no user_id field.")
-    print("   inject() receives no user_id parameter.")
-    print("   The architecture has NO per-request user identity concept.")
-    print()
-    print("5. CONTAMINATION VECTOR: User A's request gets User B's")
-    print("   memories if User B wrote more recently than User A.")
-    print()
-
-    if result.wasSuccessful():
-        print("ALL TESTS PASSED — Bug successfully reproduced.")
-    else:
-        print(f"FAILURES: {len(result.failures)}, "
-              f"ERRORS: {len(result.errors)}")
-        print("If test_sequential_trials passes but return_visit fails,")
-        print("the bug may have been partially fixed.")
-
-
-if __name__ == "__main__":
-    run_and_report()
-
-
-# ------------------------------------------------------------------
-# FIX VERIFICATION: Tests that prove the fix works
-# ------------------------------------------------------------------
-
-
-class TestUserIdFixVerification(unittest.TestCase):
-    """Regression tests proving that when user_id is passed
-    explicitly to inject(), the return-visit bug is eliminated.
-
-    These tests exercise the NEW code path:
-        inject(agent_name, query, user_id=request_user_id)
-    """
-
-    def setUp(self) -> None:
-        self.provider = TracingProvider()
-        self.manager = FakeMemoryManager(provider=self.provider)
-        self.injector = ContextInjector(
-            memory_manager=self.manager,
-            config={
-                "auto_inject": True,
-                "max_injected_memories": 5,
-                "relevance_threshold": 0.0,
-                "max_memory_tokens": 8000,
-            },
-        )
-
-    def _make_query(self, text: str = "Hello") -> LLMQuery:
-        return LLMQuery(
-            messages=[{"role": "user", "content": text}],
-            action_type="chat",
-        )
-
-    def _get_system_content(self, query: LLMQuery) -> str:
-        for msg in query.messages:
-            if msg.get("role") == "system":
-                content = msg.get("content", "")
-                if "MEMORY CONTEXT" in content:
-                    return content
-        return ""
-
-    # ==============================================================
-    # FIX TEST: Return visit now gets correct user's memories
-    # ==============================================================
-
-    def test_return_visit_with_explicit_user_id(self) -> None:
-        """With the fix: passing user_id= to inject() ensures
-        Jordan gets Jordan's memories, even though Olivia wrote last.
+        This is expected fallback behavior (not a regression).
+        The fix is for callers to pass user_id on the request.
         """
         users = SYNTHETIC_USERS[:3]
         for user in users:
@@ -667,115 +321,27 @@ class TestUserIdFixVerification(unittest.TestCase):
             "olivia_ramirez_d9f04b72",
         )
 
-        # Jordan comes back — pass Jordan's user_id explicitly
-        query = self._make_query("What programming language do I prefer?")
+        # Jordan returns but no explicit user_id is passed.
+        # Fallback resolves to olivia (the latest).
+        query = self._make_query("What language do I prefer?")
         result_query, diag = self.injector.inject(
-            "assistant_agent",
-            query,
-            user_id="jordan_matthews_75157bae",
+            "assistant_agent", query
         )
 
-        # FIX: resolved_user_id is now JORDAN's, not Olivia's
+        # Expected: fallback uses latest (olivia), not jordan
         self.assertEqual(
             diag["resolved_user_id"],
-            "jordan_matthews_75157bae",
+            "olivia_ramirez_d9f04b72",
         )
-
-        # FIX: Jordan gets their own memories (Go), not Olivia's
         injected = self._get_system_content(result_query)
-        self.assertIn("Go", injected)
-        self.assertNotIn("Terraform", injected)
+        if injected:
+            self.assertIn("Terraform", injected)
 
-    # ==============================================================
-    # FIX TEST: Sequential trials with explicit user_id
-    # ==============================================================
-
-    def test_sequential_trials_with_explicit_user_id(self) -> None:
-        """Each trial passes its own user_id explicitly.
-        All 5 trials should get the correct user's memories.
-        """
-        # Seed all users' memories and register them
-        for user in SYNTHETIC_USERS:
-            uid = user["user_id"]
-            self.provider.store_for_user(
-                user_id=uid,
-                content=user["profile"],
-                metadata={
-                    "user_id": uid,
-                    "owner_agent": "profile_agent",
-                    "sharing_policy": "shared",
-                    "memory_type": "profile",
-                },
-            )
-            self.manager._register_user_id(uid)
-
-        # Now run all 5 trials with explicit user_id
-        for user in SYNTHETIC_USERS:
-            uid = user["user_id"]
-            query = self._make_query(f"Tell me about myself ({uid})")
-            result_query, diag = self.injector.inject(
-                "assistant_agent",
-                query,
-                user_id=uid,
-            )
-
-            self.assertEqual(
-                diag["resolved_user_id"],
-                uid,
-                f"Expected resolved_user_id={uid}, "
-                f"got {diag['resolved_user_id']}",
-            )
-
-            # Verify correct content was injected
-            injected = self._get_system_content(result_query)
-            self.assertIn(
-                user["profile"].split(" who ")[0].split(" is ")[1],
-                injected,
-                f"Expected {uid}'s profile content in injection",
-            )
-
-    # ==============================================================
-    # FIX TEST: _resolve_user_id prefers explicit over latest
-    # ==============================================================
-
-    def test_resolve_prefers_explicit_over_latest(self) -> None:
-        """_resolve_user_id(agent, request_user_id=X) returns X
-        even when latest_user_id is something different.
-        """
-        self.manager._register_user_id("jordan_matthews_75157bae")
-        self.manager._register_user_id("olivia_ramirez_d9f04b72")
-
-        # latest is olivia, but request says jordan
-        resolved = self.injector._resolve_user_id(
-            "assistant_agent",
-            request_user_id="jordan_matthews_75157bae",
-        )
-        self.assertEqual(resolved, "jordan_matthews_75157bae")
-
-    # ==============================================================
-    # FIX TEST: Fallback still works when no explicit user_id
-    # ==============================================================
-
-    def test_fallback_when_no_explicit_user_id(self) -> None:
-        """Without explicit user_id, the old fallback behavior
-        (latest_user_id) still works.
-        """
-        self.manager._register_user_id("jordan_matthews_75157bae")
-        self.manager._register_user_id("olivia_ramirez_d9f04b72")
-
-        # No request_user_id → falls back to latest
-        resolved = self.injector._resolve_user_id(
-            "assistant_agent",
-        )
-        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
-
-    # ==============================================================
-    # FIX TEST: Retrieve log shows per-request user_id
-    # ==============================================================
-
-    def test_retrieve_log_shows_per_request_user_id(self) -> None:
-        """When user_id is passed per-request, the retrieve_log
-        shows different user_ids for different requests.
+    def test_legacy_fallback_all_retrieves_use_same_stale_user_id(
+        self,
+    ) -> None:
+        """In fallback mode, multiple requests without explicit
+        user_id all resolve to the same (latest) user_id.
         """
         users = SYNTHETIC_USERS[:3]
         for user in users:
@@ -793,29 +359,293 @@ class TestUserIdFixVerification(unittest.TestCase):
             self.manager._register_user_id(uid)
 
         self.provider.retrieve_log.clear()
+        for trial in range(3):
+            query = self._make_query(f"Request {trial + 1}")
+            self.injector.inject("assistant_agent", query)
 
-        # 3 requests for 3 different users
-        for user in users:
+        unique_ids = {
+            e["user_id_in_query"]
+            for e in self.provider.retrieve_log
+        }
+        # All use the same (latest) user_id
+        self.assertEqual(len(unique_ids), 1)
+        self.assertIn("olivia_ramirez_d9f04b72", unique_ids)
+
+
+# ==================================================================
+# SECTION 2: Request-Scoped User Identity (the fix)
+#
+# These tests verify that when an explicit user_id is passed to
+# inject(), it is used directly for memory retrieval, preventing
+# cross-user contamination regardless of latest_user_id.
+# ==================================================================
+
+
+class TestRequestScopedUserIdentity(unittest.TestCase):
+    """Regression tests for the per-request user_id fix.
+
+    When ``inject(agent_name, query, user_id=X)`` is called with
+    an explicit ``user_id``, retrieval MUST be scoped to X —
+    regardless of what ``latest_user_id`` says.
+    """
+
+    def setUp(self) -> None:
+        self.provider = TracingProvider()
+        self.manager = FakeMemoryManager(provider=self.provider)
+        self.injector = ContextInjector(
+            memory_manager=self.manager,
+            config={
+                "auto_inject": True,
+                "max_injected_memories": 5,
+                "relevance_threshold": 0.0,
+                "max_memory_tokens": 8000,
+            },
+        )
+
+    def _make_query(self, text: str = "Hello") -> LLMQuery:
+        return LLMQuery(
+            messages=[{"role": "user", "content": text}],
+            action_type="chat",
+        )
+
+    def _get_system_content(self, query: LLMQuery) -> str:
+        for msg in query.messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                if "MEMORY CONTEXT" in content:
+                    return content
+        return ""
+
+    def _seed_all_users(self) -> None:
+        """Pre-populate provider with all synthetic users."""
+        for user in SYNTHETIC_USERS:
             uid = user["user_id"]
-            query = self._make_query(f"Request for {uid}")
-            self.injector.inject(
-                "assistant_agent", query, user_id=uid
+            self.provider.store_for_user(
+                user_id=uid,
+                content=user["profile"],
+                metadata={
+                    "user_id": uid,
+                    "owner_agent": "profile_agent",
+                    "sharing_policy": "shared",
+                    "memory_type": "profile",
+                },
+            )
+            self.manager._register_user_id(uid)
+
+    # ----------------------------------------------------------
+    # Core fix tests
+    # ----------------------------------------------------------
+
+    def test_request_user_id_prevents_return_visit_contamination(
+        self,
+    ) -> None:
+        """With explicit user_id, Jordan gets Jordan's memories
+        even though Olivia was the last to write.
+        """
+        self._seed_all_users()
+
+        # latest_user_id is maya (last registered)
+        self.assertEqual(
+            self.manager.latest_user_id,
+            "maya_patel_e8a3f620",
+        )
+
+        # Jordan comes back with explicit identity
+        query = self._make_query("What language do I prefer?")
+        result_query, diag = self.injector.inject(
+            "assistant_agent",
+            query,
+            user_id="jordan_matthews_75157bae",
+        )
+
+        self.assertEqual(
+            diag["resolved_user_id"],
+            "jordan_matthews_75157bae",
+        )
+        injected = self._get_system_content(result_query)
+        self.assertIn("Go", injected)
+        self.assertNotIn("Terraform", injected)
+        self.assertNotIn("Rust", injected)
+
+    def test_request_user_id_overrides_latest_user_id(
+        self,
+    ) -> None:
+        """_resolve_user_id(agent, request_user_id=X) returns X
+        even when latest_user_id is different.
+        """
+        self.manager._register_user_id("jordan_matthews_75157bae")
+        self.manager._register_user_id("olivia_ramirez_d9f04b72")
+
+        resolved = self.injector._resolve_user_id(
+            "assistant_agent",
+            request_user_id="jordan_matthews_75157bae",
+        )
+        self.assertEqual(resolved, "jordan_matthews_75157bae")
+
+    def test_sequential_trials_with_explicit_user_id_are_isolated(
+        self,
+    ) -> None:
+        """5 sequential trials with explicit user_id each get
+        the correct user's memories, regardless of registration
+        order.
+        """
+        self._seed_all_users()
+
+        for user in SYNTHETIC_USERS:
+            uid = user["user_id"]
+            query = self._make_query(f"Tell me about myself")
+            result_query, diag = self.injector.inject(
+                "assistant_agent",
+                query,
+                user_id=uid,
+            )
+            self.assertEqual(
+                diag["resolved_user_id"],
+                uid,
+                f"Trial for {uid}: wrong resolved_user_id",
+            )
+            injected = self._get_system_content(result_query)
+            # Each user's profile mentions a unique technology
+            unique_keyword = (
+                user["profile"].split(" who ")[1].split(".")[0]
+            )
+            self.assertIn(
+                unique_keyword,
+                injected,
+                f"Expected '{unique_keyword}' for {uid}",
             )
 
-        # Verify that each retrieve used the correct user_id
-        unique_user_ids = set()
-        for entry in self.provider.retrieve_log:
-            unique_user_ids.add(entry["user_id_in_query"])
+    def test_retrieve_log_shows_per_request_user_id(
+        self,
+    ) -> None:
+        """When user_id is passed per-request, the provider
+        retrieve_log shows distinct user_ids for each request.
+        """
+        self._seed_all_users()
+        self.provider.retrieve_log.clear()
 
-        # With the fix, all 3 different user_ids appear
+        users = SYNTHETIC_USERS[:3]
+        for user in users:
+            query = self._make_query(f"Request for {user['user_id']}")
+            self.injector.inject(
+                "assistant_agent",
+                query,
+                user_id=user["user_id"],
+            )
+
+        unique_ids = {
+            e["user_id_in_query"]
+            for e in self.provider.retrieve_log
+        }
         self.assertEqual(
-            len(unique_user_ids),
+            len(unique_ids),
             3,
-            f"Expected 3 different user_ids in retrieve log, "
-            f"got {unique_user_ids}",
+            f"Expected 3 distinct user_ids, got {unique_ids}",
         )
         for user in users:
-            self.assertIn(
-                user["user_id"],
-                unique_user_ids,
+            self.assertIn(user["user_id"], unique_ids)
+
+    def test_request_user_id_none_falls_back_to_latest(
+        self,
+    ) -> None:
+        """When user_id=None is passed (or omitted), the legacy
+        fallback to latest_user_id is preserved.
+        """
+        self.manager._register_user_id("jordan_matthews_75157bae")
+        self.manager._register_user_id("olivia_ramirez_d9f04b72")
+
+        # Explicit None behaves same as omitting the param
+        resolved = self.injector._resolve_user_id(
+            "assistant_agent",
+            request_user_id=None,
+        )
+        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
+
+    def test_request_user_id_equal_to_agent_name_falls_back(
+        self,
+    ) -> None:
+        """If request_user_id == agent_name, it's treated as
+        'no real user' and the fallback path is used.
+        """
+        self.manager._register_user_id("olivia_ramirez_d9f04b72")
+
+        resolved = self.injector._resolve_user_id(
+            "assistant_agent",
+            request_user_id="assistant_agent",
+        )
+        # Falls through to latest_user_id because
+        # request_user_id == agent_name is skipped
+        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
+
+    def test_interleaved_requests_for_different_users(
+        self,
+    ) -> None:
+        """Simulates concurrent-style interleaved requests where
+        different users alternate without new writes between them.
+        """
+        self._seed_all_users()
+        self.provider.retrieve_log.clear()
+
+        # Interleave: jordan, olivia, jordan, olivia, jordan
+        pattern = [
+            "jordan_matthews_75157bae",
+            "olivia_ramirez_d9f04b72",
+            "jordan_matthews_75157bae",
+            "olivia_ramirez_d9f04b72",
+            "jordan_matthews_75157bae",
+        ]
+
+        for uid in pattern:
+            query = self._make_query(f"Who am I? ({uid})")
+            _, diag = self.injector.inject(
+                "assistant_agent", query, user_id=uid
             )
+            self.assertEqual(diag["resolved_user_id"], uid)
+
+        # Verify that the own-memory retrieval for each request
+        # used the correct user_id. The retrieve_log also contains
+        # shared-memory retrievals, so filter to own-memory calls
+        # (those where user_id matches the pattern entry).
+        own_retrieve_ids = [
+            e["user_id_in_query"]
+            for e in self.provider.retrieve_log
+            if e["user_id_in_query"] in pattern
+        ]
+        # Each request produces at least one own-memory retrieve
+        # with the correct user_id. Verify the unique ordering.
+        # Deduplicate consecutive duplicates to get the pattern.
+        deduped = []
+        for uid in own_retrieve_ids:
+            if not deduped or deduped[-1] != uid:
+                deduped.append(uid)
+        self.assertEqual(deduped, pattern)
+
+    def test_diagnostics_resolved_user_id_matches_request(
+        self,
+    ) -> None:
+        """The injection diagnostics always report the
+        request-scoped user_id, not the global latest.
+        """
+        self._seed_all_users()
+
+        # latest is maya, but request is julia
+        query = self._make_query("Preferences?")
+        _, diag = self.injector.inject(
+            "assistant_agent",
+            query,
+            user_id="julia_romero_a3e82c1f",
+        )
+
+        self.assertEqual(
+            diag["resolved_user_id"],
+            "julia_romero_a3e82c1f",
+        )
+        # NOT maya (the latest)
+        self.assertNotEqual(
+            diag["resolved_user_id"],
+            self.manager.latest_user_id,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
