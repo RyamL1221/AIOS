@@ -452,6 +452,16 @@ class ContextInjector:
         Returns ``None`` when no valid user_id is found, signaling
         the caller to fall back to ``agent_name`` (backward
         compatibility for single-user deployments).
+
+        .. warning:: BUG — Stale user_id in multi-user scenarios.
+           ``latest_user_id`` is a GLOBAL property reflecting the
+           most recent write across ALL users. When user A wrote
+           last and user B makes the current request, this method
+           returns user A's id — causing cross-user memory
+           contamination. The correct fix is to pass an explicit
+           ``user_id`` from the request into ``inject()`` and use
+           this method only as a backward-compat fallback.
+           See: tests/modules/memory/USER_ID_RESOLUTION_TRACE.md
         """
         manager = self.memory_manager
 
