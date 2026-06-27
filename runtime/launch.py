@@ -134,6 +134,19 @@ class QueryRequest(BaseModel):
             if not query_type or not query_data:
                 return data
 
+            # Promote user_id from nested query_data to the
+            # top-level field when no top-level user_id is
+            # provided.  Some SDK callers send user_id inside
+            # query_data; without this promotion it would be
+            # silently dropped because LLMQuery does not
+            # declare a user_id field.
+            if (
+                isinstance(query_data, dict)
+                and not data.get('user_id')
+                and query_data.get('user_id')
+            ):
+                data['user_id'] = query_data['user_id']
+
             type_mapping = {
                 'llm': LLMQuery,
                 'tool': ToolQuery,
@@ -740,6 +753,10 @@ async def handle_query(request: QueryRequest):
             # This private attr avoids modifying the Cerebrum SDK.
             if request.user_id:
                 query._request_user_id = request.user_id
+                logger.debug(
+                    "LLM query request_user_id=%s",
+                    request.user_id,
+                )
             result_dict = await asyncio.to_thread(
                 execute_request, # The method to call
                 request.agent_name,               # First arg to execute_request
