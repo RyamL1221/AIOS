@@ -732,9 +732,17 @@ class SyscallExecutor:
 
                 # Context injection (before LLM call)
                 if self.context_injector:
+                    # Extract per-request user_id attached by the
+                    # kernel request handler (runtime/launch.py).
+                    # This avoids relying on the global
+                    # latest_user_id for multi-user scenarios.
+                    request_user_id = getattr(
+                        query, "_request_user_id", None
+                    )
                     query, injection_diag = (
                         self.context_injector.inject(
-                            agent_name, query
+                            agent_name, query,
+                            user_id=request_user_id,
                         )
                     )
                     logger.debug(

@@ -119,6 +119,11 @@ class QueryRequest(BaseModel):
     agent_name: str
     query_type: Literal["llm", "tool", "storage", "memory"]
     query_data: LLMQuery | ToolQuery | StorageQuery | MemoryQuery
+    # Optional per-request end-user identity for memory scoping.
+    # When provided, context injection uses this instead of the
+    # global latest_user_id, preventing cross-user contamination
+    # in multi-user scenarios.
+    user_id: Optional[str] = None
 
     @model_validator(mode='before')
     def convert_query_data(cls, data: Any) -> Any:
@@ -730,6 +735,11 @@ async def handle_query(request: QueryRequest):
                 action_type=request.query_data.action_type,
                 message_return_type=request.query_data.message_return_type,
             )
+            # Attach per-request user_id so context injection can
+            # scope memory retrieval to the correct end-user.
+            # This private attr avoids modifying the Cerebrum SDK.
+            if request.user_id:
+                query._request_user_id = request.user_id
             result_dict = await asyncio.to_thread(
                 execute_request, # The method to call
                 request.agent_name,               # First arg to execute_request

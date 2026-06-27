@@ -58,9 +58,20 @@ class ContextInjector:
         self,
         agent_name: str,
         query: LLMQuery,
+        user_id: Optional[str] = None,
     ) -> "tuple[LLMQuery, dict]":
         """Retrieve relevant memories and prepend as a system
         message, returning diagnostics alongside the query.
+
+        Args:
+            agent_name: The agent making the LLM request.
+            query: The LLM query to inject memories into.
+            user_id: Optional per-request end-user identity.
+                When provided, memory retrieval is scoped to this
+                user_id directly, bypassing the global
+                ``latest_user_id`` fallback. This prevents
+                cross-user memory contamination in multi-user
+                scenarios.
 
         After retrieving the agent's own memories, the injector
         derives a ``user_id`` from the metadata of those memories
@@ -130,7 +141,7 @@ class ContextInjector:
             # end-user rather than using agent_name (which
             # would return ALL users' conversations).
             resolved_user_id = self._resolve_user_id(
-                agent_name
+                agent_name, request_user_id=user_id,
             )
 
             # Use resolved_user_id for own-memory query when
@@ -440,41 +451,63 @@ class ContextInjector:
         return None
 
     def _resolve_user_id(
-        self, agent_name: str
+        self,
+        agent_name: str,
+        request_user_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Resolve the active end-user's user_id from the
-        MemoryManager's registry.
+        """Resolve the active end-user's user_id for memory
+        retrieval scoping.
 
-        Checks ``latest_user_id`` first (most recently written),
-        then falls back to iterating ``known_user_ids`` for any
-        entry that differs from ``agent_name``.
+        Resolution order:
+        1. Explicit ``request_user_id`` from the current request
+           (highest priority — per-request identity).
+        2. ``latest_user_id`` from the MemoryManager's registry
+           (backward-compat fallback for callers that don't
+           provide a per-request user_id).
+        3. Any entry in ``known_user_ids`` that differs from
+           ``agent_name`` (last-resort fallback).
+        4. ``None`` — signals the caller to use ``agent_name``
+           (legacy single-user deployments).
 
-        Returns ``None`` when no valid user_id is found, signaling
-        the caller to fall back to ``agent_name`` (backward
-        compatibility for single-user deployments).
-
-        .. warning:: BUG — Stale user_id in multi-user scenarios.
-           ``latest_user_id`` is a GLOBAL property reflecting the
-           most recent write across ALL users. When user A wrote
-           last and user B makes the current request, this method
-           returns user A's id — causing cross-user memory
-           contamination. The correct fix is to pass an explicit
-           ``user_id`` from the request into ``inject()`` and use
-           this method only as a backward-compat fallback.
-           See: tests/modules/memory/USER_ID_RESOLUTION_TRACE.md
+        .. note:: ``latest_user_id`` is a GLOBAL property reflecting
+           the most recent write across ALL users. It is only safe
+           as a fallback when no explicit request identity is
+           available. See: tests/modules/memory/USER_ID_RESOLUTION_TRACE.md
         """
+        # 1. Prefer explicit per-request user_id.
+        if request_user_id and request_user_id != agent_name:
+            logger.info(
+                "user_id resolved from REQUEST: %s "
+                "(agent=%s)",
+                request_user_id,
+                agent_name,
+            )
+            return request_user_id
+
         manager = self.memory_manager
 
-        # Prefer the latest_user_id (most recently written).
+        # 2. Fallback: latest_user_id (most recently written).
         latest = getattr(manager, "latest_user_id", None)
         if latest and latest != agent_name:
+            logger.info(
+                "user_id resolved from FALLBACK "
+                "(latest_user_id): %s (agent=%s)",
+                latest,
+                agent_name,
+            )
             return latest
 
-        # Fallback: check the set-based known_user_ids for
-        # any entry that isn't the agent's own name.
+        # 3. Last resort: any known_user_id != agent_name.
         known = getattr(manager, "known_user_ids", set())
         for uid in known:
             if uid and uid != agent_name:
+                logger.info(
+                    "user_id resolved from FALLBACK "
+                    "(known_user_ids iteration): %s "
+                    "(agent=%s)",
+                    uid,
+                    agent_name,
+                )
                 return uid
 
         return None

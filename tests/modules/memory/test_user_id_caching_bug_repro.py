@@ -596,3 +596,226 @@ def run_and_report() -> None:
 
 if __name__ == "__main__":
     run_and_report()
+
+
+# ------------------------------------------------------------------
+# FIX VERIFICATION: Tests that prove the fix works
+# ------------------------------------------------------------------
+
+
+class TestUserIdFixVerification(unittest.TestCase):
+    """Regression tests proving that when user_id is passed
+    explicitly to inject(), the return-visit bug is eliminated.
+
+    These tests exercise the NEW code path:
+        inject(agent_name, query, user_id=request_user_id)
+    """
+
+    def setUp(self) -> None:
+        self.provider = TracingProvider()
+        self.manager = FakeMemoryManager(provider=self.provider)
+        self.injector = ContextInjector(
+            memory_manager=self.manager,
+            config={
+                "auto_inject": True,
+                "max_injected_memories": 5,
+                "relevance_threshold": 0.0,
+                "max_memory_tokens": 8000,
+            },
+        )
+
+    def _make_query(self, text: str = "Hello") -> LLMQuery:
+        return LLMQuery(
+            messages=[{"role": "user", "content": text}],
+            action_type="chat",
+        )
+
+    def _get_system_content(self, query: LLMQuery) -> str:
+        for msg in query.messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                if "MEMORY CONTEXT" in content:
+                    return content
+        return ""
+
+    # ==============================================================
+    # FIX TEST: Return visit now gets correct user's memories
+    # ==============================================================
+
+    def test_return_visit_with_explicit_user_id(self) -> None:
+        """With the fix: passing user_id= to inject() ensures
+        Jordan gets Jordan's memories, even though Olivia wrote last.
+        """
+        users = SYNTHETIC_USERS[:3]
+        for user in users:
+            uid = user["user_id"]
+            self.provider.store_for_user(
+                user_id=uid,
+                content=user["profile"],
+                metadata={
+                    "user_id": uid,
+                    "owner_agent": "profile_agent",
+                    "sharing_policy": "shared",
+                    "memory_type": "profile",
+                },
+            )
+            self.manager._register_user_id(uid)
+
+        # latest_user_id is olivia (last registered)
+        self.assertEqual(
+            self.manager.latest_user_id,
+            "olivia_ramirez_d9f04b72",
+        )
+
+        # Jordan comes back — pass Jordan's user_id explicitly
+        query = self._make_query("What programming language do I prefer?")
+        result_query, diag = self.injector.inject(
+            "assistant_agent",
+            query,
+            user_id="jordan_matthews_75157bae",
+        )
+
+        # FIX: resolved_user_id is now JORDAN's, not Olivia's
+        self.assertEqual(
+            diag["resolved_user_id"],
+            "jordan_matthews_75157bae",
+        )
+
+        # FIX: Jordan gets their own memories (Go), not Olivia's
+        injected = self._get_system_content(result_query)
+        self.assertIn("Go", injected)
+        self.assertNotIn("Terraform", injected)
+
+    # ==============================================================
+    # FIX TEST: Sequential trials with explicit user_id
+    # ==============================================================
+
+    def test_sequential_trials_with_explicit_user_id(self) -> None:
+        """Each trial passes its own user_id explicitly.
+        All 5 trials should get the correct user's memories.
+        """
+        # Seed all users' memories and register them
+        for user in SYNTHETIC_USERS:
+            uid = user["user_id"]
+            self.provider.store_for_user(
+                user_id=uid,
+                content=user["profile"],
+                metadata={
+                    "user_id": uid,
+                    "owner_agent": "profile_agent",
+                    "sharing_policy": "shared",
+                    "memory_type": "profile",
+                },
+            )
+            self.manager._register_user_id(uid)
+
+        # Now run all 5 trials with explicit user_id
+        for user in SYNTHETIC_USERS:
+            uid = user["user_id"]
+            query = self._make_query(f"Tell me about myself ({uid})")
+            result_query, diag = self.injector.inject(
+                "assistant_agent",
+                query,
+                user_id=uid,
+            )
+
+            self.assertEqual(
+                diag["resolved_user_id"],
+                uid,
+                f"Expected resolved_user_id={uid}, "
+                f"got {diag['resolved_user_id']}",
+            )
+
+            # Verify correct content was injected
+            injected = self._get_system_content(result_query)
+            self.assertIn(
+                user["profile"].split(" who ")[0].split(" is ")[1],
+                injected,
+                f"Expected {uid}'s profile content in injection",
+            )
+
+    # ==============================================================
+    # FIX TEST: _resolve_user_id prefers explicit over latest
+    # ==============================================================
+
+    def test_resolve_prefers_explicit_over_latest(self) -> None:
+        """_resolve_user_id(agent, request_user_id=X) returns X
+        even when latest_user_id is something different.
+        """
+        self.manager._register_user_id("jordan_matthews_75157bae")
+        self.manager._register_user_id("olivia_ramirez_d9f04b72")
+
+        # latest is olivia, but request says jordan
+        resolved = self.injector._resolve_user_id(
+            "assistant_agent",
+            request_user_id="jordan_matthews_75157bae",
+        )
+        self.assertEqual(resolved, "jordan_matthews_75157bae")
+
+    # ==============================================================
+    # FIX TEST: Fallback still works when no explicit user_id
+    # ==============================================================
+
+    def test_fallback_when_no_explicit_user_id(self) -> None:
+        """Without explicit user_id, the old fallback behavior
+        (latest_user_id) still works.
+        """
+        self.manager._register_user_id("jordan_matthews_75157bae")
+        self.manager._register_user_id("olivia_ramirez_d9f04b72")
+
+        # No request_user_id → falls back to latest
+        resolved = self.injector._resolve_user_id(
+            "assistant_agent",
+        )
+        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
+
+    # ==============================================================
+    # FIX TEST: Retrieve log shows per-request user_id
+    # ==============================================================
+
+    def test_retrieve_log_shows_per_request_user_id(self) -> None:
+        """When user_id is passed per-request, the retrieve_log
+        shows different user_ids for different requests.
+        """
+        users = SYNTHETIC_USERS[:3]
+        for user in users:
+            uid = user["user_id"]
+            self.provider.store_for_user(
+                user_id=uid,
+                content=user["profile"],
+                metadata={
+                    "user_id": uid,
+                    "owner_agent": "profile_agent",
+                    "sharing_policy": "shared",
+                    "memory_type": "profile",
+                },
+            )
+            self.manager._register_user_id(uid)
+
+        self.provider.retrieve_log.clear()
+
+        # 3 requests for 3 different users
+        for user in users:
+            uid = user["user_id"]
+            query = self._make_query(f"Request for {uid}")
+            self.injector.inject(
+                "assistant_agent", query, user_id=uid
+            )
+
+        # Verify that each retrieve used the correct user_id
+        unique_user_ids = set()
+        for entry in self.provider.retrieve_log:
+            unique_user_ids.add(entry["user_id_in_query"])
+
+        # With the fix, all 3 different user_ids appear
+        self.assertEqual(
+            len(unique_user_ids),
+            3,
+            f"Expected 3 different user_ids in retrieve log, "
+            f"got {unique_user_ids}",
+        )
+        for user in users:
+            self.assertIn(
+                user["user_id"],
+                unique_user_ids,
+            )
