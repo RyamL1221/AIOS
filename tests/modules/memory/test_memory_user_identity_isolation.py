@@ -261,16 +261,12 @@ class TestMemoryUserIdentityIsolation(unittest.TestCase):
     def _retrieve_for_user(
         self, user: dict
     ) -> MemoryResponse:
-        """Retrieve memory through MemoryManager.address_request.
+        """Retrieve memory through MemoryManager.address_request
+        with the user's explicit user_id in query.params.
 
-        NOTE: This intentionally does NOT pass user_id in the
-        query params, mimicking the real agent retrieval flow
-        where the agent (e.g., assistant_agent) retrieves
-        memories and relies on the MemoryManager to resolve the
-        correct user_id scope.
-
-        The bug causes this to resolve to ``latest_user_id``
-        rather than the intended user.
+        After the fix, the manager no longer injects
+        ``latest_user_id`` as a fallback. Callers MUST pass
+        ``user_id`` explicitly to scope the retrieval.
         """
         syscall = _make_syscall(
             agent_name="assistant_agent",
@@ -281,6 +277,7 @@ class TestMemoryUserIdentityIsolation(unittest.TestCase):
                     f"working on?"
                 ),
                 "k": 5,
+                "user_id": user["user_id"],
             },
         )
         return self.manager.address_request(syscall)
@@ -565,6 +562,58 @@ class TestMemoryUserIdentityIsolation(unittest.TestCase):
     # ----------------------------------------------------------
     # Multi-write ordering contamination
     # ----------------------------------------------------------
+
+    def test_no_user_id_returns_empty_not_contaminated(
+        self,
+    ) -> None:
+        """When no user_id is passed in retrieve params, the
+        manager returns empty results rather than falling back
+        to the last writer's memories.
+
+        This proves the fix: previously, the manager would
+        inject latest_user_id (last writer) into the query,
+        causing cross-user contamination. Now it returns
+        nothing rather than wrong data.
+        """
+        # Write for both users
+        self._write_memory_for_user(
+            USER_A,
+            f"{USER_A['name']} is working on "
+            f"{USER_A['project']}.",
+        )
+        self._write_memory_for_user(
+            USER_B,
+            f"{USER_B['name']} is working on "
+            f"{USER_B['project']}.",
+        )
+
+        # Retrieve WITHOUT user_id in params
+        syscall = _make_syscall(
+            agent_name="assistant_agent",
+            operation_type="retrieve_memory",
+            params={
+                "content": "What project is the user on?",
+                "k": 5,
+                # NO user_id — previously caused contamination
+            },
+        )
+        result = self.manager.address_request(syscall)
+        results = result.search_results or []
+        text = " ".join(
+            r.get("content", "") for r in results
+        )
+
+        # Must NOT contain either user's data (empty is safe)
+        self.assertNotIn(
+            USER_A["project"],
+            text,
+            "No-user_id retrieve must not leak A's data",
+        )
+        self.assertNotIn(
+            USER_B["project"],
+            text,
+            "No-user_id retrieve must not leak B's data",
+        )
 
     def test_three_users_last_writer_contaminates_all_retrievals(
         self,

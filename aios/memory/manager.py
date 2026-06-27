@@ -319,14 +319,12 @@ class MemoryManager:
         elif operation_type == "retrieve_memory":
             query.params["agent_name"] = memory_syscall.agent_name
             if not query.params.get("user_id"):
-                latest = self.latest_user_id
-                if latest and latest != memory_syscall.agent_name:
-                    query.params["user_id"] = latest
-                    logger.info(
-                        "Injected user_id=%s into retrieve for agent=%s",
-                        latest,
-                        memory_syscall.agent_name,
-                    )
+                logger.warning(
+                    "retrieve_memory called without request-scoped "
+                    "user_id; skipping latest_user_id fallback to "
+                    "avoid cross-user contamination (agent=%s)",
+                    memory_syscall.agent_name,
+                )
             # Wait for any accepted-but-uncommitted ``create_memory``
             # writes scoped to the same ``user_id`` and stamped at or
             # below ``barrier_snapshot`` to drain before serving this
@@ -354,14 +352,12 @@ class MemoryManager:
         elif operation_type == "retrieve_memory_raw":
             query.params["agent_name"] = memory_syscall.agent_name
             if not query.params.get("user_id"):
-                latest = self.latest_user_id
-                if latest and latest != memory_syscall.agent_name:
-                    query.params["user_id"] = latest
-                    logger.info(
-                        "Injected user_id=%s into retrieve for agent=%s",
-                        latest,
-                        memory_syscall.agent_name,
-                    )
+                logger.warning(
+                    "retrieve_memory_raw called without request-scoped "
+                    "user_id; skipping latest_user_id fallback to "
+                    "avoid cross-user contamination (agent=%s)",
+                    memory_syscall.agent_name,
+                )
             # See ``retrieve_memory`` above -- same barrier wait
             # contract for the raw-retrieval path, including the
             # provider-type guard from task 5.5.
