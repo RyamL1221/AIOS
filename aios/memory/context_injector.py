@@ -472,7 +472,7 @@ class ContextInjector:
         .. note:: ``latest_user_id`` is a GLOBAL property reflecting
            the most recent write across ALL users. It is only safe
            as a fallback when no explicit request identity is
-           available. See: tests/modules/memory/USER_ID_RESOLUTION_TRACE.md
+           available.
         """
         # 1. Prefer explicit per-request user_id.
         if request_user_id and request_user_id != agent_name:
@@ -489,7 +489,7 @@ class ContextInjector:
         # 2. Fallback: latest_user_id (most recently written).
         latest = getattr(manager, "latest_user_id", None)
         if latest and latest != agent_name:
-            logger.info(
+            logger.debug(
                 "user_id resolved from FALLBACK "
                 "(latest_user_id): %s (agent=%s)",
                 latest,
@@ -501,7 +501,7 @@ class ContextInjector:
         known = getattr(manager, "known_user_ids", set())
         for uid in known:
             if uid and uid != agent_name:
-                logger.info(
+                logger.debug(
                     "user_id resolved from FALLBACK "
                     "(known_user_ids iteration): %s "
                     "(agent=%s)",
