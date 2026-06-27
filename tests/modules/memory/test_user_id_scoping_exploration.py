@@ -361,8 +361,11 @@ class UserIdScopingExplorationTests(unittest.TestCase):
             action_type="chat",
         )
 
-        # Run injection.
-        _, diagnostics = injector.inject(agent_name, llm_query)
+        # Run injection with explicit user_id (as the production
+        # path via _request_user_id would provide).
+        _, diagnostics = injector.inject(
+            agent_name, llm_query, user_id=latest_user_id,
+        )
 
         # --- Assertion 1 (Bug 1.1): own-memory query user_id ---
         # The FIRST retrieve_memory call is the own-memory query.

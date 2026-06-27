@@ -269,7 +269,8 @@ class TestMultiUserIsolation(unittest.TestCase):
 
         query1 = self._make_query("What do I like?")
         result_query1, diag1 = injector.inject(
-            "assistant_agent", query1
+            "assistant_agent", query1,
+            user_id="sophia__kernel_shared",
         )
 
         # Verify own-memory query used sophia's user_id.
@@ -305,7 +306,8 @@ class TestMultiUserIsolation(unittest.TestCase):
 
         query2 = self._make_query("What do I like?")
         result_query2, diag2 = injector.inject(
-            "assistant_agent", query2
+            "assistant_agent", query2,
+            user_id="alex__kernel_shared",
         )
 
         # Verify own-memory query used alex's user_id.
@@ -365,7 +367,10 @@ class TestMultiUserIsolation(unittest.TestCase):
 
         # Run injection.
         query = self._make_query("Tell me about my preferences")
-        _, diag = injector.inject("assistant_agent", query)
+        _, diag = injector.inject(
+            "assistant_agent", query,
+            user_id="alex__kernel_shared",
+        )
 
         # Verify resolved_user_id in diagnostics.
         self.assertEqual(

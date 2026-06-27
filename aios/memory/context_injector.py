@@ -458,21 +458,25 @@ class ContextInjector:
         """Resolve the active end-user's user_id for memory
         retrieval scoping.
 
-        Resolution order:
+        Resolution:
         1. Explicit ``request_user_id`` from the current request
-           (highest priority — per-request identity).
-        2. ``latest_user_id`` from the MemoryManager's registry
-           (backward-compat fallback for callers that don't
-           provide a per-request user_id).
-        3. Any entry in ``known_user_ids`` that differs from
-           ``agent_name`` (last-resort fallback).
-        4. ``None`` — signals the caller to use ``agent_name``
-           (legacy single-user deployments).
+           (per-request identity from ``QueryRequest.user_id``).
+        2. ``None`` — signals the caller to use ``agent_name``
+           as a legacy fallback (single-user deployments where
+           no per-request identity is available).
 
-        .. note:: ``latest_user_id`` is a GLOBAL property reflecting
-           the most recent write across ALL users. It is only safe
-           as a fallback when no explicit request identity is
-           available.
+        When no ``request_user_id`` is provided, this method
+        returns ``None`` rather than guessing from global state.
+        The caller (``inject()``) uses ``agent_name`` as the
+        own-memory query scope, which is safe because it only
+        returns that agent's own memories — no cross-user
+        contamination is possible.
+
+        .. note:: Previous versions fell back to
+           ``MemoryManager.latest_user_id`` or iterated
+           ``known_user_ids``. Those fallbacks caused cross-user
+           memory contamination in multi-user scenarios and have
+           been removed.
         """
         # 1. Prefer explicit per-request user_id.
         if request_user_id and request_user_id != agent_name:
@@ -484,31 +488,15 @@ class ContextInjector:
             )
             return request_user_id
 
-        manager = self.memory_manager
-
-        # 2. Fallback: latest_user_id (most recently written).
-        latest = getattr(manager, "latest_user_id", None)
-        if latest and latest != agent_name:
+        # No request-scoped identity available. Return None so
+        # the caller falls back to agent_name (safe default).
+        if not request_user_id:
             logger.debug(
-                "user_id resolved from FALLBACK "
-                "(latest_user_id): %s (agent=%s)",
-                latest,
+                "No request-scoped user_id for context "
+                "injection; skipping user-scoped retrieval "
+                "(agent=%s)",
                 agent_name,
             )
-            return latest
-
-        # 3. Last resort: any known_user_id != agent_name.
-        known = getattr(manager, "known_user_ids", set())
-        for uid in known:
-            if uid and uid != agent_name:
-                logger.debug(
-                    "user_id resolved from FALLBACK "
-                    "(known_user_ids iteration): %s "
-                    "(agent=%s)",
-                    uid,
-                    agent_name,
-                )
-                return uid
 
         return None
 

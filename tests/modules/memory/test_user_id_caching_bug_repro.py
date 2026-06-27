@@ -193,23 +193,24 @@ class FakeMemoryManager:
 
 
 # ==================================================================
-# SECTION 1: Legacy Fallback Behavior (backward compatibility)
+# SECTION 1: No-Fallback Behavior (post-fix)
 #
 # These tests document how _resolve_user_id() behaves when NO
-# explicit request_user_id is provided. The global latest_user_id
-# is used as the fallback. This is preserved for callers that
-# don't yet supply a per-request user_id.
+# explicit request_user_id is provided. After the fix, the
+# injector returns None (not latest_user_id), causing the caller
+# to fall back to agent_name for own-memory queries. No cross-user
+# contamination is possible.
 # ==================================================================
 
 
 class TestLegacyFallbackBehavior(unittest.TestCase):
-    """Tests for the legacy fallback path where no explicit
+    """Tests for the no-fallback path where no explicit
     request_user_id is passed to inject().
 
-    In this mode, ``_resolve_user_id()`` returns
-    ``latest_user_id`` which is the most recently written
-    user_id across ALL users. This is a backward-compat path
-    and is UNSAFE for multi-user return-visit scenarios.
+    Post-fix, ``_resolve_user_id()`` returns ``None`` when no
+    explicit ``request_user_id`` is provided, preventing
+    cross-user memory contamination. The caller uses
+    ``agent_name`` as the own-memory scope (safe default).
     """
 
     def setUp(self) -> None:
@@ -242,11 +243,8 @@ class TestLegacyFallbackBehavior(unittest.TestCase):
     def test_legacy_fallback_uses_latest_user_id_when_request_user_id_missing(
         self,
     ) -> None:
-        """Without explicit user_id, _resolve_user_id returns the
-        globally latest user_id (last registered).
-
-        This is the backward-compat fallback for callers that
-        haven't been updated to pass per-request identity.
+        """Without explicit user_id, _resolve_user_id returns None
+        (not latest_user_id). This prevents cross-user contamination.
         """
         self.manager._register_user_id("jordan_matthews_75157bae")
         self.manager._register_user_id("olivia_ramirez_d9f04b72")
@@ -254,14 +252,13 @@ class TestLegacyFallbackBehavior(unittest.TestCase):
         resolved = self.injector._resolve_user_id(
             "assistant_agent"
         )
-        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
+        self.assertIsNone(resolved)
 
     def test_legacy_fallback_sequential_forward_works_by_coincidence(
         self,
     ) -> None:
-        """Sequential register-then-retrieve works in fallback mode
-        because latest_user_id happens to match the most recent
-        user. This does NOT protect against return visits.
+        """Without explicit user_id, resolved_user_id is always
+        None regardless of registration order.
         """
         results = []
         for i, user in enumerate(SYNTHETIC_USERS):
@@ -283,22 +280,16 @@ class TestLegacyFallbackBehavior(unittest.TestCase):
             )
             results.append(diag["resolved_user_id"])
 
-        # Each trial resolves correctly only because the register
-        # immediately precedes the retrieve (coincidental ordering).
-        for i, uid in enumerate(
-            u["user_id"] for u in SYNTHETIC_USERS
-        ):
-            self.assertEqual(results[i], uid)
+        # Without explicit user_id, resolved is always None
+        for result in results:
+            self.assertIsNone(result)
 
     def test_legacy_fallback_return_visit_uses_latest_not_requesting_user(
         self,
     ) -> None:
-        """Documents the known limitation of fallback mode:
-        when an earlier user returns WITHOUT passing user_id,
-        they get the latest user's memories instead of their own.
-
-        This is expected fallback behavior (not a regression).
-        The fix is for callers to pass user_id on the request.
+        """Without explicit user_id, no user-scoped memories are
+        injected. resolved_user_id is None and no contamination
+        occurs.
         """
         users = SYNTHETIC_USERS[:3]
         for user in users:
@@ -315,33 +306,21 @@ class TestLegacyFallbackBehavior(unittest.TestCase):
             )
             self.manager._register_user_id(uid)
 
-        # latest_user_id is olivia (last registered)
-        self.assertEqual(
-            self.manager.latest_user_id,
-            "olivia_ramirez_d9f04b72",
-        )
-
         # Jordan returns but no explicit user_id is passed.
-        # Fallback resolves to olivia (the latest).
+        # Post-fix: resolved_user_id is None, no contamination.
         query = self._make_query("What language do I prefer?")
         result_query, diag = self.injector.inject(
             "assistant_agent", query
         )
 
-        # Expected: fallback uses latest (olivia), not jordan
-        self.assertEqual(
-            diag["resolved_user_id"],
-            "olivia_ramirez_d9f04b72",
-        )
-        injected = self._get_system_content(result_query)
-        if injected:
-            self.assertIn("Terraform", injected)
+        # Expected: resolved_user_id is None (no fallback)
+        self.assertIsNone(diag["resolved_user_id"])
 
     def test_legacy_fallback_all_retrieves_use_same_stale_user_id(
         self,
     ) -> None:
-        """In fallback mode, multiple requests without explicit
-        user_id all resolve to the same (latest) user_id.
+        """Without explicit user_id, all requests use agent_name
+        as the own-memory scope (resolved_user_id=None).
         """
         users = SYNTHETIC_USERS[:3]
         for user in users:
@@ -367,9 +346,9 @@ class TestLegacyFallbackBehavior(unittest.TestCase):
             e["user_id_in_query"]
             for e in self.provider.retrieve_log
         }
-        # All use the same (latest) user_id
+        # All use agent_name (no fallback to latest_user_id)
         self.assertEqual(len(unique_ids), 1)
-        self.assertIn("olivia_ramirez_d9f04b72", unique_ids)
+        self.assertIn("assistant_agent", unique_ids)
 
 
 # ==================================================================
@@ -545,11 +524,12 @@ class TestRequestScopedUserIdentity(unittest.TestCase):
         for user in users:
             self.assertIn(user["user_id"], unique_ids)
 
-    def test_request_user_id_none_falls_back_to_latest(
+    def test_request_user_id_none_falls_back_to_none(
         self,
     ) -> None:
-        """When user_id=None is passed (or omitted), the legacy
-        fallback to latest_user_id is preserved.
+        """When user_id=None is passed (or omitted),
+        _resolve_user_id returns None (no fallback to
+        latest_user_id).
         """
         self.manager._register_user_id("jordan_matthews_75157bae")
         self.manager._register_user_id("olivia_ramirez_d9f04b72")
@@ -559,13 +539,13 @@ class TestRequestScopedUserIdentity(unittest.TestCase):
             "assistant_agent",
             request_user_id=None,
         )
-        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
+        self.assertIsNone(resolved)
 
     def test_request_user_id_equal_to_agent_name_falls_back(
         self,
     ) -> None:
         """If request_user_id == agent_name, it's treated as
-        'no real user' and the fallback path is used.
+        'no real user' and returns None.
         """
         self.manager._register_user_id("olivia_ramirez_d9f04b72")
 
@@ -573,9 +553,8 @@ class TestRequestScopedUserIdentity(unittest.TestCase):
             "assistant_agent",
             request_user_id="assistant_agent",
         )
-        # Falls through to latest_user_id because
-        # request_user_id == agent_name is skipped
-        self.assertEqual(resolved, "olivia_ramirez_d9f04b72")
+        # Returns None because request_user_id == agent_name
+        self.assertIsNone(resolved)
 
     def test_interleaved_requests_for_different_users(
         self,

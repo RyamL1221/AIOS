@@ -489,7 +489,9 @@ class Scenario1CrossAgentPersonalizationTests(_IntegrationTestBase):
             }],
             action_type="chat",
         )
-        _, diagnostics = injector.inject("AssistantAgent", llm_query)
+        _, diagnostics = injector.inject(
+            "AssistantAgent", llm_query, user_id="alex"
+        )
 
         self.assertEqual(
             diagnostics.get("injected_count"),

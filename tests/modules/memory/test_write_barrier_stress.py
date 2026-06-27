@@ -625,6 +625,7 @@ class Scenario3AutoInjectBurstTests(unittest.TestCase):
                         try:
                             _, diagnostics = injector.inject(
                                 "AssistantAgent", llm_query,
+                                user_id=target_user,
                             )
                         except Exception as exc:  # pragma: no cover
                             with log_lock:

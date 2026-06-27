@@ -385,7 +385,9 @@ class WriteBarrierExplorationTests(unittest.TestCase):
             action_type="chat",
         )
 
-        _, diagnostics = injector.inject("AssistantAgent", llm_query)
+        _, diagnostics = injector.inject(
+            "AssistantAgent", llm_query, user_id="alex"
+        )
 
         self.assertEqual(
             diagnostics.get("injected_count"),
@@ -503,7 +505,7 @@ class WriteBarrierMultiWriterRaceTests(unittest.TestCase):
             )
 
             _, diagnostics = injector.inject(
-                "AssistantAgent", llm_query,
+                "AssistantAgent", llm_query, user_id="alex",
             )
 
             self.assertEqual(
