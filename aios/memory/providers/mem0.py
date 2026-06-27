@@ -7,6 +7,7 @@ and intelligent memory organization.
 """
 import logging
 import os
+import time
 from typing import Dict, Any, List, TYPE_CHECKING
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
@@ -352,6 +353,90 @@ class Mem0Provider(MemoryProvider):
                 e,
             )
     
+    # ------------------------------------------------------------------
+    # Searchability polling helpers
+    # ------------------------------------------------------------------
+
+    def _normalize_get_all_result(self, result: object) -> list:
+        """Normalize Mem0 get_all() responses into a list of memory dicts.
+
+        Mem0 may return either:
+        - a plain list
+        - a dict with a results/memories/data field
+        """
+        if isinstance(result, list):
+            return result
+
+        if isinstance(result, dict):
+            for key in ("results", "memories", "data"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    return value
+
+        return []
+
+    def _await_searchable(
+        self,
+        memory_id: str,
+        user_id: str,
+        max_wait: float = 10.0,
+        interval: float = 0.5,
+    ) -> bool:
+        """Poll Mem0 until a newly written memory is visible
+        through get_all().
+
+        Returns True if the memory becomes visible before timeout.
+        Returns False if the timeout is reached.
+        """
+        waited = 0.0
+
+        while waited < max_wait:
+            try:
+                all_memories = self.client.get_all(
+                    user_id=user_id
+                )
+            except Exception:
+                logger.exception(
+                    "add_memory: failed while checking "
+                    "searchability for memory %s user_id=%s",
+                    memory_id,
+                    user_id,
+                )
+                time.sleep(interval)
+                waited += interval
+                continue
+
+            memories = self._normalize_get_all_result(
+                all_memories
+            )
+
+            found = any(
+                memory.get("id") == memory_id
+                or memory.get("memory_id") == memory_id
+                for memory in memories
+                if isinstance(memory, dict)
+            )
+
+            if found:
+                return True
+
+            time.sleep(interval)
+            waited += interval
+
+        logger.warning(
+            "add_memory: memory %s not searchable after "
+            "%.1fs user_id=%s",
+            memory_id,
+            max_wait,
+            user_id,
+        )
+
+        return False
+
+    # ------------------------------------------------------------------
+    # CRUD operations
+    # ------------------------------------------------------------------
+
     def add_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
         """Add a memory note to Mem0 storage.
         
