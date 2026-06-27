@@ -67,18 +67,24 @@ class ContextInjector:
             agent_name: The agent making the LLM request.
             query: The LLM query to inject memories into.
             user_id: Optional per-request end-user identity.
-                When provided, memory retrieval is scoped to this
-                user_id directly, bypassing the global
-                ``latest_user_id`` fallback. This prevents
-                cross-user memory contamination in multi-user
-                scenarios.
+                When provided, memory retrieval is scoped to
+                this user_id directly. Cross-agent shared memory
+                retrieval is ONLY triggered when this parameter
+                is a non-empty string different from agent_name.
+                When absent or None, only the agent's own
+                memories are retrieved (no shared injection).
 
-        After retrieving the agent's own memories, the injector
-        derives a ``user_id`` from the metadata of those memories
-        and issues a second retrieval for shared memories from
-        other agents with the same ``user_id``.  The two result
-        sets are merged and deduplicated before relevance
-        filtering and token-budget truncation.
+        Retrieval behavior:
+
+        - **Own memories**: Always retrieved, scoped by
+          ``agent_name`` as owner_agent. Uses ``user_id`` as
+          the query filter when available, falls back to
+          ``agent_name`` for backward compatibility.
+        - **Shared memories**: Only retrieved when an explicit
+          ``user_id`` is provided. Uses ``user_id`` as the
+          filter with ``sharing_policy="shared"``. The
+          ``agent_name`` is NEVER used as a user_id for
+          shared retrieval.
 
         Returns ``(query, diagnostics)`` in all code paths:
 
@@ -135,11 +141,11 @@ class ContextInjector:
                 return (query, diagnostics)
 
             # === Resolve user_id BEFORE own-memory query ===
-            # Consult the MemoryManager's registry to find
-            # the most recently written user_id. This ensures
-            # the own-memory query is scoped to the correct
-            # end-user rather than using agent_name (which
-            # would return ALL users' conversations).
+            # Use the explicit per-request user_id when
+            # available. This ensures memory retrieval is
+            # scoped to the correct end-user. Without it,
+            # only own-agent memories are retrieved (no
+            # cross-agent shared retrieval).
             resolved_user_id = self._resolve_user_id(
                 agent_name, request_user_id=user_id,
             )
