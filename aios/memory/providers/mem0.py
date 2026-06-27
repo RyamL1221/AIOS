@@ -228,6 +228,28 @@ class Mem0Provider(MemoryProvider):
     # Dynamic LLM synchronization
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _extract_filter_metadata(item: dict) -> dict:
+        """Build a unified metadata dict for _apply_sharing_filter.
+
+        Mem0's ``_search_vector_store`` promotes certain payload keys
+        (``user_id``, ``agent_id``, ``run_id``, ``actor_id``, ``role``)
+        to top-level fields in the returned dict, EXCLUDING them from
+        the nested ``item["metadata"]`` dict.  The sharing filter needs
+        ``user_id`` alongside ``owner_agent`` and ``sharing_policy`` in
+        a single dict.
+
+        This helper merges top-level promoted keys back into the nested
+        metadata so ``_apply_sharing_filter`` can read all cross-agent
+        fields from one place.
+        """
+        meta = dict(item.get("metadata") or {})
+        # Merge promoted keys that _apply_sharing_filter needs.
+        for key in ("user_id", "agent_id"):
+            if key not in meta and key in item:
+                meta[key] = item[key]
+        return meta
+
     # Mapping from AIOS kernel backend names to Mem0 LLM provider names.
     _BACKEND_TO_MEM0_PROVIDER: Dict[str, str] = {
         "openai": "openai",
@@ -741,7 +763,7 @@ class Mem0Provider(MemoryProvider):
                     agent_name,
                     user_id,
                     sharing_policy,
-                    lambda item: item.get("metadata", {}),
+                    self._extract_filter_metadata,
                 )
 
             # Map filtered items to standard format,
@@ -751,7 +773,7 @@ class Mem0Provider(MemoryProvider):
                 if not isinstance(item, dict):
                     continue
                 metadata = _enrich_metadata(
-                    dict(item.get("metadata", {}))
+                    self._extract_filter_metadata(item)
                 )
                 search_results.append({
                     "content": item.get("memory", ""),
@@ -867,7 +889,7 @@ class Mem0Provider(MemoryProvider):
                 agent_name,
                 user_id,
                 sharing_policy,
-                lambda item: item.get("metadata", {}),
+                self._extract_filter_metadata,
             )
 
         # Convert filtered items to MemoryNote objects,
@@ -877,7 +899,7 @@ class Mem0Provider(MemoryProvider):
             if not isinstance(item, dict):
                 continue
             metadata = _enrich_metadata(
-                dict(item.get("metadata", {}))
+                self._extract_filter_metadata(item)
             )
             memory_note = MemoryNote(
                 content=item.get("memory", ""),
