@@ -252,7 +252,7 @@ import pathlib
 _INJECTION_LOG_REGEX = re.compile(
     r"Injected (\d+) memories "
     r"\((\d+) own \+ (\d+) shared\) "
-    r"for agent=(.+), user_id=(.+)"
+    r"for agent=(.+), resolved_user_id=(.+)"
 )
 
 
@@ -308,7 +308,7 @@ class TestPreservationExistingKernelPaths:
     ):
         """
         The log format string "Injected %d memories (%d own +
-        %d shared) for agent=%s, user_id=%s" exists in
+        %d shared) for agent=%s, resolved_user_id=%s" exists in
         context_injector.py source.
 
         **Validates: Requirements 3.1, 3.5**
@@ -324,7 +324,7 @@ class TestPreservationExistingKernelPaths:
         # but the key fragments must all be present.
         assert "Injected %d memories" in source
         assert "(%d own + %d shared)" in source
-        assert "for agent=%s, user_id=%s" in source
+        assert "for agent=%s, resolved_user_id=%s" in source
 
     # --- Property-based test: log format matches regex ---
 
@@ -356,7 +356,7 @@ class TestPreservationExistingKernelPaths:
         log_line = (
             f"Injected {injected_count} memories "
             f"({own_count} own + {shared_count} shared) "
-            f"for agent={agent_name}, user_id={user_id}"
+            f"for agent={agent_name}, resolved_user_id={user_id}"
         )
 
         # Verify it matches the parser regex

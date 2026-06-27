@@ -146,7 +146,11 @@ class ContextInjector:
 
             # Use resolved_user_id for own-memory query when
             # available; fall back to agent_name for backward
-            # compatibility (empty known_user_ids).
+            # compatibility (single-user deployments with no
+            # per-request identity). NOTE: agent_name is ONLY
+            # used for the own-memory path (scoped by
+            # owner_agent); it is NEVER used for cross-agent
+            # shared-memory retrieval.
             own_query_user_id = (
                 resolved_user_id or agent_name
             )
@@ -200,8 +204,12 @@ class ContextInjector:
 
             # --- Cross-agent shared memory retrieval ---
             # The pre-resolved user_id is authoritative for
-            # the shared-memory path. No post-retrieval
-            # derivation needed.
+            # the shared-memory path. Shared retrieval is
+            # ONLY attempted when an explicit user_id was
+            # provided in the request. When resolved_user_id
+            # is None (no per-request identity), shared
+            # retrieval is skipped entirely — agent_name is
+            # NEVER substituted as a user_id here.
             derived_user_id = resolved_user_id
 
             # Record resolved_user_id in diagnostics when
@@ -320,8 +328,10 @@ class ContextInjector:
             if not filtered:
                 logger.info(
                     "All memories excluded by relevance "
-                    "threshold for user_id=%s",
+                    "threshold for agent=%s "
+                    "(resolved_user_id=%s)",
                     agent_name,
+                    derived_user_id,
                 )
                 diagnostics["prompt_tokens_after"] = (
                     diagnostics["prompt_tokens_before"]
@@ -398,7 +408,7 @@ class ContextInjector:
 
             logger.info(
                 "Injected %d memories (%d own + %d shared) "
-                "for agent=%s, user_id=%s",
+                "for agent=%s, resolved_user_id=%s",
                 len(filtered),
                 sum(
                     1 for m in filtered
@@ -413,15 +423,16 @@ class ContextInjector:
                     ) != agent_name
                 ),
                 agent_name,
-                derived_user_id or agent_name,
+                derived_user_id,
             )
             return (query, diagnostics)
 
         except Exception:
             logger.warning(
-                "Context injection failed for "
-                "user_id=%s",
+                "Context injection failed for agent=%s "
+                "(resolved_user_id=%s)",
                 agent_name,
+                diagnostics.get("resolved_user_id"),
                 exc_info=True,
             )
             diagnostics["injected_count"] = 0
@@ -461,9 +472,17 @@ class ContextInjector:
         Resolution:
         1. Explicit ``request_user_id`` from the current request
            (per-request identity from ``QueryRequest.user_id``).
-        2. ``None`` — signals the caller to use ``agent_name``
-           as a legacy fallback (single-user deployments where
-           no per-request identity is available).
+        2. ``None`` — signals the caller to skip shared-memory
+           retrieval and use ``agent_name`` only for own-memory
+           queries (safe: scoped by owner_agent).
+
+        **Invariant**: This method NEVER returns ``agent_name``.
+        The agent name is not a valid user_id for cross-agent
+        shared-memory retrieval. Returning it would cause the
+        shared-memory path to query for memories belonging to
+        a non-existent end-user named "assistant_agent", which
+        is semantically wrong and would never match real user
+        memories.
 
         When no ``request_user_id`` is provided, this method
         returns ``None`` rather than guessing from global state.
