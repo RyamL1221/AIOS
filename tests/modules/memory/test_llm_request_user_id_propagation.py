@@ -426,6 +426,192 @@ class TestLLMRequestUserIdPropagation(unittest.TestCase):
         # inject should NOT be called for non-chat actions
         self.inject_spy.assert_not_called()
 
+    # ----------------------------------------------------------
+    # Step 7: Nested query_data["user_id"] promotion
+    # ----------------------------------------------------------
+
+    def _make_query_request_class(self):
+        """Build a standalone QueryRequest model that mirrors
+        the validator logic in runtime/launch.py without
+        importing the module (which starts kernel threads).
+        """
+        from pydantic import BaseModel, model_validator
+        from typing import Optional, Any
+        from typing_extensions import Literal
+
+        class QueryRequest(BaseModel):
+            agent_name: str
+            query_type: Literal[
+                "llm", "tool", "storage", "memory"
+            ]
+            query_data: Any
+            user_id: Optional[str] = None
+
+            @model_validator(mode='before')
+            def convert_query_data(cls, data: Any) -> Any:
+                if isinstance(data, dict):
+                    query_type = data.get('query_type')
+                    query_data = data.get('query_data')
+
+                    if not query_type or not query_data:
+                        return data
+
+                    if (
+                        isinstance(query_data, dict)
+                        and not data.get('user_id')
+                        and query_data.get('user_id')
+                    ):
+                        data['user_id'] = query_data['user_id']
+
+                    type_mapping = {
+                        'llm': LLMQuery,
+                    }
+                    target_type = type_mapping.get(query_type)
+                    if (
+                        target_type
+                        and isinstance(query_data, dict)
+                        and not isinstance(
+                            query_data, target_type
+                        )
+                    ):
+                        try:
+                            data['query_data'] = target_type(
+                                **query_data
+                            )
+                        except Exception:
+                            pass
+                return data
+
+        return QueryRequest
+
+    def test_query_request_promotes_nested_query_data_user_id(
+        self,
+    ) -> None:
+        """When user_id is inside query_data (not top-level),
+        QueryRequest.convert_query_data should promote it to
+        the top-level user_id field.
+
+        This covers the case where SDK callers send user_id
+        nested in query_data rather than at the envelope level.
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+                "user_id": (
+                    "sophia_martinez_de307eab__kernel_shared"
+                ),
+            },
+        })
+
+        self.assertEqual(
+            request.user_id,
+            "sophia_martinez_de307eab__kernel_shared",
+            "Nested query_data['user_id'] should be promoted "
+            "to the top-level QueryRequest.user_id field",
+        )
+
+    def test_query_request_top_level_user_id_takes_precedence(
+        self,
+    ) -> None:
+        """When both top-level user_id and nested
+        query_data['user_id'] are present, the top-level
+        value must win.
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "user_id": "top_level_user",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+                "user_id": "nested_user",
+            },
+        })
+
+        self.assertEqual(
+            request.user_id,
+            "top_level_user",
+            "Top-level user_id must take precedence over "
+            "nested query_data['user_id']",
+        )
+
+    def test_nested_user_id_propagates_to_request_user_id_attr(
+        self,
+    ) -> None:
+        """End-to-end: nested query_data['user_id'] should
+        result in LLMQuery._request_user_id being set via the
+        same assignment logic launch.py uses.
+
+        This locks in the full path:
+          query_data["user_id"]
+          → QueryRequest.user_id (via promotion)
+          → LLMQuery._request_user_id
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+                "user_id": (
+                    "sophia_martinez_de307eab__kernel_shared"
+                ),
+            },
+        })
+
+        # Replicate launch.py's assignment logic
+        query = LLMQuery(
+            messages=request.query_data.messages,
+            action_type=request.query_data.action_type,
+        )
+        if request.user_id:
+            query._request_user_id = request.user_id
+
+        self.assertEqual(
+            getattr(query, "_request_user_id", None),
+            "sophia_martinez_de307eab__kernel_shared",
+            "Nested user_id should flow through to "
+            "LLMQuery._request_user_id",
+        )
+
+    def test_no_user_id_anywhere_leaves_none(self) -> None:
+        """When neither top-level nor nested user_id is
+        provided, QueryRequest.user_id should remain None.
+        """
+        QueryRequest = self._make_query_request_class()
+
+        request = QueryRequest(**{
+            "agent_name": "assistant_agent",
+            "query_type": "llm",
+            "query_data": {
+                "messages": [
+                    {"role": "user", "content": "hello"}
+                ],
+                "action_type": "chat",
+            },
+        })
+
+        self.assertIsNone(
+            request.user_id,
+            "user_id should be None when not provided in "
+            "either location",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
