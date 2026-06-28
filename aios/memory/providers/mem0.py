@@ -450,7 +450,7 @@ class Mem0Provider(MemoryProvider):
         while waited < max_wait:
             try:
                 all_memories = self.client.get_all(
-                    user_id=user_id
+                    filters={"user_id": user_id}
                 )
             except Exception:
                 logger.exception(
@@ -568,6 +568,40 @@ class Mem0Provider(MemoryProvider):
             # Fall back to original memory_note ID if Mem0
             # doesn't return one
             memory_id = memory_id or memory_note.id
+
+            # --- Diagnostic: verify memory was stored ---
+            try:
+                all_for_user = self.client.get_all(
+                    filters={"user_id": user_id},
+                    top_k=100,
+                )
+                stored_count = len(
+                    self._normalize_get_all_result(
+                        all_for_user
+                    )
+                )
+            except Exception as diag_err:
+                stored_count = f"<error: {diag_err}>"
+            logger.info(
+                "[MEM0_DEBUG] add: user_id=%s, "
+                "content='%s', memory_id=%s, "
+                "add_result_type=%s, "
+                "total_stored_for_user=%s",
+                user_id,
+                (memory_note.content or "")[:80],
+                memory_id,
+                type(result).__name__,
+                stored_count,
+            )
+            # Also print to ensure capture in kernel.log
+            print(
+                f"[MEM0_DEBUG] add: user_id={user_id}, "
+                f"content='{(memory_note.content or '')[:80]}', "
+                f"memory_id={memory_id}, "
+                f"add_result_type={type(result).__name__}, "
+                f"total_stored_for_user={stored_count}",
+                flush=True,
+            )
 
             # Wait until the memory is visible through get_all()
             # so downstream retrievals (and the write barrier)
@@ -754,6 +788,72 @@ class Mem0Provider(MemoryProvider):
             ):
                 items = results["results"]
 
+            # --- Diagnostic: log search outcome ---
+            logger.info(
+                "[MEM0_DEBUG] search: user_id=%s, "
+                "query='%s', top_k=%d, "
+                "raw_result_count=%d",
+                search_user_id,
+                (content or "")[:80],
+                k,
+                len(items),
+            )
+            # Also print to ensure capture in kernel.log
+            print(
+                f"[MEM0_DEBUG] search: user_id={search_user_id}, "
+                f"query='{(content or '')[:80]}', "
+                f"top_k={k}, raw_result_count={len(items)}",
+                flush=True,
+            )
+            if not items:
+                # Check if memories exist at all for this user
+                try:
+                    all_for_user = self.client.get_all(
+                        filters={"user_id": search_user_id},
+                        top_k=100,
+                    )
+                    stored = self._normalize_get_all_result(
+                        all_for_user
+                    )
+                    stored_count = len(stored)
+                except Exception as diag_err:
+                    stored_count = -1
+                    logger.warning(
+                        "[MEM0_DEBUG] get_all probe failed: "
+                        "%s",
+                        diag_err,
+                    )
+                if stored_count > 0:
+                    logger.warning(
+                        "[MEM0_DEBUG] search returned 0 but "
+                        "get_all(user_id=%s) found %d "
+                        "memories. Likely a scoring/threshold "
+                        "issue inside mem0.",
+                        search_user_id,
+                        stored_count,
+                    )
+                    print(
+                        f"[MEM0_DEBUG] search returned 0 but "
+                        f"get_all(user_id={search_user_id}) "
+                        f"found {stored_count} memories. "
+                        f"Likely a scoring/threshold issue.",
+                        flush=True,
+                    )
+                elif stored_count == 0:
+                    logger.warning(
+                        "[MEM0_DEBUG] search returned 0 and "
+                        "get_all(user_id=%s) also found 0. "
+                        "No memories stored for this user_id.",
+                        search_user_id,
+                    )
+                    print(
+                        f"[MEM0_DEBUG] search returned 0 and "
+                        f"get_all(user_id={search_user_id}) "
+                        f"also found 0. No memories stored.",
+                        flush=True,
+                    )
+            # --- End diagnostic ---
+
             # Apply cross-agent sharing filter when
             # agent_name is available (injected by
             # MemoryManager).
@@ -890,6 +990,57 @@ class Mem0Provider(MemoryProvider):
             and "results" in results
         ):
             items = results["results"]
+
+        # --- Diagnostic: log search outcome ---
+        logger.info(
+            "[MEM0_DEBUG] search_raw: user_id=%s, "
+            "query='%s', top_k=%d, "
+            "raw_result_count=%d",
+            search_user_id,
+            (content or "")[:80],
+            k,
+            len(items),
+        )
+        # Also print to ensure capture in kernel.log
+        print(
+            f"[MEM0_DEBUG] search_raw: user_id={search_user_id}, "
+            f"query='{(content or '')[:80]}', "
+            f"top_k={k}, raw_result_count={len(items)}",
+            flush=True,
+        )
+        if not items:
+            try:
+                all_for_user = self.client.get_all(
+                    filters={"user_id": search_user_id},
+                    top_k=100,
+                )
+                stored = self._normalize_get_all_result(
+                    all_for_user
+                )
+                stored_count = len(stored)
+            except Exception as diag_err:
+                stored_count = -1
+                logger.warning(
+                    "[MEM0_DEBUG] get_all probe failed "
+                    "(raw): %s",
+                    diag_err,
+                )
+            if stored_count > 0:
+                logger.warning(
+                    "[MEM0_DEBUG] search_raw returned 0 but "
+                    "get_all(user_id=%s) found %d memories. "
+                    "Likely a scoring/threshold issue.",
+                    search_user_id,
+                    stored_count,
+                )
+            elif stored_count == 0:
+                logger.warning(
+                    "[MEM0_DEBUG] search_raw returned 0 and "
+                    "get_all(user_id=%s) also found 0. "
+                    "No memories stored for this user_id.",
+                    search_user_id,
+                )
+        # --- End diagnostic ---
 
         # Apply cross-agent sharing filter when
         # agent_name is available (injected by

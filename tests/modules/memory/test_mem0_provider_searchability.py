@@ -35,7 +35,7 @@ class FakeDelayedMem0Client:
     def add(self, content, **kwargs):
         return self.last_add_result
 
-    def get_all(self, user_id=None):
+    def get_all(self, **kwargs):
         self.get_all_calls += 1
         if self.get_all_calls < self.visible_after_calls:
             return []
@@ -52,7 +52,7 @@ class FakeNeverVisibleMem0Client:
     def add(self, content, **kwargs):
         return {"id": "mem-timeout"}
 
-    def get_all(self, user_id=None):
+    def get_all(self, **kwargs):
         self.get_all_calls += 1
         return []
 
@@ -67,7 +67,7 @@ class FakeGetAllErrorClient:
     def add(self, content, **kwargs):
         return {"id": "mem-retry"}
 
-    def get_all(self, user_id=None):
+    def get_all(self, **kwargs):
         self.get_all_calls += 1
         if self.get_all_calls <= 2:
             raise ConnectionError("transient failure")
@@ -127,6 +127,8 @@ class TestAddMemorySearchabilityPolling:
 
         assert response.success is True
         assert response.memory_id == "mem-123"
+        # 1 diagnostic call + 2 _await_searchable polls
+        # (visible_after_calls=3 means call #3 returns results)
         assert client.get_all_calls == 3
 
     def test_delayed_visibility_first_call(
@@ -141,7 +143,8 @@ class TestAddMemorySearchabilityPolling:
 
         assert response.success is True
         assert response.memory_id == "mem-123"
-        assert client.get_all_calls == 1
+        # +1 for the diagnostic get_all call added after add
+        assert client.get_all_calls == 2
 
     def test_timeout_logs_warning_but_returns_success(
         self, provider, memory_note, caplog
@@ -177,6 +180,8 @@ class TestAddMemorySearchabilityPolling:
 
         assert response.success is True
         assert response.memory_id == "mem-retry"
+        # 1 diagnostic call (raises, caught) + 2 _await polls
+        # (call 2 raises, call 3 succeeds)
         assert client.get_all_calls == 3
         # Exception was logged
         assert any(
@@ -197,7 +202,7 @@ class TestAddMemorySearchabilityPolling:
             def add(self, content, **kwargs):
                 return {"id": "mem-variant"}
 
-            def get_all(self, user_id=None):
+            def get_all(self, **kwargs):
                 self.get_all_calls += 1
                 return [
                     {"memory_id": "mem-variant", "memory": "x"}
@@ -210,7 +215,8 @@ class TestAddMemorySearchabilityPolling:
 
         assert response.success is True
         assert response.memory_id == "mem-variant"
-        assert client.get_all_calls == 1
+        # +1 for the diagnostic get_all call added after add
+        assert client.get_all_calls == 2
 
     def test_dict_wrapped_get_all_response(
         self, provider, memory_note
@@ -224,7 +230,7 @@ class TestAddMemorySearchabilityPolling:
             def add(self, content, **kwargs):
                 return {"id": "mem-wrapped"}
 
-            def get_all(self, user_id=None):
+            def get_all(self, **kwargs):
                 self.get_all_calls += 1
                 return {
                     "results": [
