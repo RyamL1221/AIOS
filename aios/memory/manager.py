@@ -293,6 +293,13 @@ class MemoryManager:
             resp = None
             try:
                 resp = self.provider.add_memory(memory_note)
+                logger.info(
+                    "[MEM0_DEBUG] add_memory result: "
+                    "user_id=%s, success=%s, memory_id=%s",
+                    barrier_user_id,
+                    getattr(resp, "success", "?"),
+                    getattr(resp, "memory_id", "?"),
+                )
                 return resp
             finally:
                 # ``finally`` guarantees waiters are notified even
@@ -347,7 +354,15 @@ class MemoryManager:
                 self.barrier.wait_until_drained(
                     barrier_user_id, barrier_snapshot
                 )
-            return self.provider.retrieve_memory(query)
+            resp = self.provider.retrieve_memory(query)
+            logger.info(
+                "[MEM0_DEBUG] retrieve_memory result: "
+                "user_id=%s, success=%s, result_count=%d",
+                query.params.get("user_id"),
+                getattr(resp, "success", "?"),
+                len(getattr(resp, "search_results", None) or []),
+            )
+            return resp
         
         elif operation_type == "retrieve_memory_raw":
             query.params["agent_name"] = memory_syscall.agent_name

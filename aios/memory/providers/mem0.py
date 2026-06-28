@@ -767,6 +767,15 @@ class Mem0Provider(MemoryProvider):
             search_kwargs: dict = {
                 "filters": search_filters,
                 "top_k": k,
+                # Disable mem0's internal scoring threshold.
+                # The user_id pre-filter already scopes results
+                # to the correct user; AIOS's own
+                # relevance_threshold handles quality filtering
+                # at the ContextInjector level. Without this,
+                # mem0's score_and_rank() discards valid results
+                # as the ChromaDB collection grows (scores drop
+                # below 0.1 with more diverse embeddings).
+                "threshold": 0.0,
             }
             
             if agent_id:
@@ -791,18 +800,20 @@ class Mem0Provider(MemoryProvider):
             # --- Diagnostic: log search outcome ---
             logger.info(
                 "[MEM0_DEBUG] search: user_id=%s, "
-                "query='%s', top_k=%d, "
+                "query='%s', top_k=%d, threshold=%s, "
                 "raw_result_count=%d",
                 search_user_id,
                 (content or "")[:80],
                 k,
+                search_kwargs.get("threshold"),
                 len(items),
             )
             # Also print to ensure capture in kernel.log
             print(
                 f"[MEM0_DEBUG] search: user_id={search_user_id}, "
                 f"query='{(content or '')[:80]}', "
-                f"top_k={k}, raw_result_count={len(items)}",
+                f"top_k={k}, threshold={search_kwargs.get('threshold')}, "
+                f"raw_result_count={len(items)}",
                 flush=True,
             )
             if not items:
@@ -968,6 +979,9 @@ class Mem0Provider(MemoryProvider):
         search_kwargs: dict = {
             "filters": search_filters,
             "top_k": k,
+            # Disable mem0's internal scoring threshold.
+            # See retrieve_memory() for rationale.
+            "threshold": 0.0,
         }
         
         if agent_id:
@@ -994,18 +1008,20 @@ class Mem0Provider(MemoryProvider):
         # --- Diagnostic: log search outcome ---
         logger.info(
             "[MEM0_DEBUG] search_raw: user_id=%s, "
-            "query='%s', top_k=%d, "
+            "query='%s', top_k=%d, threshold=%s, "
             "raw_result_count=%d",
             search_user_id,
             (content or "")[:80],
             k,
+            search_kwargs.get("threshold"),
             len(items),
         )
         # Also print to ensure capture in kernel.log
         print(
             f"[MEM0_DEBUG] search_raw: user_id={search_user_id}, "
             f"query='{(content or '')[:80]}', "
-            f"top_k={k}, raw_result_count={len(items)}",
+            f"top_k={k}, threshold={search_kwargs.get('threshold')}, "
+            f"raw_result_count={len(items)}",
             flush=True,
         )
         if not items:
