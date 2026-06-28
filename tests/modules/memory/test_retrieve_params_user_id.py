@@ -131,19 +131,22 @@ def _create_manager() -> "tuple[MemoryManager, RecordingMem0Provider]":
 def _extract_log_user_id(params: Dict[str, Any]) -> str:
     """Replicate the ACTUAL extraction from runtime/launch.py.
 
-    Source (line ~787):
-        (request.query_data.params or {})
-            .get("metadata", {}).get("user_id", "<none>")
+    Source (fixed version):
+        _mem_params = request.query_data.params or {}
+        _mem_params.get("user_id")
+        or _mem_params.get("metadata", {}).get("user_id")
+        or "<none>"
 
-    This is the function under test. After Subtask 2 fixes
-    launch.py, this function must be updated to match the new
-    extraction logic. When the test is re-run against the fixed
-    code, ``test_launch_log_extracts_top_level_user_id`` will
-    pass because this function will also check top-level
-    params["user_id"].
+    Resolution order:
+    1. Top-level params["user_id"] (SDK's search_memories format)
+    2. Nested params["metadata"]["user_id"] (add_memory format)
+    3. "<none>" if neither is present
     """
-    return (params or {}).get("metadata", {}).get(
-        "user_id", "<none>"
+    p = params or {}
+    return (
+        p.get("user_id")
+        or p.get("metadata", {}).get("user_id")
+        or "<none>"
     )
 
 

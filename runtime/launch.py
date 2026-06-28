@@ -778,13 +778,15 @@ async def handle_query(request: QueryRequest):
             )
             return execute_request(request.agent_name, query)
         elif request.query_type == "memory":
+            _mem_params = request.query_data.params or {}
             logger.info(
                 "MEMORY QUERY RECEIVED: agent=%s, op=%s, "
                 "metadata_user_id=%s",
                 request.agent_name,
                 request.query_data.operation_type,
-                (request.query_data.params or {})
-                .get("metadata", {}).get("user_id", "<none>"),
+                _mem_params.get("user_id")
+                or _mem_params.get("metadata", {}).get("user_id")
+                or "<none>",
             )
             query = MemoryQuery(
                 params=request.query_data.params,
