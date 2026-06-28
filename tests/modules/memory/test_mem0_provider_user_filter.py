@@ -2,13 +2,16 @@
 Provider-level test: Mem0Provider passes user_id as a pre-filter.
 
 Verifies that ``retrieve_memory`` and ``retrieve_memory_raw`` pass
-the request-scoped ``user_id`` into the Mem0 ``client.search()``
+the request-scoped ``user_id`` into the Mem0 ``client.get_all()``
 call as part of the ``filters`` dict — NOT merely as a post-filter
 applied after broad unscoped retrieval.
 
-This ensures scalability: ChromaDB/Mem0 narrows the vector search
-to only the target user's embeddings before computing similarity,
-rather than retrieving all users' memories and filtering afterward.
+This ensures scalability: ChromaDB/Mem0 narrows the metadata lookup
+to only the target user's documents via a WHERE clause, rather than
+retrieving all users' memories and filtering afterward. ``get_all()``
+is used instead of ``search()`` because Mem0's ``score_and_rank()``
+was dropping valid results for small per-user result sets even with
+a similarity threshold of 0.0.
 """
 from __future__ import annotations
 
@@ -46,15 +49,15 @@ TEST_CONTENT = "What should I focus on next?"
 def _create_provider_with_mock_client() -> (
     "tuple[Mem0Provider, MagicMock]"
 ):
-    """Create a Mem0Provider whose client.search is a mock.
+    """Create a Mem0Provider whose client.get_all is a mock.
 
     Returns the provider and the mock client so tests can
-    inspect what arguments were passed to client.search().
+    inspect what arguments were passed to client.get_all().
     """
     provider = Mem0Provider()
     mock_client = MagicMock()
     # Default: return empty results list
-    mock_client.search.return_value = []
+    mock_client.get_all.return_value = []
     provider.client = mock_client
     provider.default_user_id = "default"
     provider.default_agent_id = None
@@ -67,12 +70,12 @@ def _create_provider_with_mock_client() -> (
 
 
 class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
-    """retrieve_memory passes user_id into Mem0 search as a
+    """retrieve_memory passes user_id into Mem0 get_all as a
     pre-filter (filters dict), not as a post-retrieval filter."""
 
-    def test_user_id_passed_as_filter_to_search(self):
+    def test_user_id_passed_as_filter_to_get_all(self):
         """When params["user_id"] is provided, it must appear in
-        the filters dict passed to client.search()."""
+        the filters dict passed to client.get_all()."""
         provider, mock_client = _create_provider_with_mock_client()
 
         query = MemoryQuery(
@@ -87,16 +90,10 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        # client.search must have been called exactly once
-        mock_client.search.assert_called_once()
+        # client.get_all must have been called exactly once
+        mock_client.get_all.assert_called_once()
 
-        # Extract the call arguments
-        call_args = mock_client.search.call_args
-        positional = call_args[0]
-        kwargs = call_args[1]
-
-        # The content should be the first positional arg
-        self.assertEqual(positional[0], TEST_CONTENT)
+        kwargs = mock_client.get_all.call_args[1]
 
         # The filters dict must contain user_id as a pre-filter
         filters = kwargs.get("filters", {})
@@ -104,7 +101,7 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
             "user_id",
             filters,
             "user_id must be passed inside the 'filters' dict "
-            "to Mem0's search (pre-filter), not applied after.",
+            "to Mem0's get_all (pre-filter), not applied after.",
         )
         self.assertEqual(
             filters["user_id"],
@@ -113,7 +110,7 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
             "params['user_id'].",
         )
 
-    def test_top_k_passed_to_search(self):
+    def test_top_k_passed_to_get_all(self):
         """The k parameter must be forwarded as top_k."""
         provider, mock_client = _create_provider_with_mock_client()
 
@@ -128,7 +125,7 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         self.assertEqual(
             kwargs.get("top_k"),
             3,
@@ -152,7 +149,7 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertEqual(
@@ -178,7 +175,7 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertEqual(
@@ -209,7 +206,7 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertIsNotNone(
@@ -219,12 +216,12 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
 
 
 class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
-    """retrieve_memory_raw passes user_id into Mem0 search as a
+    """retrieve_memory_raw passes user_id into Mem0 get_all as a
     pre-filter, same as retrieve_memory."""
 
-    def test_user_id_passed_as_filter_to_search(self):
+    def test_user_id_passed_as_filter_to_get_all(self):
         """When params["user_id"] is provided, it must appear in
-        the filters dict passed to client.search()."""
+        the filters dict passed to client.get_all()."""
         provider, mock_client = _create_provider_with_mock_client()
 
         query = MemoryQuery(
@@ -239,9 +236,9 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory_raw(query)
 
-        mock_client.search.assert_called_once()
+        mock_client.get_all.assert_called_once()
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertIn(
@@ -271,7 +268,7 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory_raw(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertEqual(
@@ -294,7 +291,7 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory_raw(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertEqual(
@@ -303,7 +300,7 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
         )
         self.assertIsNotNone(filters["user_id"])
 
-    def test_top_k_passed_to_search(self):
+    def test_top_k_passed_to_get_all(self):
         """The k parameter must be forwarded as top_k."""
         provider, mock_client = _create_provider_with_mock_client()
 
@@ -318,21 +315,21 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
 
         provider.retrieve_memory_raw(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         self.assertEqual(kwargs.get("top_k"), 7)
 
 
 class TestPreFilterNotPostFilter(unittest.TestCase):
-    """Prove the user_id filter is applied AT the search layer,
+    """Prove the user_id filter is applied AT the get_all layer,
     not as a post-retrieval Python filter on broad results."""
 
-    def test_search_called_with_filter_before_results(self):
-        """If user_id were a post-filter, client.search() would be
+    def test_get_all_called_with_filter_before_results(self):
+        """If user_id were a post-filter, client.get_all() would be
         called WITHOUT user_id in filters. Verify it IS present."""
         provider, mock_client = _create_provider_with_mock_client()
 
         # Return some results to make post-filtering plausible
-        mock_client.search.return_value = [
+        mock_client.get_all.return_value = [
             {
                 "memory": "Some memory",
                 "score": 0.9,
@@ -355,15 +352,15 @@ class TestPreFilterNotPostFilter(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        # The critical assertion: user_id was in the search
+        # The critical assertion: user_id was in the get_all
         # call's filters — meaning it was applied as a
         # pre-filter at the vector DB level.
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
         self.assertEqual(
             filters["user_id"],
             TEST_USER_ID,
-            "user_id must be a pre-filter in the search call, "
+            "user_id must be a pre-filter in the get_all call, "
             "not a post-retrieval Python filter. If this fails, "
             "the provider is doing broad retrieval then filtering "
             "in Python — which doesn't scale.",
@@ -371,7 +368,7 @@ class TestPreFilterNotPostFilter(unittest.TestCase):
 
     def test_agent_id_also_passed_as_pre_filter(self):
         """When agent_id is provided, it should also be in the
-        filters dict (pre-filter at search layer)."""
+        filters dict (pre-filter at get_all layer)."""
         provider, mock_client = _create_provider_with_mock_client()
 
         query = MemoryQuery(
@@ -386,7 +383,7 @@ class TestPreFilterNotPostFilter(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        kwargs = mock_client.search.call_args[1]
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertIn("agent_id", filters)

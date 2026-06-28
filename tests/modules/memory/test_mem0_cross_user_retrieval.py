@@ -10,6 +10,11 @@ incoming ``filters`` dict and returns ONLY the matching user's
 memories. If called without a proper user_id filter, it returns
 both users' memories — which would fail the assertions.
 
+Retrieval goes through Mem0's ``get_all()`` (not ``search()``):
+``get_all()`` queries the vector store by metadata filter alone,
+without ``score_and_rank()``, which was dropping valid results
+for small per-user result sets.
+
 This protects against:
 - Regressions where the user_id pre-filter is accidentally removed
 - Scalability issues from broad unscoped retrieval + post-filtering
@@ -58,7 +63,7 @@ TEST_CONTENT = "What should I focus on next?"
 
 
 def _make_filter_enforcing_client() -> MagicMock:
-    """Create a mock Mem0 client whose search() enforces user_id
+    """Create a mock Mem0 client whose get_all() enforces user_id
     filter correctness.
 
     Behaviour:
@@ -90,7 +95,7 @@ def _make_filter_enforcing_client() -> MagicMock:
         },
     }
 
-    def mock_search(content: str, **kwargs) -> list:
+    def mock_get_all(**kwargs) -> list:
         filters = kwargs.get("filters", {})
         uid = filters.get("user_id")
 
@@ -104,7 +109,7 @@ def _make_filter_enforcing_client() -> MagicMock:
             return [user_a_result, user_b_result]
 
     mock_client = MagicMock()
-    mock_client.search.side_effect = mock_search
+    mock_client.get_all.side_effect = mock_get_all
     return mock_client
 
 
@@ -195,8 +200,8 @@ class TestCrossUserRetrieveMemory(unittest.TestCase):
             "User B retrieval must NOT contain User A's memory.",
         )
 
-    def test_search_called_with_user_a_filter(self):
-        """client.search() must receive filters={"user_id": USER_A}
+    def test_get_all_called_with_user_a_filter(self):
+        """client.get_all() must receive filters={"user_id": USER_A}
         when retrieving for User A."""
         provider, mock_client = _create_provider()
 
@@ -212,19 +217,19 @@ class TestCrossUserRetrieveMemory(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        mock_client.search.assert_called_once()
-        kwargs = mock_client.search.call_args[1]
+        mock_client.get_all.assert_called_once()
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertEqual(
             filters.get("user_id"),
             USER_A,
-            "search() must be called with user_id=USER_A "
+            "get_all() must be called with user_id=USER_A "
             "in the filters dict.",
         )
 
-    def test_search_called_with_user_b_filter(self):
-        """client.search() must receive filters={"user_id": USER_B}
+    def test_get_all_called_with_user_b_filter(self):
+        """client.get_all() must receive filters={"user_id": USER_B}
         when retrieving for User B."""
         provider, mock_client = _create_provider()
 
@@ -240,14 +245,14 @@ class TestCrossUserRetrieveMemory(unittest.TestCase):
 
         provider.retrieve_memory(query)
 
-        mock_client.search.assert_called_once()
-        kwargs = mock_client.search.call_args[1]
+        mock_client.get_all.assert_called_once()
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertEqual(
             filters.get("user_id"),
             USER_B,
-            "search() must be called with user_id=USER_B "
+            "get_all() must be called with user_id=USER_B "
             "in the filters dict.",
         )
 
@@ -257,29 +262,26 @@ class TestCrossUserRetrieveMemory(unittest.TestCase):
         provider, mock_client = _create_provider()
 
         # Simulate what would happen if user_id filter was missing:
-        # call mock_search directly without the proper filter
-        unscoped_results = mock_client.search(
-            TEST_CONTENT, filters={}, top_k=5
-        )
+        # call mock_get_all directly without the proper filter
+        unscoped_results = mock_client.get_all(filters={}, top_k=5)
 
         # Without proper filter, both memories are returned
         self.assertEqual(
             len(unscoped_results),
             2,
-            "Sanity check: unscoped search returns both users' "
+            "Sanity check: unscoped get_all returns both users' "
             "memories (this is what we're protecting against).",
         )
 
         # But a properly scoped call returns only one
-        scoped_results = mock_client.search(
-            TEST_CONTENT,
+        scoped_results = mock_client.get_all(
             filters={"user_id": USER_A},
             top_k=5,
         )
         self.assertEqual(
             len(scoped_results),
             1,
-            "Scoped search must return only the filtered user.",
+            "Scoped get_all must return only the filtered user.",
         )
 
 
@@ -340,8 +342,8 @@ class TestCrossUserRetrieveMemoryRaw(unittest.TestCase):
             "User B's memory only.",
         )
 
-    def test_raw_search_called_with_user_filter(self):
-        """client.search() receives the correct user_id filter
+    def test_raw_get_all_called_with_user_filter(self):
+        """client.get_all() receives the correct user_id filter
         for retrieve_memory_raw."""
         provider, mock_client = _create_provider()
 
@@ -357,8 +359,8 @@ class TestCrossUserRetrieveMemoryRaw(unittest.TestCase):
 
         provider.retrieve_memory_raw(query)
 
-        mock_client.search.assert_called_once()
-        kwargs = mock_client.search.call_args[1]
+        mock_client.get_all.assert_called_once()
+        kwargs = mock_client.get_all.call_args[1]
         filters = kwargs.get("filters", {})
 
         self.assertEqual(filters.get("user_id"), USER_A)

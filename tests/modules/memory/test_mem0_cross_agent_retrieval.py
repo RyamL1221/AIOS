@@ -130,7 +130,7 @@ LLMQuery = _cerebrum_llm_apis.LLMQuery
 # ──────────────────────────────────────────────────────────────────────
 
 def _make_mem0_search_results():
-    """Simulate what Mem0 client.search() returns.
+    """Simulate what Mem0 client.get_all() returns.
 
     Includes:
     - A shared memory from profile_agent for alex_chen (promoted user_id)
@@ -192,7 +192,7 @@ class TestExplicitProviderRetrieval:
         """Create a Mem0Provider with a mocked Mem0 client."""
         provider = Mem0Provider()
         provider.client = MagicMock()
-        provider.client.search.return_value = search_results
+        provider.client.get_all.return_value = search_results
         provider.default_user_id = "alex_chen"
         provider.default_agent_id = None
         return provider
@@ -518,7 +518,7 @@ class TestFullProviderWithPromotedKeys:
         provider.default_user_id = "alex_chen"
 
         # Mem0 returns a mix of users and policies
-        provider.client.search.return_value = [
+        provider.client.get_all.return_value = [
             {
                 "id": "shared_match",
                 "memory": "User prefers Python",

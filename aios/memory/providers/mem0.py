@@ -553,7 +553,18 @@ class Mem0Provider(MemoryProvider):
             # Build add parameters
             add_kwargs = {
                 "user_id": user_id,
-                "metadata": metadata
+                "metadata": metadata,
+                # Bypass mem0's LLM fact extraction pipeline.
+                # With infer=True (default), mem0 uses an LLM
+                # to extract "facts" and deduplicates by hash.
+                # This causes write-side loss: semantically
+                # similar content across trials gets deduped,
+                # resulting in 0 new records stored in ChromaDB
+                # even though add() reports success. With
+                # infer=False, the raw content is stored
+                # directly as an embedding — guaranteeing each
+                # add() persists exactly one record.
+                "infer": False,
             }
             
             if agent_id:
@@ -757,113 +768,42 @@ class Mem0Provider(MemoryProvider):
                 "agent_id", self.default_agent_id
             )
             
-            # Build search parameters.
-            # Mem0 >= 0.1.29 requires entity IDs inside
-            # a ``filters`` dict rather than as top-level
-            # keyword arguments.
-            search_filters: dict = {
+            # Use get_all() for retrieval instead of search().
+            # Mem0's search() applies score_and_rank() which
+            # drops valid results as the collection grows.
+            # Since each user has a small number of memories
+            # and the user_id WHERE filter guarantees scoping,
+            # get_all() is both simpler and 100% reliable.
+            # AIOS's ContextInjector handles relevance filtering
+            # at a higher level if needed.
+            get_all_filters: dict = {
                 "user_id": search_user_id,
             }
-            search_kwargs: dict = {
-                "filters": search_filters,
-                "top_k": k,
-                # Disable mem0's internal scoring threshold.
-                # The user_id pre-filter already scopes results
-                # to the correct user; AIOS's own
-                # relevance_threshold handles quality filtering
-                # at the ContextInjector level. Without this,
-                # mem0's score_and_rank() discards valid results
-                # as the ChromaDB collection grows (scores drop
-                # below 0.1 with more diverse embeddings).
-                "threshold": 0.0,
-            }
-            
             if agent_id:
-                search_filters["agent_id"] = agent_id
-            
-            # Search Mem0
-            results = self.client.search(
-                content, **search_kwargs
-            )
-            
-            # Normalise Mem0 results into a flat list of
-            # dicts regardless of the response format.
-            items: list = []
-            if isinstance(results, list):
-                items = results
-            elif (
-                isinstance(results, dict)
-                and "results" in results
-            ):
-                items = results["results"]
+                get_all_filters["agent_id"] = agent_id
 
-            # --- Diagnostic: log search outcome ---
+            raw_result = self.client.get_all(
+                filters=get_all_filters,
+                top_k=k,
+            )
+
+            # Normalise get_all response into a flat list.
+            items = self._normalize_get_all_result(raw_result)
+
+            # --- Diagnostic ---
             logger.info(
-                "[MEM0_DEBUG] search: user_id=%s, "
-                "query='%s', top_k=%d, threshold=%s, "
-                "raw_result_count=%d",
+                "[MEM0_DEBUG] retrieve(get_all): "
+                "user_id=%s, top_k=%d, result_count=%d",
                 search_user_id,
-                (content or "")[:80],
                 k,
-                search_kwargs.get("threshold"),
                 len(items),
             )
-            # Also print to ensure capture in kernel.log
             print(
-                f"[MEM0_DEBUG] search: user_id={search_user_id}, "
-                f"query='{(content or '')[:80]}', "
-                f"top_k={k}, threshold={search_kwargs.get('threshold')}, "
-                f"raw_result_count={len(items)}",
+                f"[MEM0_DEBUG] retrieve(get_all): "
+                f"user_id={search_user_id}, "
+                f"top_k={k}, result_count={len(items)}",
                 flush=True,
             )
-            if not items:
-                # Check if memories exist at all for this user
-                try:
-                    all_for_user = self.client.get_all(
-                        filters={"user_id": search_user_id},
-                        top_k=100,
-                    )
-                    stored = self._normalize_get_all_result(
-                        all_for_user
-                    )
-                    stored_count = len(stored)
-                except Exception as diag_err:
-                    stored_count = -1
-                    logger.warning(
-                        "[MEM0_DEBUG] get_all probe failed: "
-                        "%s",
-                        diag_err,
-                    )
-                if stored_count > 0:
-                    logger.warning(
-                        "[MEM0_DEBUG] search returned 0 but "
-                        "get_all(user_id=%s) found %d "
-                        "memories. Likely a scoring/threshold "
-                        "issue inside mem0.",
-                        search_user_id,
-                        stored_count,
-                    )
-                    print(
-                        f"[MEM0_DEBUG] search returned 0 but "
-                        f"get_all(user_id={search_user_id}) "
-                        f"found {stored_count} memories. "
-                        f"Likely a scoring/threshold issue.",
-                        flush=True,
-                    )
-                elif stored_count == 0:
-                    logger.warning(
-                        "[MEM0_DEBUG] search returned 0 and "
-                        "get_all(user_id=%s) also found 0. "
-                        "No memories stored for this user_id.",
-                        search_user_id,
-                    )
-                    print(
-                        f"[MEM0_DEBUG] search returned 0 and "
-                        f"get_all(user_id={search_user_id}) "
-                        f"also found 0. No memories stored.",
-                        flush=True,
-                    )
-            # --- End diagnostic ---
 
             # Apply cross-agent sharing filter when
             # agent_name is available (injected by
@@ -970,93 +910,37 @@ class Mem0Provider(MemoryProvider):
             "agent_id", self.default_agent_id
         )
         
-        # Build search parameters.
-        # Mem0 >= 0.1.29 requires entity IDs inside
-        # a ``filters`` dict.
-        search_filters: dict = {
+        # Use get_all() — see retrieve_memory() for rationale.
+        get_all_filters: dict = {
             "user_id": search_user_id,
         }
-        search_kwargs: dict = {
-            "filters": search_filters,
-            "top_k": k,
-            # Disable mem0's internal scoring threshold.
-            # See retrieve_memory() for rationale.
-            "threshold": 0.0,
-        }
-        
         if agent_id:
-            search_filters["agent_id"] = agent_id
-        
+            get_all_filters["agent_id"] = agent_id
+
         try:
-            results = self.client.search(
-                content, **search_kwargs
+            raw_result = self.client.get_all(
+                filters=get_all_filters,
+                top_k=k,
             )
         except Exception:
             return []
-        
-        # Normalise Mem0 results into a flat list of
-        # dicts regardless of the response format.
-        items: list = []
-        if isinstance(results, list):
-            items = results
-        elif (
-            isinstance(results, dict)
-            and "results" in results
-        ):
-            items = results["results"]
 
-        # --- Diagnostic: log search outcome ---
+        items = self._normalize_get_all_result(raw_result)
+
+        # --- Diagnostic ---
         logger.info(
-            "[MEM0_DEBUG] search_raw: user_id=%s, "
-            "query='%s', top_k=%d, threshold=%s, "
-            "raw_result_count=%d",
+            "[MEM0_DEBUG] retrieve_raw(get_all): "
+            "user_id=%s, top_k=%d, result_count=%d",
             search_user_id,
-            (content or "")[:80],
             k,
-            search_kwargs.get("threshold"),
             len(items),
         )
-        # Also print to ensure capture in kernel.log
         print(
-            f"[MEM0_DEBUG] search_raw: user_id={search_user_id}, "
-            f"query='{(content or '')[:80]}', "
-            f"top_k={k}, threshold={search_kwargs.get('threshold')}, "
-            f"raw_result_count={len(items)}",
+            f"[MEM0_DEBUG] retrieve_raw(get_all): "
+            f"user_id={search_user_id}, "
+            f"top_k={k}, result_count={len(items)}",
             flush=True,
         )
-        if not items:
-            try:
-                all_for_user = self.client.get_all(
-                    filters={"user_id": search_user_id},
-                    top_k=100,
-                )
-                stored = self._normalize_get_all_result(
-                    all_for_user
-                )
-                stored_count = len(stored)
-            except Exception as diag_err:
-                stored_count = -1
-                logger.warning(
-                    "[MEM0_DEBUG] get_all probe failed "
-                    "(raw): %s",
-                    diag_err,
-                )
-            if stored_count > 0:
-                logger.warning(
-                    "[MEM0_DEBUG] search_raw returned 0 but "
-                    "get_all(user_id=%s) found %d memories. "
-                    "Likely a scoring/threshold issue.",
-                    search_user_id,
-                    stored_count,
-                )
-            elif stored_count == 0:
-                logger.warning(
-                    "[MEM0_DEBUG] search_raw returned 0 and "
-                    "get_all(user_id=%s) also found 0. "
-                    "No memories stored for this user_id.",
-                    search_user_id,
-                )
-        # --- End diagnostic ---
 
         # Apply cross-agent sharing filter when
         # agent_name is available (injected by
