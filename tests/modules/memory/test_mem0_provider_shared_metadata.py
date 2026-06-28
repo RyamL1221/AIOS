@@ -433,6 +433,212 @@ class TestRegressionWithoutFix:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Edge-case tests: privacy boundaries and robustness
+# ──────────────────────────────────────────────────────────────────────
+
+class TestExtractFilterMetadataEdgeCases:
+    """Edge cases for _extract_filter_metadata robustness."""
+
+    def test_metadata_is_none(self):
+        """item["metadata"] is None — should not crash."""
+        item = {
+            "memory": "test",
+            "user_id": "alex_chen",
+            "metadata": None,
+        }
+        meta = _extract_filter_metadata(item)
+        assert meta["user_id"] == "alex_chen"
+
+    def test_metadata_key_missing(self):
+        """No "metadata" key in item at all — should not crash."""
+        item = {
+            "memory": "test",
+            "user_id": "alex_chen",
+            "agent_id": "profile_agent",
+        }
+        meta = _extract_filter_metadata(item)
+        assert meta["user_id"] == "alex_chen"
+        assert meta["agent_id"] == "profile_agent"
+
+    def test_empty_item(self):
+        """Completely empty item — returns empty dict."""
+        meta = _extract_filter_metadata({})
+        assert meta == {}
+
+    def test_empty_string_promoted_user_id(self):
+        """Empty string user_id at top level is still copied."""
+        item = {
+            "memory": "test",
+            "user_id": "",
+            "metadata": {},
+        }
+        meta = _extract_filter_metadata(item)
+        # Empty string IS a valid value — it gets copied
+        assert meta["user_id"] == ""
+
+    def test_only_promotes_user_id_and_agent_id(self):
+        """run_id, actor_id, role are NOT promoted by the helper
+        (only user_id and agent_id are needed for filtering)."""
+        item = {
+            "memory": "test",
+            "run_id": "run_123",
+            "actor_id": "actor_456",
+            "role": "assistant",
+            "metadata": {},
+        }
+        meta = _extract_filter_metadata(item)
+        # These should NOT be merged
+        assert "run_id" not in meta
+        assert "actor_id" not in meta
+        assert "role" not in meta
+
+
+class TestPrivacyBoundaryEdgeCases:
+    """Privacy edge cases that must never regress.
+
+    Each test here validates a specific invariant of the
+    sharing filter to ensure the promoted metadata fix does
+    not widen the privacy boundary.
+    """
+
+    def test_shared_same_user_different_agent_kept(self):
+        """shared + same user + different agent → KEPT"""
+        candidate = {
+            "memory": "Shared info",
+            "user_id": "alex",
+            "metadata": {
+                "owner_agent": "profile_agent",
+                "sharing_policy": "shared",
+            },
+        }
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", "shared", _extract_filter_metadata,
+        )
+        assert len(results) == 1
+
+    def test_private_same_user_different_agent_dropped(self):
+        """private + same user + different agent → DROPPED"""
+        candidate = {
+            "memory": "Private info",
+            "user_id": "alex",
+            "metadata": {
+                "owner_agent": "profile_agent",
+                "sharing_policy": "private",
+            },
+        }
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", "shared", _extract_filter_metadata,
+        )
+        assert len(results) == 0
+
+    def test_shared_different_user_different_agent_dropped(self):
+        """shared + different user + different agent → DROPPED"""
+        candidate = {
+            "memory": "Shared but wrong user",
+            "user_id": "bob",
+            "metadata": {
+                "owner_agent": "profile_agent",
+                "sharing_policy": "shared",
+            },
+        }
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", "shared", _extract_filter_metadata,
+        )
+        assert len(results) == 0
+
+    def test_own_agent_same_user_kept(self):
+        """own-agent + same user (no policy filter) → KEPT"""
+        candidate = {
+            "memory": "My own memory",
+            "user_id": "alex",
+            "metadata": {
+                "owner_agent": "assistant_agent",
+                "sharing_policy": "private",
+                "user_id": "alex",
+            },
+        }
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", None, _extract_filter_metadata,
+        )
+        assert len(results) == 1
+
+    def test_missing_sharing_policy_treated_as_private(self):
+        """No sharing_policy in metadata → treated as private,
+        so cross-agent is dropped."""
+        candidate = {
+            "memory": "No explicit policy",
+            "user_id": "alex",
+            "metadata": {
+                "owner_agent": "profile_agent",
+                # sharing_policy intentionally missing
+            },
+        }
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", "shared", _extract_filter_metadata,
+        )
+        assert len(results) == 0
+
+    def test_missing_owner_agent_never_matches(self):
+        """No owner_agent in metadata → never matches as own,
+        and privacy invariant blocks cross-agent unless shared."""
+        candidate = {
+            "memory": "Orphan memory",
+            "user_id": "alex",
+            "metadata": {
+                "sharing_policy": "shared",
+                # owner_agent intentionally missing
+            },
+        }
+        # owner_agent="" != "assistant_agent" → not own
+        # mem_policy == "shared" → passes privacy invariant
+        # mem_user == "alex" → matches
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", "shared", _extract_filter_metadata,
+        )
+        # Should pass because policy is shared and user matches
+        assert len(results) == 1
+
+    def test_empty_string_user_id_does_not_match_real_user(self):
+        """Empty string user_id must not match a real user_id."""
+        candidate = {
+            "memory": "Memory with empty user",
+            "user_id": "",
+            "metadata": {
+                "owner_agent": "profile_agent",
+                "sharing_policy": "shared",
+            },
+        }
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", "shared", _extract_filter_metadata,
+        )
+        # "" != "alex" → dropped
+        assert len(results) == 0
+
+    def test_none_metadata_does_not_crash_filter(self):
+        """Item with None metadata is handled gracefully."""
+        candidate = {
+            "memory": "No metadata",
+            "user_id": "alex",
+            "metadata": None,
+        }
+        # Should not raise; will be dropped because
+        # owner_agent="" and sharing_policy="" → "private"
+        # → not own + not shared → dropped by privacy invariant
+        results = _apply_sharing_filter(
+            [candidate], "assistant_agent",
+            "alex", "shared", _extract_filter_metadata,
+        )
+        assert len(results) == 0
+
+
+# ──────────────────────────────────────────────────────────────────────
 # CLI runner (for standalone execution without pytest)
 # ──────────────────────────────────────────────────────────────────────
 

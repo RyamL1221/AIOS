@@ -758,12 +758,23 @@ class Mem0Provider(MemoryProvider):
             # agent_name is available (injected by
             # MemoryManager).
             if agent_name is not None:
+                pre_filter_count = len(items)
                 items = _apply_sharing_filter(
                     items,
                     agent_name,
                     user_id,
                     sharing_policy,
                     self._extract_filter_metadata,
+                )
+                logger.debug(
+                    "retrieve_memory sharing filter: "
+                    "retained %d/%d for agent=%s "
+                    "user_id=%s policy=%s",
+                    len(items),
+                    pre_filter_count,
+                    agent_name,
+                    user_id,
+                    sharing_policy,
                 )
 
             # Map filtered items to standard format,
@@ -884,12 +895,23 @@ class Mem0Provider(MemoryProvider):
         # agent_name is available (injected by
         # MemoryManager).
         if agent_name is not None:
+            pre_filter_count = len(items)
             items = _apply_sharing_filter(
                 items,
                 agent_name,
                 user_id,
                 sharing_policy,
                 self._extract_filter_metadata,
+            )
+            logger.debug(
+                "retrieve_memory_raw sharing filter: "
+                "retained %d/%d for agent=%s "
+                "user_id=%s policy=%s",
+                len(items),
+                pre_filter_count,
+                agent_name,
+                user_id,
+                sharing_policy,
             )
 
         # Convert filtered items to MemoryNote objects,
