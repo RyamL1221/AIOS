@@ -805,10 +805,15 @@ class Mem0Provider(MemoryProvider):
                 flush=True,
             )
 
-            # Apply cross-agent sharing filter when
-            # agent_name is available (injected by
-            # MemoryManager).
-            if agent_name is not None:
+            # Apply cross-agent sharing filter ONLY when the
+            # query is explicitly cross-agent (sharing_policy
+            # is set in params). For basic user-scoped
+            # retrieval, get_all() with the user_id filter
+            # already provides correct scoping. Running the
+            # sharing filter on basic calls drops memories
+            # that lack owner_agent metadata (i.e., all
+            # memories written without cross-agent fields).
+            if agent_name is not None and sharing_policy is not None:
                 pre_filter_count = len(items)
                 items = _apply_sharing_filter(
                     items,
@@ -942,10 +947,11 @@ class Mem0Provider(MemoryProvider):
             flush=True,
         )
 
-        # Apply cross-agent sharing filter when
-        # agent_name is available (injected by
-        # MemoryManager).
-        if agent_name is not None:
+        # Apply cross-agent sharing filter ONLY when the
+        # query is explicitly cross-agent (sharing_policy
+        # is set in params). See retrieve_memory() for
+        # rationale.
+        if agent_name is not None and sharing_policy is not None:
             pre_filter_count = len(items)
             items = _apply_sharing_filter(
                 items,
