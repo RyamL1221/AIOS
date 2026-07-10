@@ -5,6 +5,7 @@ This provider integrates with the Mem0 library to provide AI-native memory
 management capabilities including automatic memory extraction, semantic search,
 and intelligent memory organization.
 """
+import copy
 import logging
 import os
 import re
@@ -380,6 +381,84 @@ class Mem0Provider(MemoryProvider):
             collection_name = f"{collection_name}u"
 
         return collection_name
+
+    def _get_client_for_user(self, user_id: str):
+        """Return a cached per-user Mem0 Memory client, creating
+        one lazily if needed.
+
+        Each user_id maps to a dedicated ChromaDB collection
+        (named via ``_collection_name_for_user``). All collections
+        share the same underlying ``PersistentClient`` directory.
+
+        Thread-safe: uses ``_user_clients_lock`` to guard the
+        cache dict.
+
+        Args:
+            user_id: The resolved user identity. Blank/None is
+                normalized to the configured default.
+
+        Returns:
+            A ``mem0.Memory`` instance scoped to the user's
+            collection.
+        """
+        from mem0 import Memory
+
+        # Normalize blank to default.
+        user_id = self._resolve_op_user_id(
+            params={"user_id": user_id}
+        )
+
+        with self._user_clients_lock:
+            # Fast path: return cached client.
+            cached = self._user_clients.get(user_id)
+            if cached is not None:
+                return cached
+
+            # Guard: ensure initialize() has run.
+            if (
+                self._persistent_client is None
+                or not self._base_mem0_config
+            ):
+                raise RuntimeError(
+                    "Mem0Provider._get_client_for_user() "
+                    "called before initialize()"
+                )
+
+            # Build per-user config from template.
+            collection_name = (
+                self._collection_name_for_user(user_id)
+            )
+            user_config = copy.deepcopy(
+                self._base_mem0_config
+            )
+
+            vector_store = user_config.setdefault(
+                "vector_store", {}
+            )
+            vector_store_config = vector_store.setdefault(
+                "config", {}
+            )
+            vector_store_config["collection_name"] = (
+                collection_name
+            )
+            vector_store_config["client"] = (
+                self._persistent_client
+            )
+
+            # Create the per-user Memory instance.
+            client = Memory.from_config(user_config)
+
+            # Cache it.
+            self._user_clients[user_id] = client
+
+            logger.info(
+                "Created Mem0 client for user_id=%s "
+                "collection=%s",
+                user_id,
+                collection_name,
+            )
+
+            return client
 
     # ------------------------------------------------------------------
     # Dynamic LLM synchronization
