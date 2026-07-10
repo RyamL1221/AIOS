@@ -983,7 +983,15 @@ class Mem0Provider(MemoryProvider):
             )
         
         try:
-            result = self.client.get(memory_id)
+            # get_memory only receives memory_id — no user_id
+            # context. Route to the default user's collection.
+            user_id = self._resolve_op_user_id()
+            client = self._get_client_for_user(user_id)
+            logger.debug(
+                "Routing get_memory to user_id=%s",
+                user_id,
+            )
+            result = client.get(memory_id)
             
             if result is None:
                 return MemoryResponse(success=False, error="Memory not found")
@@ -1052,32 +1060,25 @@ class Mem0Provider(MemoryProvider):
             agent_id = query.params.get(
                 "agent_id", self.default_agent_id
             )
-            
-            # Use get_all() for retrieval instead of search().
-            # Mem0's search() applies score_and_rank() which
-            # drops valid results as the collection grows.
-            # Since each user has a small number of memories
-            # and the user_id WHERE filter guarantees scoping,
-            # get_all() is both simpler and 100% reliable.
-            # AIOS's ContextInjector handles relevance filtering
-            # at a higher level if needed.
-            #
-            # IMPORTANT: ChromaDB's get(where=..., limit=N) scans
-            # at most N records in insertion order and returns only
-            # those matching the WHERE clause. If the target user's
-            # records are at positions > N in the collection, they
-            # won't be found. We pass a large limit (1000) to scan
-            # the full collection, then slice to k after retrieval.
-            # Per-user memory counts are small, so this is safe.
+
+            # Route to per-user collection.
+            client = self._get_client_for_user(search_user_id)
+            logger.debug(
+                "Routing retrieve_memory to user_id=%s",
+                search_user_id,
+            )
+
+            # Per-user collections are small (only one user's
+            # memories), so the top_k=1000 workaround for
+            # interleaved insertion order is no longer needed.
             get_all_filters: dict = {
                 "user_id": search_user_id,
             }
             if agent_id:
                 get_all_filters["agent_id"] = agent_id
 
-            raw_result = self.client.get_all(
+            raw_result = client.get_all(
                 filters=get_all_filters,
-                top_k=1000,
             )
 
             # Normalise get_all response into a flat list.
@@ -1207,11 +1208,16 @@ class Mem0Provider(MemoryProvider):
         agent_id = query.params.get(
             "agent_id", self.default_agent_id
         )
-        
-        # Use get_all() — see retrieve_memory() for rationale.
-        # Use large top_k to scan full collection (ChromaDB's
-        # limit applies before WHERE filtering). We slice to k
-        # after retrieval.
+
+        # Route to per-user collection.
+        client = self._get_client_for_user(search_user_id)
+        logger.debug(
+            "Routing retrieve_memory_raw to user_id=%s",
+            search_user_id,
+        )
+
+        # Per-user collections are small — no top_k=1000
+        # workaround needed.
         get_all_filters: dict = {
             "user_id": search_user_id,
         }
@@ -1219,9 +1225,8 @@ class Mem0Provider(MemoryProvider):
             get_all_filters["agent_id"] = agent_id
 
         try:
-            raw_result = self.client.get_all(
+            raw_result = client.get_all(
                 filters=get_all_filters,
-                top_k=1000,
             )
         except Exception:
             return []
