@@ -1099,6 +1099,9 @@ class Mem0Provider(MemoryProvider):
                 flush=True,
             )
 
+            # Per-user collections provide physical user isolation;
+            # the sharing filter still enforces agent-level
+            # visibility within the user's collection.
             # Apply cross-agent sharing filter ONLY when the
             # query is explicitly cross-agent (sharing_policy
             # is set in params). For basic user-scoped
@@ -1248,6 +1251,9 @@ class Mem0Provider(MemoryProvider):
             flush=True,
         )
 
+        # Per-user collections provide physical user isolation;
+        # the sharing filter still enforces agent-level
+        # visibility within the user's collection.
         # Apply cross-agent sharing filter ONLY when the
         # query is explicitly cross-agent (sharing_policy
         # is set in params). See retrieve_memory() for
