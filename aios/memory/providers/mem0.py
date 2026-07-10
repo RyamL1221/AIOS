@@ -7,6 +7,7 @@ and intelligent memory organization.
 """
 import logging
 import os
+import re
 import threading
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
@@ -269,6 +270,116 @@ class Mem0Provider(MemoryProvider):
         if env_var:
             return os.environ.get(env_var)
         return None
+
+    # ------------------------------------------------------------------
+    # Per-user collection helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_op_user_id(
+        self,
+        params: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Resolve the target user_id for a memory operation.
+
+        Priority:
+        1. Explicit ``params["user_id"]``
+        2. ``metadata["user_id"]``
+        3. ``self.default_user_id`` (from config)
+        4. Literal ``"default"``
+
+        Returns:
+            A non-empty string suitable for routing to a
+            per-user collection.
+        """
+        params = params or {}
+        metadata = metadata or {}
+
+        user_id = (
+            params.get("user_id")
+            or metadata.get("user_id")
+            or self.default_user_id
+            or "default"
+        )
+
+        return str(user_id)
+
+    def _sanitize_collection_component(
+        self, value: str
+    ) -> str:
+        """Sanitize a string for use in a ChromaDB collection name.
+
+        ChromaDB collection name rules:
+        - 3–63 characters
+        - Starts and ends with alphanumeric
+        - Contains only alphanumeric, underscores, or hyphens
+        - No consecutive periods (moot — we never produce them)
+        """
+        value = str(value or "default")
+
+        # Replace invalid characters with underscore.
+        sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", value)
+        # Collapse consecutive underscores.
+        sanitized = re.sub(r"_+", "_", sanitized)
+        # Strip leading/trailing non-alphanumeric.
+        sanitized = sanitized.strip("_-")
+
+        if not sanitized:
+            sanitized = "default"
+
+        # Ensure starts with alphanumeric.
+        if not sanitized[0].isalnum():
+            sanitized = f"u{sanitized}"
+
+        # Ensure ends with alphanumeric.
+        if not sanitized[-1].isalnum():
+            sanitized = f"{sanitized}u"
+
+        return sanitized
+
+    def _collection_name_for_user(self, user_id: str) -> str:
+        """Build a valid per-user ChromaDB collection name.
+
+        Format: ``{prefix}_{sanitized_user_id}``
+
+        The result always satisfies ChromaDB naming constraints
+        (3–63 chars, alphanumeric start/end, safe characters).
+        """
+        sanitized_user_id = (
+            self._sanitize_collection_component(user_id)
+        )
+        prefix = self._sanitize_collection_component(
+            self._default_collection_prefix
+        )
+
+        # Reserve room for the underscore separator.
+        max_user_len = 63 - len(prefix) - 1
+        if max_user_len < 3:
+            prefix = "mem0"
+            max_user_len = 63 - len(prefix) - 1
+
+        sanitized_user_id = (
+            sanitized_user_id[:max_user_len].strip("_-")
+        )
+
+        if not sanitized_user_id:
+            sanitized_user_id = "default"
+
+        # Ensure truncated value still ends with alnum.
+        if not sanitized_user_id[-1].isalnum():
+            sanitized_user_id = f"{sanitized_user_id}u"
+
+        collection_name = f"{prefix}_{sanitized_user_id}"
+
+        if len(collection_name) < 3:
+            collection_name = "mem0_default"
+
+        # Final safety: truncate and strip trailing non-alnum.
+        collection_name = collection_name[:63].rstrip("_-")
+        if not collection_name[-1].isalnum():
+            collection_name = f"{collection_name}u"
+
+        return collection_name
 
     # ------------------------------------------------------------------
     # Dynamic LLM synchronization
