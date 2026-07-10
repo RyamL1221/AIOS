@@ -49,10 +49,14 @@ TEST_CONTENT = "What should I focus on next?"
 def _create_provider_with_mock_client() -> (
     "tuple[Mem0Provider, MagicMock]"
 ):
-    """Create a Mem0Provider whose client.get_all is a mock.
+    """Create a Mem0Provider whose per-user client is a mock.
 
     Returns the provider and the mock client so tests can
     inspect what arguments were passed to client.get_all().
+
+    The mock is installed both as provider.client (legacy) and
+    as the per-user cached client for all user_ids via
+    _get_client_for_user monkeypatch.
     """
     provider = Mem0Provider()
     mock_client = MagicMock()
@@ -61,6 +65,12 @@ def _create_provider_with_mock_client() -> (
     provider.client = mock_client
     provider.default_user_id = "default"
     provider.default_agent_id = None
+
+    # Monkeypatch _get_client_for_user to always return the
+    # mock client, so per-user routing still exercises the
+    # get_all call assertions.
+    provider._get_client_for_user = lambda uid: mock_client
+
     return provider, mock_client
 
 
@@ -111,9 +121,9 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
         )
 
     def test_top_k_passed_to_get_all(self):
-        """get_all must use a large top_k to scan the full
-        collection (ChromaDB applies limit before WHERE filter).
-        The results are sliced to k after retrieval."""
+        """Per-user collections are small so the top_k=1000
+        workaround is removed. get_all should be called
+        without an explicit top_k argument."""
         provider, mock_client = _create_provider_with_mock_client()
 
         query = MemoryQuery(
@@ -128,10 +138,10 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
         provider.retrieve_memory(query)
 
         kwargs = mock_client.get_all.call_args[1]
-        self.assertEqual(
-            kwargs.get("top_k"),
-            1000,
-            "top_k must be 1000 to scan full collection.",
+        self.assertNotIn(
+            "top_k",
+            kwargs,
+            "top_k workaround should be removed for per-user collections.",
         )
 
     def test_no_user_id_falls_back_to_agent_name(self):
@@ -303,9 +313,9 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
         self.assertIsNotNone(filters["user_id"])
 
     def test_top_k_passed_to_get_all(self):
-        """get_all must use a large top_k to scan the full
-        collection (ChromaDB applies limit before WHERE filter).
-        The results are sliced to k after retrieval."""
+        """Per-user collections are small so the top_k=1000
+        workaround is removed. get_all should be called
+        without an explicit top_k argument."""
         provider, mock_client = _create_provider_with_mock_client()
 
         query = MemoryQuery(
@@ -320,7 +330,7 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
         provider.retrieve_memory_raw(query)
 
         kwargs = mock_client.get_all.call_args[1]
-        self.assertEqual(kwargs.get("top_k"), 1000)
+        self.assertNotIn("top_k", kwargs)
 
 
 class TestPreFilterNotPostFilter(unittest.TestCase):
