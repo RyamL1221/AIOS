@@ -414,14 +414,22 @@ class Mem0Provider(MemoryProvider):
             if cached is not None:
                 return cached
 
-            # Guard: ensure initialize() has run.
+            # Lazy-initialize if needed.
+            if (
+                self._persistent_client is None
+                or not self._base_mem0_config
+            ):
+                self.initialize()
+
+            # Defensive: if initialize() still didn't set up
+            # the shared state, we cannot proceed.
             if (
                 self._persistent_client is None
                 or not self._base_mem0_config
             ):
                 raise RuntimeError(
-                    "Mem0Provider._get_client_for_user() "
-                    "called before initialize()"
+                    "Mem0Provider could not initialize "
+                    "per-user client state"
                 )
 
             # Build per-user config from template.
@@ -674,18 +682,28 @@ class Mem0Provider(MemoryProvider):
         user_id: str,
         max_wait: float = 10.0,
         interval: float = 0.5,
+        client=None,
     ) -> bool:
         """Poll Mem0 until a newly written memory is visible
         through get_all().
 
+        Args:
+            memory_id: ID of the memory to wait for.
+            user_id: User scope for the get_all filter.
+            max_wait: Maximum seconds to wait.
+            interval: Polling interval in seconds.
+            client: Per-user Mem0 client to poll. Falls back
+                to self.client if not provided.
+
         Returns True if the memory becomes visible before timeout.
         Returns False if the timeout is reached.
         """
+        target_client = client or self.client
         waited = 0.0
 
         while waited < max_wait:
             try:
-                all_memories = self.client.get_all(
+                all_memories = target_client.get_all(
                     filters={"user_id": user_id}
                 )
             except Exception:
@@ -805,9 +823,15 @@ class Mem0Provider(MemoryProvider):
             
             if agent_id:
                 add_kwargs["agent_id"] = agent_id
-            
-            # Add memory to Mem0
-            result = self.client.add(memory_note.content, **add_kwargs)
+
+            # Route to per-user collection.
+            client = self._get_client_for_user(user_id)
+            logger.debug(
+                "Routing add_memory to user_id=%s", user_id
+            )
+
+            # Add memory to per-user Mem0 collection.
+            result = client.add(memory_note.content, **add_kwargs)
             
             # Extract memory ID from result
             memory_id = self._extract_memory_id(result)
@@ -818,7 +842,7 @@ class Mem0Provider(MemoryProvider):
 
             # --- Diagnostic: verify memory was stored ---
             try:
-                all_for_user = self.client.get_all(
+                all_for_user = client.get_all(
                     filters={"user_id": user_id},
                     top_k=100,
                 )
@@ -854,7 +878,9 @@ class Mem0Provider(MemoryProvider):
             # so downstream retrievals (and the write barrier)
             # observe the committed state.
             if memory_id:
-                self._await_searchable(memory_id, user_id)
+                self._await_searchable(
+                    memory_id, user_id, client=client
+                )
             else:
                 logger.warning(
                     "add_memory: Mem0 write succeeded but no "
@@ -881,7 +907,17 @@ class Mem0Provider(MemoryProvider):
             or success=False with error message on failure.
         """
         try:
-            self.client.delete(memory_id)
+            # Without additional context, route to the default
+            # user's collection. Callers that need precise
+            # routing should ensure the memory was written to the
+            # correct per-user collection.
+            user_id = self._resolve_op_user_id()
+            client = self._get_client_for_user(user_id)
+            logger.debug(
+                "Routing remove_memory to user_id=%s",
+                user_id,
+            )
+            client.delete(memory_id)
             return MemoryResponse(success=True, memory_id=memory_id)
         except Exception as e:
             return MemoryResponse(
@@ -908,8 +944,21 @@ class Mem0Provider(MemoryProvider):
             )
         
         try:
+            # Resolve user_id from the memory note's metadata.
+            user_id = self._resolve_op_user_id(
+                metadata=(
+                    memory_note.metadata
+                    if hasattr(memory_note, "metadata")
+                    else None
+                ),
+            )
+            client = self._get_client_for_user(user_id)
+            logger.debug(
+                "Routing update_memory to user_id=%s",
+                user_id,
+            )
             # Mem0 update takes memory_id and new data
-            self.client.update(memory_note.id, memory_note.content)
+            client.update(memory_note.id, memory_note.content)
             return MemoryResponse(success=True, memory_id=memory_note.id)
         except Exception as e:
             return MemoryResponse(
