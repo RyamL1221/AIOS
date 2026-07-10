@@ -7,6 +7,7 @@ and intelligent memory organization.
 """
 import logging
 import os
+import threading
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
@@ -46,6 +47,23 @@ class Mem0Provider(MemoryProvider):
         self.client = None
         self.default_user_id = "default"
         self.default_agent_id = None
+
+        # Per-user client cache: user_id -> Memory instance.
+        # Each user gets a dedicated ChromaDB collection within
+        # the shared PersistentClient directory, eliminating the
+        # interleaving problem that caused dropped memories.
+        self._user_clients: Dict[str, Any] = {}
+        self._user_clients_lock = threading.RLock()
+        self._default_collection_prefix = "mem0_memories"
+
+        # Shared ChromaDB PersistentClient (set during initialize).
+        self._persistent_client = None
+        self._chroma_path: Optional[str] = None
+
+        # Base Mem0 config template (set during initialize).
+        # Used to stamp out per-user Memory instances with only
+        # the collection_name changed.
+        self._base_mem0_config: Dict[str, Any] = {}
     
     def initialize(self, config: Dict[str, Any]) -> None:
         """Initialize the provider with Mem0 configuration.
@@ -112,15 +130,18 @@ class Mem0Provider(MemoryProvider):
                         vs_cfg["path"],
                     )
 
-                    # Inject a PersistentClient to bypass Mem0's
-                    # deprecated chromadb.Client(Settings(...)) which
-                    # is always in-memory in ChromaDB >= 0.4
+                    # Create a shared PersistentClient to bypass
+                    # Mem0's deprecated chromadb.Client(Settings(...))
+                    # which is always in-memory in ChromaDB >= 0.4.
+                    # This single client is reused across all per-user
+                    # Memory instances (each gets its own collection
+                    # within this persistent directory).
                     if not vs_cfg.get("client"):
                         import chromadb
                         from chromadb.config import (
                             Settings as ChromaSettings,
                         )
-                        vs_cfg["client"] = (
+                        self._persistent_client = (
                             chromadb.PersistentClient(
                                 path=vs_cfg["path"],
                                 settings=ChromaSettings(
@@ -128,16 +149,41 @@ class Mem0Provider(MemoryProvider):
                                 ),
                             )
                         )
+                        vs_cfg["client"] = (
+                            self._persistent_client
+                        )
                         logger.info(
-                            "Injected PersistentClient for "
-                            "ChromaDB at %s",
+                            "Injected shared PersistentClient "
+                            "for ChromaDB at %s",
                             vs_cfg["path"],
                         )
+                    else:
+                        # Config already provided a client;
+                        # reuse it as the shared instance.
+                        self._persistent_client = (
+                            vs_cfg["client"]
+                        )
+
+                    # Store the chroma path for reference.
+                    self._chroma_path = vs_cfg["path"]
+
+                    # Extract collection prefix from config
+                    # (falls back to default).
+                    configured_name = vs_cfg.get(
+                        "collection_name",
+                        self._default_collection_prefix,
+                    )
+                    self._default_collection_prefix = (
+                        configured_name
+                    )
 
             # Resolve API keys for cloud LLM/embedder providers
             self._resolve_provider_api_keys(mem0_config)
-            
-            # Initialize Mem0 client
+
+            # Save base config as template for per-user clients.
+            self._base_mem0_config = mem0_config
+
+            # Initialize default Mem0 client (backward compat).
             if mem0_config:
                 self.client = Memory.from_config(mem0_config)
             else:
@@ -776,6 +822,14 @@ class Mem0Provider(MemoryProvider):
             # get_all() is both simpler and 100% reliable.
             # AIOS's ContextInjector handles relevance filtering
             # at a higher level if needed.
+            #
+            # IMPORTANT: ChromaDB's get(where=..., limit=N) scans
+            # at most N records in insertion order and returns only
+            # those matching the WHERE clause. If the target user's
+            # records are at positions > N in the collection, they
+            # won't be found. We pass a large limit (1000) to scan
+            # the full collection, then slice to k after retrieval.
+            # Per-user memory counts are small, so this is safe.
             get_all_filters: dict = {
                 "user_id": search_user_id,
             }
@@ -784,7 +838,7 @@ class Mem0Provider(MemoryProvider):
 
             raw_result = self.client.get_all(
                 filters=get_all_filters,
-                top_k=k,
+                top_k=1000,
             )
 
             # Normalise get_all response into a flat list.
@@ -916,6 +970,9 @@ class Mem0Provider(MemoryProvider):
         )
         
         # Use get_all() — see retrieve_memory() for rationale.
+        # Use large top_k to scan full collection (ChromaDB's
+        # limit applies before WHERE filtering). We slice to k
+        # after retrieval.
         get_all_filters: dict = {
             "user_id": search_user_id,
         }
@@ -925,7 +982,7 @@ class Mem0Provider(MemoryProvider):
         try:
             raw_result = self.client.get_all(
                 filters=get_all_filters,
-                top_k=k,
+                top_k=1000,
             )
         except Exception:
             return []

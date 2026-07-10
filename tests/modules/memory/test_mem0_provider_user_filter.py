@@ -111,7 +111,9 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
         )
 
     def test_top_k_passed_to_get_all(self):
-        """The k parameter must be forwarded as top_k."""
+        """get_all must use a large top_k to scan the full
+        collection (ChromaDB applies limit before WHERE filter).
+        The results are sliced to k after retrieval."""
         provider, mock_client = _create_provider_with_mock_client()
 
         query = MemoryQuery(
@@ -128,8 +130,8 @@ class TestRetrieveMemoryUserIdPreFilter(unittest.TestCase):
         kwargs = mock_client.get_all.call_args[1]
         self.assertEqual(
             kwargs.get("top_k"),
-            3,
-            "top_k must be forwarded from params['k'].",
+            1000,
+            "top_k must be 1000 to scan full collection.",
         )
 
     def test_no_user_id_falls_back_to_agent_name(self):
@@ -301,7 +303,9 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
         self.assertIsNotNone(filters["user_id"])
 
     def test_top_k_passed_to_get_all(self):
-        """The k parameter must be forwarded as top_k."""
+        """get_all must use a large top_k to scan the full
+        collection (ChromaDB applies limit before WHERE filter).
+        The results are sliced to k after retrieval."""
         provider, mock_client = _create_provider_with_mock_client()
 
         query = MemoryQuery(
@@ -316,7 +320,7 @@ class TestRetrieveMemoryRawUserIdPreFilter(unittest.TestCase):
         provider.retrieve_memory_raw(query)
 
         kwargs = mock_client.get_all.call_args[1]
-        self.assertEqual(kwargs.get("top_k"), 7)
+        self.assertEqual(kwargs.get("top_k"), 1000)
 
 
 class TestPreFilterNotPostFilter(unittest.TestCase):
