@@ -346,7 +346,7 @@ class ContextInjector:
 
             # Sort by score descending (most relevant first)
             filtered.sort(
-                key=lambda m: m.get("score", 0),
+                key=lambda m: m.get("score") or 0,
                 reverse=True,
             )
 
