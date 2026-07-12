@@ -436,9 +436,25 @@ class Mem0Provider(MemoryProvider):
             collection_name = (
                 self._collection_name_for_user(user_id)
             )
-            user_config = copy.deepcopy(
+
+            # Remove the unpicklable PersistentClient from the base
+            # config before deepcopy, then restore it. deepcopy uses
+            # pickle internally and ChromaDB's native Bindings objects
+            # cannot be serialized.
+            base_vs_config = (
                 self._base_mem0_config
+                .get("vector_store", {})
+                .get("config", {})
             )
+            saved_client = base_vs_config.pop("client", None)
+            try:
+                user_config = copy.deepcopy(
+                    self._base_mem0_config
+                )
+            finally:
+                # Always restore the client reference on the base config.
+                if saved_client is not None:
+                    base_vs_config["client"] = saved_client
 
             vector_store = user_config.setdefault(
                 "vector_store", {}
@@ -459,6 +475,12 @@ class Mem0Provider(MemoryProvider):
             # Cache it.
             self._user_clients[user_id] = client
 
+            print(
+                f"[PER_USER] Created client for "
+                f"user_id={user_id}, "
+                f"collection={collection_name}",
+                flush=True,
+            )
             logger.info(
                 "Created Mem0 client for user_id=%s "
                 "collection=%s",
@@ -762,6 +784,8 @@ class Mem0Provider(MemoryProvider):
             MemoryResponse with success=True and memory_id on success,
             or success=False with error message on failure.
         """
+        with open("/tmp/per_user_proof.txt", "a") as _f:
+            _f.write("add_memory ENTERED\n")
         from aios.memory.note import MemoryNote
         
         if not isinstance(memory_note, MemoryNote):
@@ -788,6 +812,13 @@ class Mem0Provider(MemoryProvider):
                 "context": memory_note.context,
                 "timestamp": memory_note.timestamp,
                 "memory_note_id": memory_note.id
+            }
+
+            # ChromaDB rejects empty lists in metadata.
+            # Remove any keys with empty list values.
+            metadata = {
+                k: v for k, v in metadata.items()
+                if not (isinstance(v, list) and len(v) == 0)
             }
 
             # Preserve cross-agent metadata fields so
@@ -826,6 +857,23 @@ class Mem0Provider(MemoryProvider):
 
             # Route to per-user collection.
             client = self._get_client_for_user(user_id)
+            import sys
+            print(
+                f"[PER_USER] add_memory routed to "
+                f"user_id={user_id}, "
+                f"client_id={id(client)}",
+                flush=True,
+            )
+            sys.stderr.write(
+                f"[PER_USER] add_memory routed to "
+                f"user_id={user_id}\n"
+            )
+            sys.stderr.flush()
+            with open("/tmp/per_user_proof.txt", "a") as f:
+                f.write(
+                    f"add_memory user_id={user_id} "
+                    f"client_id={id(client)}\n"
+                )
             logger.debug(
                 "Routing add_memory to user_id=%s", user_id
             )

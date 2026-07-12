@@ -292,13 +292,20 @@ class MemoryManager:
             barrier_user_id = memory_note.metadata.get("user_id")
             resp = None
             try:
+                with open("/tmp/per_user_proof.txt", "a") as _f:
+                    _f.write(
+                        f"provider type={type(self.provider).__name__} "
+                        f"module={type(self.provider).__module__}\n"
+                    )
                 resp = self.provider.add_memory(memory_note)
                 logger.info(
                     "[MEM0_DEBUG] add_memory result: "
-                    "user_id=%s, success=%s, memory_id=%s",
+                    "user_id=%s, success=%s, memory_id=%s, "
+                    "error=%s",
                     barrier_user_id,
                     getattr(resp, "success", "?"),
                     getattr(resp, "memory_id", "?"),
+                    getattr(resp, "error", None),
                 )
                 return resp
             finally:
