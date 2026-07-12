@@ -344,6 +344,36 @@ class ContextInjector:
                 )
                 return (query, diagnostics)
 
+            # Enforce sharing_policy: exclude cross-agent
+            # private memories. Per-user collections contain
+            # ALL memories for a user_id; this filter ensures
+            # only the agent's own memories and explicitly
+            # shared memories are visible.
+            filtered = [
+                mem for mem in filtered
+                if (
+                    (mem.get("metadata") or {}).get(
+                        "owner_agent", ""
+                    ) == agent_name
+                    or (mem.get("metadata") or {}).get(
+                        "sharing_policy", "private"
+                    ) == "shared"
+                )
+            ]
+
+            if not filtered:
+                logger.info(
+                    "All memories excluded by sharing "
+                    "policy for agent=%s "
+                    "(resolved_user_id=%s)",
+                    agent_name,
+                    derived_user_id,
+                )
+                diagnostics["prompt_tokens_after"] = (
+                    diagnostics["prompt_tokens_before"]
+                )
+                return (query, diagnostics)
+
             # Sort by score descending (most relevant first)
             filtered.sort(
                 key=lambda m: m.get("score") or 0,
