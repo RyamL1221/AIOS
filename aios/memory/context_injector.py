@@ -344,6 +344,51 @@ class ContextInjector:
                 )
                 return (query, diagnostics)
 
+            # --- User-partition filter (defense in depth) ---
+            # Exclude any memory whose metadata user_id does
+            # not match the resolved request identity. This
+            # prevents cross-user leakage even if the upstream
+            # provider returns incorrectly scoped results
+            # (e.g., misconfigured collection routing, weakened
+            # Mem0 filter, or a future provider that combines
+            # user collections).
+            #
+            # Fail-closed: memories with missing or empty
+            # user_id are excluded when a resolved identity
+            # exists. This avoids silently treating unscoped
+            # memories as belonging to the current user.
+            user_partition_id = own_query_user_id
+            pre_user_filter_count = len(filtered)
+            filtered = [
+                mem for mem in filtered
+                if (mem.get("metadata") or {}).get(
+                    "user_id", ""
+                ) == user_partition_id
+            ]
+
+            if len(filtered) < pre_user_filter_count:
+                logger.info(
+                    "User-partition filter for agent=%s: "
+                    "retained %d/%d (partition_id=%s)",
+                    agent_name,
+                    len(filtered),
+                    pre_user_filter_count,
+                    user_partition_id,
+                )
+
+            if not filtered:
+                logger.info(
+                    "All memories excluded by user-partition "
+                    "filter for agent=%s "
+                    "(resolved_user_id=%s)",
+                    agent_name,
+                    derived_user_id,
+                )
+                diagnostics["prompt_tokens_after"] = (
+                    diagnostics["prompt_tokens_before"]
+                )
+                return (query, diagnostics)
+
             # Enforce sharing_policy: exclude cross-agent
             # private memories. Per-user collections contain
             # ALL memories for a user_id; this filter ensures
