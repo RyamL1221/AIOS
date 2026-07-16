@@ -81,9 +81,15 @@ class FakeGetAllErrorClient:
 
 @pytest.fixture
 def provider():
-    """Create a Mem0Provider without calling initialize()."""
+    """Create a Mem0Provider without calling initialize().
+
+    Patches _get_client_for_user to return provider.client so
+    that add_memory() (which calls _get_client_for_user in
+    production) routes to the test's fake client.
+    """
     p = Mem0Provider()
     p.default_user_id = "test-user"
+    p._get_client_for_user = lambda uid: p.client
     return p
 
 

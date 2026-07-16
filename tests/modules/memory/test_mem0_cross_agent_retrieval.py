@@ -15,12 +15,10 @@ Run:
 
 import sys
 import os
-import types
-import importlib.util
 from unittest.mock import MagicMock, patch
 
 # ──────────────────────────────────────────────────────────────────────
-# Dependency stubs — avoid pulling in heavy transitive deps
+# Path setup
 # ──────────────────────────────────────────────────────────────────────
 
 _project_root = os.path.dirname(
@@ -30,99 +28,20 @@ _project_root = os.path.dirname(
         )
     )
 )
-sys.path.insert(0, _project_root)
-
-# Stub cerebrum
-_cerebrum = types.ModuleType("cerebrum")
-_cerebrum_llm = types.ModuleType("cerebrum.llm")
-_cerebrum_llm_apis = types.ModuleType("cerebrum.llm.apis")
-_cerebrum_memory = types.ModuleType("cerebrum.memory")
-_cerebrum_memory_apis = types.ModuleType("cerebrum.memory.apis")
-
-
-class _LLMQuery:
-    """Minimal LLM query stub."""
-    def __init__(self, messages=None, **kwargs):
-        self.messages = messages or []
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-
-class _MemoryQuery:
-    """Minimal memory query stub."""
-    def __init__(self, operation_type="", params=None, **kwargs):
-        self.operation_type = operation_type
-        self.params = params or {}
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-
-class _MemoryResponse:
-    """Minimal memory response stub."""
-    def __init__(self, **kwargs):
-        self.success = kwargs.get("success", False)
-        self.search_results = kwargs.get("search_results", [])
-        self.memory_id = kwargs.get("memory_id")
-        self.error = kwargs.get("error")
-        self.content = kwargs.get("content")
-        self.metadata = kwargs.get("metadata")
-
-
-_cerebrum_llm_apis.LLMQuery = _LLMQuery
-_cerebrum_memory_apis.MemoryQuery = _MemoryQuery
-_cerebrum_memory_apis.MemoryResponse = _MemoryResponse
-_cerebrum_llm.apis = _cerebrum_llm_apis
-_cerebrum_memory.apis = _cerebrum_memory_apis
-_cerebrum.llm = _cerebrum_llm
-_cerebrum.memory = _cerebrum_memory
-
-sys.modules["cerebrum"] = _cerebrum
-sys.modules["cerebrum.llm"] = _cerebrum_llm
-sys.modules["cerebrum.llm.apis"] = _cerebrum_llm_apis
-sys.modules["cerebrum.memory"] = _cerebrum_memory
-sys.modules["cerebrum.memory.apis"] = _cerebrum_memory_apis
-
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 # ──────────────────────────────────────────────────────────────────────
-# Direct-import helper (bypasses __init__.py side effects)
+# Standard imports (uses installed cerebrum package)
 # ──────────────────────────────────────────────────────────────────────
 
-def _import_direct(name, filepath):
-    spec = importlib.util.spec_from_file_location(name, filepath)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+from cerebrum.llm.apis import LLMQuery
+from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
-
-# Import only what we need
-_base_mod = _import_direct(
-    "aios.memory.providers.base",
-    os.path.join(_project_root, "aios", "memory", "providers", "base.py"),
-)
-_mem0_mod = _import_direct(
-    "aios.memory.providers.mem0",
-    os.path.join(_project_root, "aios", "memory", "providers", "mem0.py"),
-)
-_formatter_mod = _import_direct(
-    "aios.memory.memory_formatter",
-    os.path.join(_project_root, "aios", "memory", "memory_formatter.py"),
-)
-_barrier_mod = _import_direct(
-    "aios.memory.write_barrier",
-    os.path.join(_project_root, "aios", "memory", "write_barrier.py"),
-)
-_injector_mod = _import_direct(
-    "aios.memory.context_injector",
-    os.path.join(_project_root, "aios", "memory", "context_injector.py"),
-)
-
-Mem0Provider = _mem0_mod.Mem0Provider
-ContextInjector = _injector_mod.ContextInjector
-WaitOutcome = _barrier_mod.WaitOutcome
-MemoryQuery = _cerebrum_memory_apis.MemoryQuery
-MemoryResponse = _cerebrum_memory_apis.MemoryResponse
-LLMQuery = _cerebrum_llm_apis.LLMQuery
+from aios.memory.providers.mem0 import Mem0Provider
+from aios.memory.providers.base import _enrich_metadata
+from aios.memory.context_injector import ContextInjector
+from aios.memory.write_barrier import WaitOutcome
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -189,12 +108,21 @@ class TestExplicitProviderRetrieval:
     """
 
     def _make_provider_with_mock_client(self, search_results):
-        """Create a Mem0Provider with a mocked Mem0 client."""
+        """Create a Mem0Provider with a mocked Mem0 client.
+
+        Routes all user_ids through _get_client_for_user to the
+        shared mock, matching production's per-user client routing.
+        """
         provider = Mem0Provider()
         provider.client = MagicMock()
         provider.client.get_all.return_value = search_results
         provider.default_user_id = "alex_chen"
         provider.default_agent_id = None
+        # Patch per-user client routing so retrieval methods
+        # reach the mock client via the production code path.
+        provider._get_client_for_user = (
+            lambda uid: provider.client
+        )
         return provider
 
     def test_shared_memory_from_another_agent_returned(self):
@@ -343,7 +271,6 @@ class TestContextInjectorCrossAgentInjection:
         This simulates what the provider returns after applying
         _apply_sharing_filter + _enrich_metadata.
         """
-        from aios.memory.providers.base import _enrich_metadata
         meta = Mem0Provider._extract_filter_metadata(mem0_item)
         meta = _enrich_metadata(meta)
         return {
@@ -516,6 +443,11 @@ class TestFullProviderWithPromotedKeys:
         provider = Mem0Provider()
         provider.client = MagicMock()
         provider.default_user_id = "alex_chen"
+        provider.default_agent_id = None
+        # Patch per-user client routing.
+        provider._get_client_for_user = (
+            lambda uid: provider.client
+        )
 
         # Mem0 returns a mix of users and policies
         provider.client.get_all.return_value = [
