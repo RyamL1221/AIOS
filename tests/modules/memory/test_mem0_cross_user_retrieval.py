@@ -119,12 +119,20 @@ def _make_filter_enforcing_client() -> MagicMock:
 
 
 def _create_provider() -> "tuple[Mem0Provider, MagicMock]":
-    """Create a Mem0Provider wired to the filter-enforcing mock."""
+    """Create a Mem0Provider wired to the filter-enforcing mock.
+
+    Routes all user_ids through _get_client_for_user to the same
+    filter-enforcing mock, matching production's per-user client
+    routing architecture.
+    """
     provider = Mem0Provider()
     mock_client = _make_filter_enforcing_client()
     provider.client = mock_client
     provider.default_user_id = "default"
     provider.default_agent_id = None
+    # Patch per-user client routing to return the shared
+    # filter-enforcing mock for any user_id.
+    provider._get_client_for_user = lambda uid: mock_client
     return provider, mock_client
 
 
