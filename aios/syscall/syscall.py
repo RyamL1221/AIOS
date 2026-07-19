@@ -1,10 +1,13 @@
 import logging
 import time
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 # Update import to use the new location
 from aios.memory.note import MemoryNote
+
+if TYPE_CHECKING:
+    from aios.memory.manager import MemoryManager
 from aios.syscall import Syscall
 from aios.syscall.llm import LLMSyscall
 from aios.syscall.storage import StorageSyscall, storage_syscalls
@@ -51,6 +54,16 @@ class SyscallExecutor:
         self.id_lock = threading.Lock()
         self.context_injector = None
         self.conversation_extractor = None
+        # Optional reference to the kernel's MemoryManager. Wired
+        # by ``runtime/launch.py`` after the manager is constructed
+        # so ``_execute_syscall`` can stamp ``barrier_seq`` /
+        # ``barrier_snapshot`` on memory syscalls at acceptance
+        # time (see ``MemoryWriteBarrier``). Left as ``None`` when
+        # the executor is constructed without a manager (e.g.,
+        # tests, or before launch wiring runs); resolution falls
+        # back to ``self.context_injector.memory_manager`` when
+        # available so the wiring works either way.
+        self.memory_manager: Optional["MemoryManager"] = None
     
     def create_syscall(self, agent_name: str, query) -> Dict[str, Any]:
         """
@@ -112,7 +125,49 @@ class SyscallExecutor:
             
             if not syscall.get_pid():
                 syscall.set_pid(syscall_id)
-            
+
+            # Acceptance-time barrier stamping for memory writes.
+            # The MemoryWriteBarrier (owned by MemoryManager) must
+            # record this write *before* the syscall is enqueued so
+            # that any concurrent retrieval scoped to the same
+            # ``user_id`` observes the pending entry when it captures
+            # its barrier_snapshot. ``add_agentic_memory`` is included
+            # defensively even though ``execute_request`` typically
+            # rewrites it to ``add_memory`` before reaching this path.
+            # When ``self.memory_manager`` was not injected (tests, or
+            # before launch wiring runs), fall back to the
+            # ``context_injector``'s reference; when neither is wired,
+            # skip stamping entirely so the sentinel ``0`` makes the
+            # eventual ``release`` a no-op.
+            from aios.syscall.memory import MemorySyscall
+            if isinstance(syscall, MemorySyscall):
+                mm = self.memory_manager or (
+                    self.context_injector.memory_manager
+                    if self.context_injector else None
+                )
+                if mm is not None:
+                    op = syscall.query.operation_type
+                    if op in ("add_memory", "add_agentic_memory"):
+                        uid = (
+                            syscall.query.params.get("metadata", {})
+                            .get("user_id")
+                        )
+                        if uid:
+                            syscall.barrier_seq = mm.barrier.acquire(uid)
+                    elif op in (
+                        "retrieve_memory",
+                        "retrieve_memory_raw",
+                    ):
+                        # Capture the high-water mark *at acceptance*
+                        # so any pending writes stamped with later
+                        # sequence numbers do not block this
+                        # retrieval (Clause 3.x ordering preservation).
+                        uid = syscall.query.params.get("user_id")
+                        if uid:
+                            syscall.barrier_snapshot = (
+                                mm.barrier.snapshot(uid)
+                            )
+
             if isinstance(syscall, LLMSyscall):
                 global_llm_req_queue_add_message(syscall)
                 print(f"Syscall {syscall.agent_name} added to LLM queue")
@@ -667,11 +722,27 @@ class SyscallExecutor:
         if isinstance(query, LLMQuery):
             # breakpoint()
             if query.action_type in ("chat", "chat_with_tool_call_output"):
+                # Synchronize the Mem0 provider's LLM with the
+                # agent's runtime model selection so that fact
+                # extraction uses the same model as the assistant.
+                if self.context_injector:
+                    self.context_injector.memory_manager.sync_llm_from_query(
+                        query.llms
+                    )
+
                 # Context injection (before LLM call)
                 if self.context_injector:
+                    # Extract per-request user_id attached by the
+                    # kernel request handler (runtime/launch.py).
+                    # This avoids relying on the global
+                    # latest_user_id for multi-user scenarios.
+                    request_user_id = getattr(
+                        query, "_request_user_id", None
+                    )
                     query, injection_diag = (
                         self.context_injector.inject(
-                            agent_name, query
+                            agent_name, query,
+                            user_id=request_user_id,
                         )
                     )
                     logger.debug(

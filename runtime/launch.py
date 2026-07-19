@@ -119,6 +119,11 @@ class QueryRequest(BaseModel):
     agent_name: str
     query_type: Literal["llm", "tool", "storage", "memory"]
     query_data: LLMQuery | ToolQuery | StorageQuery | MemoryQuery
+    # Optional per-request end-user identity for memory scoping.
+    # When provided, context injection uses this instead of the
+    # global latest_user_id, preventing cross-user contamination
+    # in multi-user scenarios.
+    user_id: Optional[str] = None
 
     @model_validator(mode='before')
     def convert_query_data(cls, data: Any) -> Any:
@@ -128,6 +133,19 @@ class QueryRequest(BaseModel):
 
             if not query_type or not query_data:
                 return data
+
+            # Promote user_id from nested query_data to the
+            # top-level field when no top-level user_id is
+            # provided.  Some SDK callers send user_id inside
+            # query_data; without this promotion it would be
+            # silently dropped because LLMQuery does not
+            # declare a user_id field.
+            if (
+                isinstance(query_data, dict)
+                and not data.get('user_id')
+                and query_data.get('user_id')
+            ):
+                data['user_id'] = query_data['user_id']
 
             type_mapping = {
                 'llm': LLMQuery,
@@ -319,6 +337,15 @@ def initialize_components() -> dict:
                         components["memory"], memory_config
                     )
                 )
+                # Hand the executor a direct reference to the
+                # MemoryManager so ``_execute_syscall`` can stamp
+                # ``barrier_seq`` / ``barrier_snapshot`` on memory
+                # syscalls at acceptance time (see
+                # ``MemoryWriteBarrier``). The executor falls back
+                # to ``context_injector.memory_manager`` when this
+                # attribute is unset, so launch wiring stays
+                # robust to ordering changes.
+                syscall_executor.memory_manager = components["memory"]
                 print(
                     "✅ Personalization components "
                     "(ContextInjector, ConversationExtractor) "
@@ -331,6 +358,7 @@ def initialize_components() -> dict:
                 )
                 syscall_executor.context_injector = None
                 syscall_executor.conversation_extractor = None
+                syscall_executor.memory_manager = None
 
         components["tool"] = initialize_tool_manager()
 
@@ -720,6 +748,15 @@ async def handle_query(request: QueryRequest):
                 action_type=request.query_data.action_type,
                 message_return_type=request.query_data.message_return_type,
             )
+            # Attach per-request user_id so context injection can
+            # scope memory retrieval to the correct end-user.
+            # This private attr avoids modifying the Cerebrum SDK.
+            if request.user_id:
+                query._request_user_id = request.user_id
+                logger.debug(
+                    "LLM query request_user_id=%s",
+                    request.user_id,
+                )
             result_dict = await asyncio.to_thread(
                 execute_request, # The method to call
                 request.agent_name,               # First arg to execute_request
@@ -741,6 +778,16 @@ async def handle_query(request: QueryRequest):
             )
             return execute_request(request.agent_name, query)
         elif request.query_type == "memory":
+            _mem_params = request.query_data.params or {}
+            logger.info(
+                "MEMORY QUERY RECEIVED: agent=%s, op=%s, "
+                "metadata_user_id=%s",
+                request.agent_name,
+                request.query_data.operation_type,
+                _mem_params.get("user_id")
+                or _mem_params.get("metadata", {}).get("user_id")
+                or "<none>",
+            )
             query = MemoryQuery(
                 params=request.query_data.params,
                 operation_type=request.query_data.operation_type

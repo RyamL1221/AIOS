@@ -11,6 +11,7 @@ temp/
 pyopenagi/environments/
 deplogs.txt
 web/deplogs.txt
+results/
 
 # IPython
 profile_default/

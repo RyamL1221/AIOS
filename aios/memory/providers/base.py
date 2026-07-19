@@ -259,3 +259,21 @@ class MemoryProvider(ABC):
         The default implementation is a no-op for backward compatibility.
         """
         pass
+
+    def sync_llm_from_query(
+        self,
+        llms: "list[dict] | None",
+    ) -> None:
+        """Synchronize the provider's internal LLM with the agent's
+        runtime model selection.
+
+        Override in providers that use an LLM internally (e.g., Mem0
+        uses an LLM for fact extraction). The default implementation
+        is a no-op for providers that don't need LLM synchronization.
+
+        Args:
+            llms: The ``LLMQuery.llms`` field — a list of dicts
+                each containing ``name`` and optionally ``backend``.
+                ``None`` or empty list is a no-op.
+        """
+        pass

@@ -74,15 +74,26 @@ memory:
   max_injected_memories: 5     # Max memories to inject per LLM call
   max_memory_tokens: 1500      # Token budget for injected memory block
 
+  # Memory write barrier — holds user_id-scoped retrievals until in-flight
+  # create_memory operations for the same user_id commit. Defaults are coded
+  # in MemoryWriteBarrier.__init__, so omitting this section is safe.
+  write_barrier:
+    enabled: true        # set false to disable the barrier
+    timeout_ms: 5000     # max wait per retrieval
+
   # Mem0 provider configuration (used when provider: "mem0")
   mem0:
     api_key: ""  # Optional: for Mem0 cloud
     user_id: "default"
-    llm:
-      provider: "ollama"
-      config:
-        model: "qwen2.5:7b"
-        ollama_base_url: "http://localhost:11434"
+    # LLM config for Mem0 fact extraction. When omitted or empty, the
+    # kernel automatically uses the same model as the assistant agent
+    # (propagated from the runtime LLMQuery.llms field). Set this only
+    # if you want Mem0 to use a *different* model from the assistant.
+    # llm:
+    #   provider: "ollama"
+    #   config:
+    #     model: "qwen2.5:7b"
+    #     ollama_base_url: "http://localhost:11434"
     embedder:
       provider: "ollama"
       config:

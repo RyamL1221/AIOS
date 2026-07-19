@@ -131,8 +131,6 @@ def test_get_memory(manager, memory_id):
 
 def test_retrieve_memory(manager):
     print("\n── Test 3: retrieve_memory (semantic search) ────────────────────────")
-    # Give Mem0 a moment to index
-    time.sleep(1)
     resp = call(manager, "retrieve_memory", {
         "content": "famous tower in France",
         "k": 3
@@ -167,7 +165,6 @@ def test_update_memory(manager, memory_id):
 
 def test_retrieve_memory_raw(manager):
     print("\n── Test 5: retrieve_memory_raw ──────────────────────────────────────")
-    time.sleep(1)
     syscall = make_syscall("retrieve_memory_raw", {
         "content": "Eiffel Tower Paris",
         "k": 3
@@ -234,8 +231,6 @@ def test_persistence(manager):
     if not resp.success:
         record("persistence: add before restart succeeded", False, getattr(resp, "error", ""))
         return
-
-    time.sleep(1)
 
     # Simulate restart by creating a fresh MemoryManager
     from aios.memory.manager import MemoryManager

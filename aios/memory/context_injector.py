@@ -12,6 +12,7 @@ from cerebrum.llm.apis import LLMQuery
 from cerebrum.memory.apis import MemoryQuery
 
 from aios.memory.memory_formatter import format_memory
+from aios.memory.write_barrier import WaitOutcome
 
 if TYPE_CHECKING:
     from aios.memory.manager import MemoryManager
@@ -57,16 +58,33 @@ class ContextInjector:
         self,
         agent_name: str,
         query: LLMQuery,
+        user_id: Optional[str] = None,
     ) -> "tuple[LLMQuery, dict]":
         """Retrieve relevant memories and prepend as a system
         message, returning diagnostics alongside the query.
 
-        After retrieving the agent's own memories, the injector
-        derives a ``user_id`` from the metadata of those memories
-        and issues a second retrieval for shared memories from
-        other agents with the same ``user_id``.  The two result
-        sets are merged and deduplicated before relevance
-        filtering and token-budget truncation.
+        Args:
+            agent_name: The agent making the LLM request.
+            query: The LLM query to inject memories into.
+            user_id: Optional per-request end-user identity.
+                When provided, memory retrieval is scoped to
+                this user_id directly. Cross-agent shared memory
+                retrieval is ONLY triggered when this parameter
+                is a non-empty string different from agent_name.
+                When absent or None, only the agent's own
+                memories are retrieved (no shared injection).
+
+        Retrieval behavior:
+
+        - **Own memories**: Always retrieved, scoped by
+          ``agent_name`` as owner_agent. Uses ``user_id`` as
+          the query filter when available, falls back to
+          ``agent_name`` for backward compatibility.
+        - **Shared memories**: Only retrieved when an explicit
+          ``user_id`` is provided. Uses ``user_id`` as the
+          filter with ``sharing_policy="shared"``. The
+          ``agent_name`` is NEVER used as a user_id for
+          shared retrieval.
 
         Returns ``(query, diagnostics)`` in all code paths:
 
@@ -89,6 +107,7 @@ class ContextInjector:
                 "prompt_tokens_before": tokens,
                 "prompt_tokens_after": tokens,
                 "resolved_user_id": None,
+                "barrier_waits": [],
             })
 
         diagnostics: dict = {
@@ -100,6 +119,7 @@ class ContextInjector:
             "prompt_tokens_before": 0,
             "prompt_tokens_after": 0,
             "resolved_user_id": None,
+            "barrier_waits": [],
         }
 
         try:
@@ -120,19 +140,57 @@ class ContextInjector:
                 )
                 return (query, diagnostics)
 
-            # Retrieve memories scoped to this agent.
-            # Pass ``user_id=agent_name`` so the Mem0
-            # provider searches under the scope that
-            # ConversationExtractor writes to.
+            # === Resolve user_id BEFORE own-memory query ===
+            # Use the explicit per-request user_id when
+            # available. This ensures memory retrieval is
+            # scoped to the correct end-user. Without it,
+            # only own-agent memories are retrieved (no
+            # cross-agent shared retrieval).
+            resolved_user_id = self._resolve_user_id(
+                agent_name, request_user_id=user_id,
+            )
+
+            # Use resolved_user_id for own-memory query when
+            # available; fall back to agent_name for backward
+            # compatibility (single-user deployments with no
+            # per-request identity). NOTE: agent_name is ONLY
+            # used for the own-memory path (scoped by
+            # owner_agent); it is NEVER used for cross-agent
+            # shared-memory retrieval.
+            own_query_user_id = (
+                resolved_user_id or agent_name
+            )
+
+            # Retrieve memories scoped to the resolved
+            # end-user (or agent_name as fallback).
             mem_query = MemoryQuery(
                 operation_type="retrieve_memory",
                 params={
                     "content": user_text,
                     "k": self.max_memories,
                     "agent_name": agent_name,
-                    "user_id": agent_name,
+                    "user_id": own_query_user_id,
                 },
             )
+            # Wait for any pending writes scoped to
+            # own_query_user_id to drain before retrieval.
+            # Kernel-internal retrievals bypass the syscall
+            # path, so the executor's acceptance-time
+            # stamping never runs for them; this inline
+            # wait restores write-before-read ordering.
+            # The outcome is recorded in
+            # ``diagnostics["barrier_waits"]`` when the
+            # wait actually ran (i.e., not BYPASSED) so
+            # callers can correlate retrieval latency with
+            # barrier activity.
+            own_wait_outcome = self._await_pending_writes(
+                own_query_user_id
+            )
+            if own_wait_outcome is not WaitOutcome.BYPASSED:
+                diagnostics["barrier_waits"].append({
+                    "user_id": own_query_user_id,
+                    "outcome": own_wait_outcome.name,
+                })
             response = (
                 self.memory_manager.provider.retrieve_memory(
                     mem_query
@@ -143,41 +201,29 @@ class ContextInjector:
             if response.success and response.search_results:
                 own_results = response.search_results
                 logger.info(
-                    "Retrieved %d own memories for agent=%s",
+                    "Retrieved %d own memories for agent=%s"
+                    " (user_id=%s)",
                     len(own_results),
                     agent_name,
+                    own_query_user_id,
                 )
 
             # --- Cross-agent shared memory retrieval ---
-            # Derive user_id from own memories first; fall
-            # back to the kernel's known_user_ids registry
-            # so that shared retrieval works even when the
-            # requesting agent has no memories of its own.
-            derived_user_id = (
-                self._extract_user_id_from_results(
-                    own_results
-                )
-            )
+            # The pre-resolved user_id is authoritative for
+            # the shared-memory path. Shared retrieval is
+            # ONLY attempted when an explicit user_id was
+            # provided in the request. When resolved_user_id
+            # is None (no per-request identity), shared
+            # retrieval is skipped entirely — agent_name is
+            # NEVER substituted as a user_id here.
+            derived_user_id = resolved_user_id
 
-            # If own memories didn't yield a real user_id
-            # (or yielded the agent name), consult the
-            # MemoryManager's registry of user_ids that
-            # other agents have written.
-            if (
-                not derived_user_id
-                or derived_user_id == agent_name
-            ):
-                known = getattr(
-                    self.memory_manager,
-                    "known_user_ids",
-                    set(),
+            # Record resolved_user_id in diagnostics when
+            # it differs from agent_name.
+            if resolved_user_id and resolved_user_id != agent_name:
+                diagnostics["resolved_user_id"] = (
+                    resolved_user_id
                 )
-                # Pick the first known user_id that
-                # isn't the agent's own name.
-                for uid in known:
-                    if uid and uid != agent_name:
-                        derived_user_id = uid
-                        break
 
             results = list(own_results)
 
@@ -185,6 +231,30 @@ class ContextInjector:
                 derived_user_id
                 and derived_user_id != agent_name
             ):
+                # Wait for any pending writes scoped to the
+                # cross-agent ``user_id`` to drain before the
+                # shared retrieval. Mirrors the agent-scoped
+                # wait above (task 7.2) and closes the
+                # auto-inject race documented in
+                # test_write_barrier_exploration.py case 2:
+                # without this wait, ``ProfileAgent`` /
+                # ``TaskAgent`` shared writes parked at the
+                # provider would be missed by the injector
+                # because kernel-internal retrievals bypass
+                # the syscall path's acceptance-time stamping.
+                # Outcome is recorded in
+                # ``diagnostics["barrier_waits"]`` when the wait
+                # actually ran (i.e., not BYPASSED).
+                shared_wait_outcome = (
+                    self._await_pending_writes(
+                        derived_user_id
+                    )
+                )
+                if shared_wait_outcome is not WaitOutcome.BYPASSED:
+                    diagnostics["barrier_waits"].append({
+                        "user_id": derived_user_id,
+                        "outcome": shared_wait_outcome.name,
+                    })
                 shared = self._retrieve_shared_memories(
                     user_text, derived_user_id, agent_name
                 )
@@ -218,14 +288,6 @@ class ContextInjector:
                 )
                 diagnostics["prompt_tokens_after"] = (
                     diagnostics["prompt_tokens_before"]
-                )
-                diagnostics["resolved_user_id"] = (
-                    derived_user_id
-                    if (
-                        derived_user_id
-                        and derived_user_id != agent_name
-                    )
-                    else None
                 )
                 return (query, diagnostics)
 
@@ -272,8 +334,85 @@ class ContextInjector:
             if not filtered:
                 logger.info(
                     "All memories excluded by relevance "
-                    "threshold for user_id=%s",
+                    "threshold for agent=%s "
+                    "(resolved_user_id=%s)",
                     agent_name,
+                    derived_user_id,
+                )
+                diagnostics["prompt_tokens_after"] = (
+                    diagnostics["prompt_tokens_before"]
+                )
+                return (query, diagnostics)
+
+            # --- User-partition filter (defense in depth) ---
+            # Exclude any memory whose metadata user_id does
+            # not match the resolved request identity. This
+            # prevents cross-user leakage even if the upstream
+            # provider returns incorrectly scoped results
+            # (e.g., misconfigured collection routing, weakened
+            # Mem0 filter, or a future provider that combines
+            # user collections).
+            #
+            # Fail-closed: memories with missing or empty
+            # user_id are excluded when a resolved identity
+            # exists. This avoids silently treating unscoped
+            # memories as belonging to the current user.
+            user_partition_id = own_query_user_id
+            pre_user_filter_count = len(filtered)
+            filtered = [
+                mem for mem in filtered
+                if (mem.get("metadata") or {}).get(
+                    "user_id", ""
+                ) == user_partition_id
+            ]
+
+            if len(filtered) < pre_user_filter_count:
+                logger.info(
+                    "User-partition filter for agent=%s: "
+                    "retained %d/%d (partition_id=%s)",
+                    agent_name,
+                    len(filtered),
+                    pre_user_filter_count,
+                    user_partition_id,
+                )
+
+            if not filtered:
+                logger.info(
+                    "All memories excluded by user-partition "
+                    "filter for agent=%s "
+                    "(resolved_user_id=%s)",
+                    agent_name,
+                    derived_user_id,
+                )
+                diagnostics["prompt_tokens_after"] = (
+                    diagnostics["prompt_tokens_before"]
+                )
+                return (query, diagnostics)
+
+            # Enforce sharing_policy: exclude cross-agent
+            # private memories. Per-user collections contain
+            # ALL memories for a user_id; this filter ensures
+            # only the agent's own memories and explicitly
+            # shared memories are visible.
+            filtered = [
+                mem for mem in filtered
+                if (
+                    (mem.get("metadata") or {}).get(
+                        "owner_agent", ""
+                    ) == agent_name
+                    or (mem.get("metadata") or {}).get(
+                        "sharing_policy", "private"
+                    ) == "shared"
+                )
+            ]
+
+            if not filtered:
+                logger.info(
+                    "All memories excluded by sharing "
+                    "policy for agent=%s "
+                    "(resolved_user_id=%s)",
+                    agent_name,
+                    derived_user_id,
                 )
                 diagnostics["prompt_tokens_after"] = (
                     diagnostics["prompt_tokens_before"]
@@ -282,7 +421,7 @@ class ContextInjector:
 
             # Sort by score descending (most relevant first)
             filtered.sort(
-                key=lambda m: m.get("score", 0),
+                key=lambda m: m.get("score") or 0,
                 reverse=True,
             )
 
@@ -350,7 +489,7 @@ class ContextInjector:
 
             logger.info(
                 "Injected %d memories (%d own + %d shared) "
-                "for agent=%s, user_id=%s",
+                "for agent=%s, resolved_user_id=%s",
                 len(filtered),
                 sum(
                     1 for m in filtered
@@ -365,23 +504,16 @@ class ContextInjector:
                     ) != agent_name
                 ),
                 agent_name,
-                derived_user_id or agent_name,
-            )
-            diagnostics["resolved_user_id"] = (
-                derived_user_id
-                if (
-                    derived_user_id
-                    and derived_user_id != agent_name
-                )
-                else None
+                derived_user_id,
             )
             return (query, diagnostics)
 
         except Exception:
             logger.warning(
-                "Context injection failed for "
-                "user_id=%s",
+                "Context injection failed for agent=%s "
+                "(resolved_user_id=%s)",
                 agent_name,
+                diagnostics.get("resolved_user_id"),
                 exc_info=True,
             )
             diagnostics["injected_count"] = 0
@@ -408,6 +540,64 @@ class ContextInjector:
             uid = meta.get("user_id")
             if uid:
                 return uid
+        return None
+
+    def _resolve_user_id(
+        self,
+        agent_name: str,
+        request_user_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Resolve the active end-user's user_id for memory
+        retrieval scoping.
+
+        Resolution:
+        1. Explicit ``request_user_id`` from the current request
+           (per-request identity from ``QueryRequest.user_id``).
+        2. ``None`` — signals the caller to skip shared-memory
+           retrieval and use ``agent_name`` only for own-memory
+           queries (safe: scoped by owner_agent).
+
+        **Invariant**: This method NEVER returns ``agent_name``.
+        The agent name is not a valid user_id for cross-agent
+        shared-memory retrieval. Returning it would cause the
+        shared-memory path to query for memories belonging to
+        a non-existent end-user named "assistant_agent", which
+        is semantically wrong and would never match real user
+        memories.
+
+        When no ``request_user_id`` is provided, this method
+        returns ``None`` rather than guessing from global state.
+        The caller (``inject()``) uses ``agent_name`` as the
+        own-memory query scope, which is safe because it only
+        returns that agent's own memories — no cross-user
+        contamination is possible.
+
+        .. note:: Previous versions fell back to
+           ``MemoryManager.latest_user_id`` or iterated
+           ``known_user_ids``. Those fallbacks caused cross-user
+           memory contamination in multi-user scenarios and have
+           been removed.
+        """
+        # 1. Prefer explicit per-request user_id.
+        if request_user_id and request_user_id != agent_name:
+            logger.info(
+                "user_id resolved from REQUEST: %s "
+                "(agent=%s)",
+                request_user_id,
+                agent_name,
+            )
+            return request_user_id
+
+        # No request-scoped identity available. Return None so
+        # the caller falls back to agent_name (safe default).
+        if not request_user_id:
+            logger.debug(
+                "No request-scoped user_id for context "
+                "injection; skipping user-scoped retrieval "
+                "(agent=%s)",
+                agent_name,
+            )
+
         return None
 
     def _retrieve_shared_memories(
@@ -488,6 +678,48 @@ class ContextInjector:
                 merged.append(mem)
 
         return merged
+
+    # ------------------------------------------------------------------
+    # Write-barrier helpers
+    # ------------------------------------------------------------------
+
+    def _await_pending_writes(self, user_id):
+        """Snapshot + wait against the per-user write barrier.
+
+        Kernel-internal retrievals issued by ``inject`` bypass the
+        ``MemorySyscall`` path, so the executor's acceptance-time
+        stamping never runs for them. This helper performs the
+        equivalent ``snapshot`` / ``wait_until_drained`` pair inline,
+        immediately before each ``provider.retrieve_memory`` call,
+        so a retrieval scoped to ``user_id = U`` cannot be served
+        while ``create_memory`` operations for the same ``user_id``
+        accepted before it remain uncommitted.
+
+        Short-circuits to ``WaitOutcome.BYPASSED`` (without
+        acquiring any lock) when:
+
+        - ``user_id`` is empty/``None`` -- legacy agent-scoped
+          retrievals never wait (Clause 3.3).
+        - ``self.memory_manager`` has no ``barrier`` attribute --
+          defense-in-depth for test doubles or older managers.
+        - The barrier is disabled via
+          ``memory.write_barrier.enabled: false`` -- the kill-switch
+          path takes the existing fast path byte-for-byte.
+
+        The empty-user_id and missing-barrier short-circuits keep
+        this helper cheap on the fast path so it can be called
+        unconditionally before each retrieval.
+
+        Returns the ``WaitOutcome`` so the caller can record
+        non-BYPASSED waits in ``diagnostics["barrier_waits"]``.
+        """
+        if not user_id:
+            return WaitOutcome.BYPASSED
+        barrier = getattr(self.memory_manager, "barrier", None)
+        if barrier is None:
+            return WaitOutcome.BYPASSED
+        seq = barrier.snapshot(user_id)
+        return barrier.wait_until_drained(user_id, seq)
 
     # ------------------------------------------------------------------
     # Internal helpers
