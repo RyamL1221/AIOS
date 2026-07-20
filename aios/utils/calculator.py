@@ -49,7 +49,7 @@ def get_numbers_concurrent(agent_list, agent_factory, agent_thread_pool):
             'avg': np.mean(data),
             'p90': np.percentile(data, 90),
             'p99': np.percentile(data, 99)
-        }
+        } if len(data) else {'avg': 0.0, 'p90': 0.0, 'p99': 0.0}
 
     metrics = {
         'agent_waiting_time': compute_metrics(stats['waiting_times']),
@@ -83,8 +83,11 @@ def get_numbers_sequential(agent_list, agent_factory):
             # Adjust times by the accumulated time
             request_waiting_times = output["request_waiting_times"]
             request_turnaround_times = output["request_turnaround_times"]
-            request_waiting_times[0] += accumulated_time
-            request_turnaround_times[0] += accumulated_time
+            # Prevent IndexError
+            if request_waiting_times:
+                request_waiting_times[0] += accumulated_time
+            if request_turnaround_times:
+                request_turnaround_times[0] += accumulated_time
 
             # Append to lists
             stats['turnaround_times'].append(agent_turnaround_time)
@@ -100,7 +103,21 @@ def get_numbers_sequential(agent_list, agent_factory):
             'avg': np.mean(data),
             'p90': np.percentile(data, 90),
             'p99': np.percentile(data, 99)
-        }
+        } if len(data) else {'avg': 0.0, 'p90': 0.0, 'p99': 0.0}
+
+    metrics = {
+        'agent_waiting_time': compute_metrics(stats['waiting_times']),
+        'agent_turnaround_time': compute_metrics(stats['turnaround_times']),
+        'request_waiting_time': compute_metrics(stats['request_waiting_times']),
+        'request_turnaround_time': compute_metrics(stats['request_turnaround_times'])
+    }
+
+    return metrics
+return {
+            'avg': np.mean(data),
+            'p90': np.percentile(data, 90),
+            'p99': np.percentile(data, 99)
+        } if len(data) else {'avg': 0.0, 'p90': 0.0, 'p99': 0.0}
 
     metrics = {
         'agent_waiting_time': compute_metrics(stats['waiting_times']),
@@ -113,8 +130,7 @@ def get_numbers_sequential(agent_list, agent_factory):
 
 
 def calculate_improvement(sequential, concurrent):
-    return (sequential - concurrent) / sequential
-
+    return (sequential - concurrent) / sequential if sequential else 0.0
 
 def comparison(concurrent_metrics, sequential_metrics):
     # Print analysis

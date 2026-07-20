@@ -405,18 +405,6 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-### Roadmap Snapshot
-```
-- [x] Core trait scaffolding
-- [ ] Async runtime + channels
-- [ ] Vector store abstraction
-- [ ] Python bridge (pyo3 / IPC)
-- [ ] Port FIFO / RR schedulers
-- [ ] Benchmarks & feature flags
-
-Contributions welcome via focused PRs extending this scaffold. See `aios-rs/README.md` for details.
-```
-
 ## Reference
 ```
 @article{mei2025aios,

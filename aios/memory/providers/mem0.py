@@ -851,7 +851,7 @@ class Mem0Provider(MemoryProvider):
                 # add() persists exactly one record.
                 "infer": False,
             }
-            
+
             if agent_id:
                 add_kwargs["agent_id"] = agent_id
 

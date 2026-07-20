@@ -1,7 +1,6 @@
-import importlib
 import subprocess
 import os # Added for path manipulation
-import signal # Added to send signals to subprocess
+import sys
 
 # from cerebrum.llm.communication import Response
 
@@ -23,21 +22,21 @@ class ToolManager:
         self.tool_conflict_map_lock = Lock()
         self.mcp_server_process = None # To store the mcp_server subprocess
         self._start_mcp_server() # Start mcp_server on initialization
-        
+
     def _start_mcp_server(self):
         """Starts the mcp_server.py script as a background subprocess."""
         if self.mcp_server_process is None or self.mcp_server_process.poll() is not None:
             try:
                 # Assuming mcp_server.py is in the same directory as manager.py
                 mcp_server_script_path = config.get_mcp_server_script_path()
-                if not os.path.exists(mcp_server_script_path):
+                if not mcp_server_script_path or not os.path.exists(mcp_server_script_path):
                     print(f"Error: mcp_server.py not found at {mcp_server_script_path}")
                     return
 
                 # Start the server
                 # We use Popen for non-blocking execution and to manage the process
                 self.mcp_server_process = subprocess.Popen(
-                    ["python", mcp_server_script_path],
+                    [sys.executable, mcp_server_script_path],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True
@@ -71,18 +70,18 @@ class ToolManager:
                 self.mcp_server_process = None
         else:
             print("MCP Server is not running or already stopped.")
-            
+
     def cleanup(self):
         """Cleanup resources, including stopping the mcp_server."""
         print("Cleaning up ToolManager...")
         self._stop_mcp_server()
-        
+
     def address_request(self, syscall) -> None:
         tool_calls = syscall.query.tool_calls
 
-        if tool_calls == None or len(tool_calls) == 0:
+        if tool_calls is None or len(tool_calls) == 0:
             return ToolResponse(
-                response_message=f"There is no tool to call",
+                response_message="There is no tool to call",
                 finished=False
             )
         # breakpoint()
@@ -102,12 +101,12 @@ class ToolManager:
                         tool_result = tool.run(params=tool_params)
 
                         self.tool_conflict_map.pop(tool_org_and_name)
-                        
+
                         return ToolResponse(
                             response_message=tool_result,
                             finished=True
                         )
-                    
+
         except Exception as e:
             return ToolResponse(
                 response_message=f"Tool calling error: {e}",
