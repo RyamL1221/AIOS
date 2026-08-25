@@ -54,6 +54,7 @@ jobs:
           done
 
           ollama pull nomic-embed-text
+          ollama pull qwen3:1.7b
 
       - name: Run Mem0 provider integration tests
         run: |

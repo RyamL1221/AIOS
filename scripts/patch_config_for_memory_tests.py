@@ -38,6 +38,15 @@ def patch_config(config_path: str = "aios/config/config.yaml") -> None:
     mem0 = memory.setdefault("mem0", {})
     mem0["user_id"] = "default"
 
+    # LLM: ollama (avoids needing an OpenAI API key in CI)
+    mem0["llm"] = {
+        "provider": "ollama",
+        "config": {
+            "model": "qwen3:1.7b",
+            "ollama_base_url": "http://localhost:11434",
+        },
+    }
+
     # Embedder: ollama + nomic-embed-text
     mem0["embedder"] = {
         "provider": "ollama",
@@ -60,6 +69,7 @@ def patch_config(config_path: str = "aios/config/config.yaml") -> None:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
 
     print(f"Patched {config_path}: memory.provider=mem0, "
+          f"llm=ollama/qwen3:1.7b, "
           f"embedder=ollama/nomic-embed-text, "
           f"vector_store=chroma (.mem0/chroma)")
 
