@@ -32,6 +32,11 @@ from cerebrum.tool.apis import ToolQuery, ToolResponse
 
 from cerebrum.storage.apis import StorageQuery, StorageResponse
 
+# Kernel-side reward syscall schema (not part of the Cerebrum SDK's
+# MemoryQuery.operation_type Literal). Exposed over a dedicated HTTP
+# endpoint so callers can submit rewards without any SDK change.
+from aios.memory.schemas import ReportRewardQuery, ReportRewardResponse
+
 from fastapi.middleware.cors import CORSMiddleware
 
 import asyncio
@@ -163,6 +168,30 @@ class QueryRequest(BaseModel):
                     # For now, just pass the original data
                     pass
         return data
+
+
+class ReportRewardRequest(BaseModel):
+    """HTTP body for the ``POST /memory/report_reward`` endpoint.
+
+    This is the reverse-direction reward channel: a completed trial's
+    judge reward flowing back into the kernel to update the adaptive
+    memory policy's LinUCB bandits. It has its own endpoint (rather than
+    riding ``/query``) because the Cerebrum SDK's ``MemoryQuery`` cannot
+    represent ``operation_type="report_reward"`` — keeping it separate
+    means no SDK change is required to submit a reward.
+
+    Fields mirror ``aios.memory.schemas.ReportRewardQuery``:
+        agent_name: The agent/source reporting the reward.
+        memory_ids_involved: IDs of the memories that contributed to
+            the trial (the arms whose reward is being reported).
+        reward_value: Scalar judge reward for the trial.
+        trial_metadata: Arbitrary per-trial context (e.g. trial_id).
+    """
+
+    agent_name: str
+    memory_ids_involved: list[str] = []
+    reward_value: float
+    trial_metadata: Dict[str, Any] = {}
 
 def initialize_llm_cores(config: dict) -> Any:
     """Initialize LLM core with configuration."""
@@ -794,6 +823,55 @@ async def handle_query(request: QueryRequest):
             )
             return execute_request(request.agent_name, query)
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/memory/report_reward")
+async def report_reward(request: ReportRewardRequest):
+    """Submit a completed trial's judge reward to the adaptive policy.
+
+    Reverse-direction memory syscall: builds a ``ReportRewardQuery`` and
+    dispatches it through the same ``execute_request`` path as other
+    memory syscalls (enqueued on the memory queue, executed by the
+    scheduler, handled by ``MemoryManager.report_reward`` which replays
+    the reward into the LinUCB bandits).
+
+    Requires ``memory.adaptive_policy.enabled: true`` for the reward to
+    actually update the bandits; when disabled the kernel accepts the
+    request and returns success without doing anything (the handler is a
+    safe no-op), so callers can always report rewards regardless of
+    whether the policy is on.
+
+    Returns a JSON object with ``success`` and (on failure) ``error``.
+    """
+    try:
+        query = ReportRewardQuery(
+            memory_ids_involved=request.memory_ids_involved,
+            reward_value=request.reward_value,
+            trial_metadata=request.trial_metadata,
+        )
+        result = await asyncio.to_thread(
+            execute_request,
+            request.agent_name,
+            query,
+        )
+        # execute_request returns the syscall timing-metrics dict with
+        # the ReportRewardResponse under "response".
+        response = (
+            result.get("response")
+            if isinstance(result, dict)
+            else result
+        )
+        success = bool(getattr(response, "success", False))
+        error = getattr(response, "error", None)
+        return {
+            "success": success,
+            "error": error,
+            "memory_ids_involved": request.memory_ids_involved,
+            "reward_value": request.reward_value,
+        }
+    except Exception as e:
+        logger.error("report_reward failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/core/config/update")
