@@ -935,6 +935,11 @@ class MemoryManager:
             return
 
         updates = 0
+        # Track which bandits / memory_ids were actually touched so the
+        # summary INFO line below is a useful, auditable signal without
+        # emitting one line per arm.
+        touched_bandits: Set[str] = set()
+        touched_memory_ids: list = []
         for memory_id in memory_ids_involved or []:
             decisions = self._pending_reward_decisions.pop(
                 memory_id, None
@@ -956,6 +961,9 @@ class MemoryManager:
                         float(reward_value),
                     )
                     updates += 1
+                    touched_bandits.add(bandit_name)
+                    if memory_id not in touched_memory_ids:
+                        touched_memory_ids.append(memory_id)
                     if getattr(self, "policy_logger", None):
                         self.policy_logger.log_reward(
                             decision_trial_id
@@ -974,6 +982,22 @@ class MemoryManager:
                         arm_index,
                         e,
                     )
+        # Auditable server-side signal: emitted ONLY when a genuine
+        # bandit update happened (updates > 0), so the no-pending /
+        # no-op case stays silent and this line remains meaningful.
+        # Carries the trial_id (join key to the benchmark), the update
+        # count, and the bandits / memory_ids touched.
+        if updates > 0:
+            reward_trial_id = (trial_metadata or {}).get("trial_id")
+            logger.info(
+                "report_reward: reward applied to %d arm(s) for "
+                "trial_id=%s reward=%s bandits=%s memory_ids=%s",
+                updates,
+                reward_trial_id,
+                reward_value,
+                sorted(touched_bandits),
+                touched_memory_ids,
+            )
         logger.info(
             "report_reward: applied %d bandit update(s); "
             "pending_decisions now tracks %d memory_id(s)",

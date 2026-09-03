@@ -74,15 +74,27 @@ selected_llms = {
 execute_request, SysCallWrapper, syscall_executor = useSysCall()
 
 # Configure the root logger
+# Kernel log file at the repo root. Opened in "w" mode so every fresh
+# kernel start produces a current, actively-written log (rather than
+# silently appending to a stale file or relying on a shell redirect
+# that launch_kernel.sh does not wire up). The console StreamHandler is
+# preserved so existing console-logging behavior is unchanged.
+_KERNEL_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "kernel.log",
+)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()  # Output to console
+        logging.StreamHandler(),  # Output to console
+        logging.FileHandler(_KERNEL_LOG_PATH, mode="w"),  # Fresh file
     ]
 )
 
 logger = logging.getLogger(__name__)
+logger.info("Kernel logging to %s", _KERNEL_LOG_PATH)
 
 class LLMConfig(BaseModel):
     llm_name: str
