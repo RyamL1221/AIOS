@@ -1188,6 +1188,9 @@ class Mem0Provider(MemoryProvider):
                     self._extract_filter_metadata(item)
                 )
                 search_results.append({
+                    # Emit the underlying Mem0 item id so downstream
+                    # reward attribution has a stable key to reference.
+                    "memory_id": item.get("id"),
                     "content": item.get("memory", ""),
                     "keywords": metadata.get(
                         "keywords", []
