@@ -112,11 +112,15 @@ class MemoryManager:
         # context when adaptive policy is enabled. Defaults to
         # "unknown" (a valid one-hot "other" bucket in the policy).
         self._latest_llm_core: str = "unknown"
-        # Records, keyed by memory_id, the (bandit_name, arm_index,
-        # context_vector) of each adaptive add decision so a future
-        # report_reward can attribute the reward to the exact arm/
-        # context that produced it. In-memory only (v1).
-        self._pending_reward_decisions: Dict[str, Any] = {}
+        # Records adaptive decisions pending a reward, keyed by
+        # memory_id. Each value is a LIST of
+        # ``(bandit_name, arm_index, context_vector)`` tuples: a single
+        # memory_id can be touched by multiple bandits (novelty at add
+        # time; similarity + redundancy at retrieve time), so
+        # report_reward must be able to update every decision that
+        # touched it. In-memory only (v1); entries are removed once a
+        # reward consumes them (see report_reward).
+        self._pending_reward_decisions: Dict[str, list] = {}
         self.policy: Optional[Any] = None
         if self._adaptive_enabled:
             from aios.memory.policy import PolicyManager
@@ -302,6 +306,19 @@ class MemoryManager:
             return 0.0
         return float(max(sims))
 
+    def _record_decision(self, memory_id: str, decision) -> None:
+        """Append an adaptive ``(bandit_name, arm_index,
+        context_vector)`` decision for *memory_id*.
+
+        Multiple decisions can attach to one memory_id (e.g. a
+        novelty decision at add time, then similarity + redundancy
+        decisions at retrieve time). ``report_reward`` replays and
+        clears all of them.
+        """
+        self._pending_reward_decisions.setdefault(
+            memory_id, []
+        ).append(decision)
+
     def _novelty_gate_admits(
         self, memory_note, user_id: Optional[str]
     ) -> "tuple[bool, Any]":
@@ -347,6 +364,176 @@ class MemoryManager:
         )
         decision = ("novelty_threshold", arm_index, context)
         return admit, decision
+
+    def _retrieval_context(self, query) -> "tuple[str, str]":
+        """Return the ``(llm_core, task_type)`` context for a
+        retrieval decision.
+
+        ``llm_core`` is the last model synced via
+        ``sync_llm_from_query`` (defaulting to ``"unknown"``).
+        ``task_type`` is taken from ``query.params`` metadata's
+        ``memory_type`` when present, else "".
+        """
+        llm_core = getattr(self, "_latest_llm_core", "unknown")
+        params = getattr(query, "params", {}) or {}
+        meta = params.get("metadata", {}) or {}
+        task_type = (
+            params.get("memory_type")
+            or meta.get("memory_type")
+            or ""
+        )
+        return llm_core, task_type
+
+    @staticmethod
+    def _pairwise_cosine(a: str, b: str) -> float:
+        """Cosine similarity between two texts, in [0, 1]-ish.
+
+        Uses the same SentenceTransformer family as the in-house
+        retriever. The model is loaded lazily and cached on the class
+        so the redundancy check adds no import/startup cost when the
+        adaptive policy is disabled. Returns 0.0 on any failure (treat
+        as non-redundant / keep both).
+        """
+        try:
+            model = MemoryManager._get_redundancy_model()
+            import numpy as _np
+            embs = model.encode([a, b])
+            v1, v2 = embs[0], embs[1]
+            denom = (
+                float(_np.linalg.norm(v1))
+                * float(_np.linalg.norm(v2))
+            )
+            if denom == 0.0:
+                return 0.0
+            return float(_np.dot(v1, v2) / denom)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                "redundancy pairwise sim failed (%s); "
+                "treating as non-redundant",
+                e,
+            )
+            return 0.0
+
+    @classmethod
+    def _get_redundancy_model(cls):
+        """Lazily construct and cache the redundancy embedding model.
+
+        Loaded only when the adaptive policy's redundancy filter runs,
+        so the frozen baseline never pays for it.
+        """
+        model = getattr(cls, "_redundancy_model", None)
+        if model is None:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer("all-MiniLM-L6-v2")
+            cls._redundancy_model = model
+        return model
+
+    def _apply_retrieval_policy(
+        self, search_results: list, query
+    ) -> list:
+        """Filter retrieval results via the similarity + redundancy
+        bandits, and record per-memory decisions for reward.
+
+        Two sequential gates (only called when adaptive is enabled):
+
+        1. **similarity_threshold** — drop any result whose
+           ``similarity`` to the query is *below* the bandit's chosen
+           threshold (not relevant enough). Results with no similarity
+           value are kept (fail-open, mirroring the ContextInjector's
+           relevance handling).
+        2. **redundancy_threshold** — walk the surviving results in
+           their existing (relevance-ranked) order and drop any whose
+           pairwise similarity to an already-kept result *exceeds* the
+           bandit's chosen threshold (near-duplicate). The earlier
+           (higher-ranked) result is kept.
+
+        Ordering of survivors is preserved. Each surviving memory_id
+        records both the similarity and redundancy decisions so
+        report_reward can update both bandits.
+
+        Args:
+            search_results: The provider's result dicts (each may have
+                ``content``, ``memory_id``/``id``, ``similarity``).
+            query: The MemoryQuery (for context + user scope).
+
+        Returns:
+            The filtered list of result dicts (subset, same order).
+        """
+        if not search_results:
+            return search_results
+
+        llm_core, task_type = self._retrieval_context(query)
+
+        # --- Gate 1: similarity threshold ---
+        sim_threshold, sim_arm, sim_ctx = (
+            self.policy.select_threshold(
+                "similarity_threshold", llm_core, task_type
+            )
+        )
+        kept = []
+        for r in search_results:
+            sim = r.get("similarity") if isinstance(r, dict) else None
+            if sim is None or float(sim) >= sim_threshold:
+                kept.append(r)
+        logger.info(
+            "retrieve gate: similarity_threshold=%.3f kept %d/%d",
+            sim_threshold,
+            len(kept),
+            len(search_results),
+        )
+
+        # --- Gate 2: redundancy threshold ---
+        red_threshold, red_arm, red_ctx = (
+            self.policy.select_threshold(
+                "redundancy_threshold", llm_core, task_type
+            )
+        )
+        deduped = []
+        for r in kept:
+            content = (
+                r.get("content", "") if isinstance(r, dict) else ""
+            )
+            is_redundant = False
+            for existing in deduped:
+                ex_content = (
+                    existing.get("content", "")
+                    if isinstance(existing, dict)
+                    else ""
+                )
+                if (
+                    content
+                    and ex_content
+                    and self._pairwise_cosine(content, ex_content)
+                    > red_threshold
+                ):
+                    is_redundant = True
+                    break
+            if not is_redundant:
+                deduped.append(r)
+        logger.info(
+            "retrieve gate: redundancy_threshold=%.3f kept %d/%d",
+            red_threshold,
+            len(deduped),
+            len(kept),
+        )
+
+        # --- Record decisions for surviving memories ---
+        for r in deduped:
+            mem_id = None
+            if isinstance(r, dict):
+                mem_id = r.get("memory_id") or r.get("id")
+            if not mem_id:
+                continue
+            self._record_decision(
+                mem_id,
+                ("similarity_threshold", sim_arm, sim_ctx),
+            )
+            self._record_decision(
+                mem_id,
+                ("redundancy_threshold", red_arm, red_ctx),
+            )
+
+        return deduped
 
     def address_request(self, memory_syscall) -> MemoryResponse:
         """
@@ -497,8 +684,8 @@ class MemoryManager:
                 ):
                     mem_id = getattr(resp, "memory_id", None)
                     if mem_id:
-                        self._pending_reward_decisions[mem_id] = (
-                            novelty_decision
+                        self._record_decision(
+                            mem_id, novelty_decision
                         )
                         logger.debug(
                             "Recorded novelty decision for "
@@ -568,6 +755,20 @@ class MemoryManager:
                 getattr(resp, "success", "?"),
                 len(getattr(resp, "search_results", None) or []),
             )
+            # Adaptive retrieval gates (opt-in). When enabled, filter
+            # results via the similarity + redundancy bandits before
+            # returning. When disabled, this block is skipped and the
+            # provider's results are returned unchanged (frozen
+            # baseline). Only applied to successful responses that
+            # carry search_results.
+            if (
+                getattr(self, "_adaptive_enabled", False)
+                and getattr(resp, "success", False)
+                and getattr(resp, "search_results", None)
+            ):
+                resp.search_results = self._apply_retrieval_policy(
+                    resp.search_results, query
+                )
             return resp
         
         elif operation_type == "retrieve_memory_raw":
@@ -647,11 +848,19 @@ class MemoryManager:
         learned policy bandits (novelty-threshold, similarity,
         redundancy-filter) can update.
 
-        Stub implementation: for now it only logs the reported reward.
-        The bandit routing is intentionally deferred — the policy
-        layer does not exist until a later subtask, so wiring it here
-        would create a forward dependency. This handler is safe to
-        call today and must never raise on well-formed input.
+        For each memory_id in ``memory_ids_involved`` it replays every
+        recorded ``(bandit_name, arm_index, context_vector)`` decision
+        (from ``_pending_reward_decisions``) into
+        ``PolicyManager.update`` using naive equal-credit assignment:
+        the full ``reward_value`` is applied to each distinct bandit
+        decision that touched the memory (v1 attribution rule — the
+        reward is *not* split, since each bandit's decision is
+        independent). Consumed entries are removed afterward so the
+        pending map does not grow unbounded.
+
+        No-ops safely when the adaptive policy is disabled or no
+        decisions were recorded for the given memory_ids. Never raises
+        on well-formed input.
 
         Args:
             memory_ids_involved: IDs of the memories that contributed
@@ -667,4 +876,44 @@ class MemoryManager:
             memory_ids_involved,
             reward_value,
             trial_metadata,
+        )
+
+        # Only route into the bandits when the adaptive policy is
+        # active. When disabled there is nothing to update and
+        # _pending_reward_decisions is empty (fast/no-op path).
+        if not getattr(self, "_adaptive_enabled", False):
+            return
+        if self.policy is None:
+            return
+
+        updates = 0
+        for memory_id in memory_ids_involved or []:
+            decisions = self._pending_reward_decisions.pop(
+                memory_id, None
+            )
+            if not decisions:
+                continue
+            for bandit_name, arm_index, context_vector in decisions:
+                try:
+                    self.policy.update(
+                        bandit_name,
+                        arm_index,
+                        context_vector,
+                        float(reward_value),
+                    )
+                    updates += 1
+                except Exception as e:  # pragma: no cover
+                    logger.warning(
+                        "report_reward: policy.update failed for "
+                        "memory_id=%s bandit=%s arm=%s (%s)",
+                        memory_id,
+                        bandit_name,
+                        arm_index,
+                        e,
+                    )
+        logger.info(
+            "report_reward: applied %d bandit update(s); "
+            "pending_decisions now tracks %d memory_id(s)",
+            updates,
+            len(self._pending_reward_decisions),
         )

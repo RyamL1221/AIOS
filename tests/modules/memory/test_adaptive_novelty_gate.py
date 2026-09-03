@@ -224,9 +224,12 @@ class FlagOnTest(unittest.TestCase):
         m.address_request(_add_syscall("novel", "mem-42"))
 
         self.assertIn("mem-42", m._pending_reward_decisions)
-        bandit_name, arm_index, ctx = (
-            m._pending_reward_decisions["mem-42"]
-        )
+        # Value is now a LIST of decisions per memory_id (a memory can
+        # be touched by multiple bandits). The add path records exactly
+        # one novelty decision.
+        decisions = m._pending_reward_decisions["mem-42"]
+        self.assertEqual(len(decisions), 1)
+        bandit_name, arm_index, ctx = decisions[0]
         self.assertEqual(bandit_name, "novelty_threshold")
         self.assertEqual(arm_index, 3)
         self.assertEqual(ctx.shape[0], m.policy.context_dim)
