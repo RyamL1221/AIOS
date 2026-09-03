@@ -247,6 +247,25 @@ class MemoryManager:
         query = memory_syscall.query
         operation_type = query.operation_type
         
+        if operation_type == "report_reward":
+            # Reverse-direction syscall: a completed trial's judge
+            # reward flowing back into the kernel. Delegates to the
+            # stub handler (bandit routing arrives in a later
+            # subtask). Fields come directly off the ReportRewardQuery
+            # schema (not query.params, unlike MemoryQuery).
+            from aios.memory.schemas import ReportRewardResponse
+            try:
+                self.report_reward(
+                    query.memory_ids_involved,
+                    query.reward_value,
+                    query.trial_metadata,
+                )
+                return ReportRewardResponse(success=True)
+            except Exception as e:  # pragma: no cover - defensive
+                return ReportRewardResponse(
+                    success=False, error=str(e)
+                )
+        
         if operation_type == "add_memory":
             memory_note = self._analyze_query_to_memory(query)
             # Ensure metadata has a user_id so the memory is

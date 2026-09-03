@@ -32,6 +32,12 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 from cerebrum.storage.apis import StorageQuery, StorageResponse
 from cerebrum.tool.apis import ToolQuery, ToolResponse
 
+# Kernel-side memory syscall schema (not part of the Cerebrum SDK's
+# MemoryQuery.operation_type Literal). ``report_reward`` is the
+# reverse-direction syscall carrying a completed trial's judge reward
+# back into the kernel; it rides the same memory queue as MemoryQuery.
+from aios.memory.schemas import ReportRewardQuery, ReportRewardResponse
+
 logger = logging.getLogger(__name__)
 
 class SyscallExecutor:
@@ -74,7 +80,12 @@ class SyscallExecutor:
             return LLMSyscall(agent_name, query)
         elif isinstance(query, StorageQuery):
             return StorageSyscall(agent_name, query)
-        elif isinstance(query, MemoryQuery):
+        elif isinstance(query, (MemoryQuery, ReportRewardQuery)):
+            # ReportRewardQuery is a kernel-side memory syscall that is
+            # not a MemoryQuery subclass, so it must be matched
+            # explicitly. It rides the same MemorySyscall wrapper and
+            # memory queue; MemorySyscall does not validate
+            # operation_type, so carrying "report_reward" is safe.
             return MemorySyscall(agent_name, query)
         elif isinstance(query, ToolQuery):
             return ToolSyscall(agent_name, query)
@@ -801,6 +812,12 @@ class SyscallExecutor:
                 return self.execute_file_operation(agent_name, query)
         elif isinstance(query, ToolQuery):
             return self.execute_tool_syscall(agent_name, query)
+        elif isinstance(query, ReportRewardQuery):
+            # Reverse-direction memory syscall. Routed through the same
+            # memory queue as MemoryQuery so it experiences identical
+            # thread-bound execution and status tracking. Checked
+            # before MemoryQuery since it is not a MemoryQuery subclass.
+            return self.execute_memory_syscall(agent_name, query)
         elif isinstance(query, MemoryQuery):
             if query.operation_type == "add_agentic_memory":
                 metadata = self.execute_memory_content_analyze(agent_name, query)
