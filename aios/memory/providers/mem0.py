@@ -1200,6 +1200,13 @@ class Mem0Provider(MemoryProvider):
                         "timestamp", ""
                     ),
                     "score": item.get("score"),
+                    # Additive alias so every provider's
+                    # search_results entry exposes a consistently
+                    # named 'similarity' field (consumed by the
+                    # similarity-threshold policy). Mem0's score is
+                    # already a cosine similarity, so this mirrors it
+                    # without renaming the existing 'score' key.
+                    "similarity": item.get("score"),
                     "metadata": metadata,
                 })
             

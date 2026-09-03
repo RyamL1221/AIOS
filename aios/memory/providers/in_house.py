@@ -235,6 +235,57 @@ class InHouseProvider(MemoryProvider):
             }
         )
     
+    def _build_similarity_map(
+        self, retrieved_results: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """Map each retrieved doc_id to a similarity score.
+
+        The vector-DB backend returns raw ``distances`` alongside
+        ``ids``. Distances are converted to a bounded, ranking-
+        preserving similarity using the backend's configured metric
+        (via ``distance_to_similarity``): L2 for default Chroma,
+        cosine for Qdrant. Backends that don't return distances (or
+        return them as ``None``) yield an empty/partial map, and
+        callers fall back to ``None`` for those entries.
+
+        This is a pure read of already-computed retrieval output —
+        it performs no re-ranking, filtering, or cutoff.
+
+        Args:
+            retrieved_results: The dict returned by ``retriever.search``.
+
+        Returns:
+            Dict mapping doc_id -> similarity (float). Empty when no
+            distances are available.
+        """
+        from aios.memory.retrievers import distance_to_similarity
+
+        ids = retrieved_results.get('ids')
+        distances = retrieved_results.get('distances')
+        if not ids or not distances:
+            return {}
+
+        # Chroma/Qdrant nest one list per query; unwrap the first.
+        id_row = ids[0] if ids and isinstance(ids[0], list) else ids
+        dist_row = (
+            distances[0]
+            if distances and isinstance(distances[0], list)
+            else distances
+        )
+
+        # The retriever exposes its metric; default to "l2" (Chroma
+        # default) when the retriever doesn't report a space.
+        space = getattr(self.retriever, "space", "l2")
+
+        similarity_by_id: Dict[str, float] = {}
+        for doc_id, distance in zip(id_row, dist_row):
+            if distance is None:
+                continue
+            similarity_by_id[doc_id] = distance_to_similarity(
+                distance, space
+            )
+        return similarity_by_id
+
     def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
         """Search for memories matching the query.
         
@@ -264,6 +315,15 @@ class InHouseProvider(MemoryProvider):
             
             retrieved_results = self.retriever.search(content, k)
             retrieved_memories = []
+            
+            # Build a doc_id -> similarity map from the raw vector-DB
+            # result so each returned memory can carry its similarity
+            # score. This is purely additive plumbing: it does not
+            # affect which memories are selected, their order, or the
+            # sharing filter below.
+            similarity_by_id = self._build_similarity_map(
+                retrieved_results
+            )
             
             # Process retrieved results
             if 'ids' in retrieved_results and retrieved_results['ids']:
@@ -304,6 +364,7 @@ class InHouseProvider(MemoryProvider):
                     'category': memory.category,
                     'timestamp': memory.timestamp,
                     'metadata': meta,
+                    'similarity': similarity_by_id.get(memory.id),
                 })
             
             return MemoryResponse(

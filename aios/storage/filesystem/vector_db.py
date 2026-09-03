@@ -114,12 +114,33 @@ class ChromaDB:
 
             results = collection.query(
                 query_texts=[query_text],
-                n_results=int(k)
+                n_results=int(k),
+                include=["metadatas", "documents", "distances"],
             )
 
             documents = results["documents"][0]
             metadatas = results["metadatas"][0]
-            # distances = results["distances"][0] if "distances" in results else None
+            # Raw distances from the collection's metric (cosine by
+            # default). Threaded through as a ``similarity`` field so
+            # downstream consumers (e.g. the similarity-threshold
+            # policy) can read it. Additive only — ordering, count,
+            # and existing keys are unchanged.
+            distances = (
+                results["distances"][0]
+                if results.get("distances")
+                else None
+            )
+
+            # Metric-aware distance->similarity. The collection is
+            # created without an explicit hnsw:space, so Chroma uses
+            # its L2 default; read it defensively and convert with the
+            # shared helper so the mapping is monotonic and bounded.
+            from aios.memory.retrievers import distance_to_similarity
+            try:
+                _cfg = collection._model.configuration_json
+                _space = _cfg.get("hnsw", {}).get("space", "l2")
+            except Exception:
+                _space = "l2"
 
             organized_results = []
             for i, doc in enumerate(documents):
@@ -127,8 +148,10 @@ class ChromaDB:
                     "document_summary": doc[:2000],  # Limit summary length
                     "metadata": metadatas[i],
                 }
-                # if distances:
-                #     result["relevance_score"] = 1 - (distances[i] / max(distances))  # Normalize score
+                if distances is not None and distances[i] is not None:
+                    result["similarity"] = distance_to_similarity(
+                        distances[i], _space
+                    )
                 organized_results.append(result)
 
             return organized_results
@@ -266,14 +289,21 @@ class QdrantDB:
             organized_results = []
             for r in results:
                 payload = r.payload or {}
-                organized_results.append({
+                result = {
                     "document_summary": payload.get("document_summary", ""),
                     "metadata": {
                         "file_path": payload.get("file_path"),
                         "file_name": payload.get("file_name"),
                         "last_modified": payload.get("last_modified"),
                     },
-                })
+                }
+                # Qdrant returns a cosine similarity in ``r.score``
+                # (collection created with Distance.COSINE). Threaded
+                # through additively for consistency with the Chroma
+                # storage backend's ``similarity`` field.
+                if getattr(r, "score", None) is not None:
+                    result["similarity"] = float(r.score)
+                organized_results.append(result)
             return organized_results
         except Exception as e:
             print(f"Error retrieving documents from Qdrant: {str(e)}")
