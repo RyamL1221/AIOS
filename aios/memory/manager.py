@@ -122,13 +122,23 @@ class MemoryManager:
         # reward consumes them (see report_reward).
         self._pending_reward_decisions: Dict[str, list] = {}
         self.policy: Optional[Any] = None
+        # Per-trial JSONL logger. Inert unless a trial_log path is
+        # configured under memory.adaptive_policy.trial_log (so the
+        # frozen baseline and unconfigured runs write nothing).
+        self.policy_logger: Optional[Any] = None
         if self._adaptive_enabled:
             from aios.memory.policy import PolicyManager
+            from aios.memory.policy_log import PolicyTrialLogger
             alpha = float(adaptive_config.get("alpha", 1.0))
             self.policy = PolicyManager(alpha=alpha)
+            self.policy_logger = PolicyTrialLogger.from_config(
+                adaptive_config
+            )
             logger.info(
-                "Adaptive threshold policy ENABLED (alpha=%.3f)",
+                "Adaptive threshold policy ENABLED (alpha=%.3f, "
+                "trial_log=%s)",
                 alpha,
+                getattr(self.policy_logger, "path", None),
             )
 
     @property
@@ -307,20 +317,37 @@ class MemoryManager:
         return float(max(sims))
 
     def _record_decision(self, memory_id: str, decision) -> None:
-        """Append an adaptive ``(bandit_name, arm_index,
-        context_vector)`` decision for *memory_id*.
+        """Append an adaptive decision tuple for *memory_id*.
 
-        Multiple decisions can attach to one memory_id (e.g. a
-        novelty decision at add time, then similarity + redundancy
-        decisions at retrieve time). ``report_reward`` replays and
-        clears all of them.
+        A decision is ``(bandit_name, arm_index, context_vector,
+        trial_id)``. Multiple decisions can attach to one memory_id
+        (e.g. a novelty decision at add time, then similarity +
+        redundancy decisions at retrieve time). ``report_reward``
+        replays and clears all of them.
         """
         self._pending_reward_decisions.setdefault(
             memory_id, []
         ).append(decision)
 
+    @staticmethod
+    def _extract_trial_id(query) -> Optional[str]:
+        """Read the benchmark trial id from a query's metadata.
+
+        Looks in ``query.params["trial_id"]`` and
+        ``query.params["metadata"]["trial_id"]``. Returns ``None`` when
+        absent. This is the join key to the external benchmark's
+        per-trial JSON logs; we never synthesize one.
+        """
+        params = getattr(query, "params", {}) or {}
+        if params.get("trial_id"):
+            return str(params["trial_id"])
+        meta = params.get("metadata", {}) or {}
+        if meta.get("trial_id"):
+            return str(meta["trial_id"])
+        return None
+
     def _novelty_gate_admits(
-        self, memory_note, user_id: Optional[str]
+        self, memory_note, user_id: Optional[str], query=None
     ) -> "tuple[bool, Any]":
         """Decide whether to admit *memory_note* via the bandit.
 
@@ -336,11 +363,13 @@ class MemoryManager:
             memory_note: The candidate note (has ``.content`` and
                 ``.metadata``).
             user_id: Scope for the similarity probe.
+            query: The originating MemoryQuery (for trial_id logging).
 
         Returns:
             Tuple ``(admit, decision)`` where ``decision`` is
-            ``(bandit_name, arm_index, context_vector)`` to be recorded
-            against the written memory_id for later reward attribution.
+            ``(bandit_name, arm_index, context_vector, trial_id)`` to be
+            recorded against the written memory_id for later reward
+            attribution.
         """
         task_type = (
             (memory_note.metadata or {}).get("memory_type") or ""
@@ -349,6 +378,12 @@ class MemoryManager:
         threshold, arm_index, context = self.policy.select_threshold(
             "novelty_threshold", llm_core, task_type
         )
+        trial_id = self._extract_trial_id(query)
+        if getattr(self, "policy_logger", None):
+            self.policy_logger.log_select(
+                trial_id, "novelty_threshold", "novelty",
+                threshold, arm_index, llm_core, task_type, context,
+            )
         max_sim = self._candidate_max_similarity(
             memory_note.content, user_id
         )
@@ -362,7 +397,9 @@ class MemoryManager:
             max_sim,
             admit,
         )
-        decision = ("novelty_threshold", arm_index, context)
+        decision = (
+            "novelty_threshold", arm_index, context, trial_id
+        )
         return admit, decision
 
     def _retrieval_context(self, query) -> "tuple[str, str]":
@@ -463,6 +500,7 @@ class MemoryManager:
             return search_results
 
         llm_core, task_type = self._retrieval_context(query)
+        trial_id = self._extract_trial_id(query)
 
         # --- Gate 1: similarity threshold ---
         sim_threshold, sim_arm, sim_ctx = (
@@ -470,6 +508,11 @@ class MemoryManager:
                 "similarity_threshold", llm_core, task_type
             )
         )
+        if getattr(self, "policy_logger", None):
+            self.policy_logger.log_select(
+                trial_id, "similarity_threshold", "similarity",
+                sim_threshold, sim_arm, llm_core, task_type, sim_ctx,
+            )
         kept = []
         for r in search_results:
             sim = r.get("similarity") if isinstance(r, dict) else None
@@ -488,6 +531,11 @@ class MemoryManager:
                 "redundancy_threshold", llm_core, task_type
             )
         )
+        if getattr(self, "policy_logger", None):
+            self.policy_logger.log_select(
+                trial_id, "redundancy_threshold", "redundancy",
+                red_threshold, red_arm, llm_core, task_type, red_ctx,
+            )
         deduped = []
         for r in kept:
             content = (
@@ -526,11 +574,11 @@ class MemoryManager:
                 continue
             self._record_decision(
                 mem_id,
-                ("similarity_threshold", sim_arm, sim_ctx),
+                ("similarity_threshold", sim_arm, sim_ctx, trial_id),
             )
             self._record_decision(
                 mem_id,
-                ("redundancy_threshold", red_arm, red_ctx),
+                ("redundancy_threshold", red_arm, red_ctx, trial_id),
             )
 
         return deduped
@@ -637,7 +685,7 @@ class MemoryManager:
             # default in every construction path.
             if getattr(self, "_adaptive_enabled", False):
                 admit, novelty_decision = self._novelty_gate_admits(
-                    memory_note, barrier_user_id
+                    memory_note, barrier_user_id, query
                 )
                 if not admit:
                     # Rejected as not novel enough. Do NOT write, but
@@ -893,7 +941,13 @@ class MemoryManager:
             )
             if not decisions:
                 continue
-            for bandit_name, arm_index, context_vector in decisions:
+            for decision in decisions:
+                # Decisions are 4-tuples
+                # (bandit_name, arm_index, context_vector, trial_id).
+                bandit_name, arm_index, context_vector = decision[:3]
+                decision_trial_id = (
+                    decision[3] if len(decision) > 3 else None
+                )
                 try:
                     self.policy.update(
                         bandit_name,
@@ -902,6 +956,15 @@ class MemoryManager:
                         float(reward_value),
                     )
                     updates += 1
+                    if getattr(self, "policy_logger", None):
+                        self.policy_logger.log_reward(
+                            decision_trial_id
+                            or (trial_metadata or {}).get("trial_id"),
+                            bandit_name,
+                            arm_index,
+                            float(reward_value),
+                            memory_id,
+                        )
                 except Exception as e:  # pragma: no cover
                     logger.warning(
                         "report_reward: policy.update failed for "

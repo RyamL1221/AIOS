@@ -229,7 +229,8 @@ class FlagOnTest(unittest.TestCase):
         # one novelty decision.
         decisions = m._pending_reward_decisions["mem-42"]
         self.assertEqual(len(decisions), 1)
-        bandit_name, arm_index, ctx = decisions[0]
+        # Decision is (bandit_name, arm_index, context, trial_id).
+        bandit_name, arm_index, ctx = decisions[0][:3]
         self.assertEqual(bandit_name, "novelty_threshold")
         self.assertEqual(arm_index, 3)
         self.assertEqual(ctx.shape[0], m.policy.context_dim)

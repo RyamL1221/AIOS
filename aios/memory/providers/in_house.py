@@ -358,6 +358,7 @@ class InHouseProvider(MemoryProvider):
                     dict(memory.metadata)
                 )
                 search_results.append({
+                    'memory_id': memory.id,
                     'content': memory.content,
                     'keywords': memory.keywords,
                     'tags': memory.tags,
