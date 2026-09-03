@@ -81,6 +81,16 @@ memory:
     enabled: true        # set false to disable the barrier
     timeout_ms: 5000     # max wait per retrieval
 
+  # Adaptive threshold policy (LinUCB bandits). When disabled (the
+  # default), memory add/retrieve behavior is unchanged and the
+  # PolicyManager is never instantiated. When enabled, add_memory
+  # consults the novelty-threshold bandit to gate admission (and, in
+  # later work, retrieve_memory consults similarity/redundancy
+  # bandits). In-memory state only; no persistence in v1.
+  adaptive_policy:
+    enabled: false       # master switch; false = frozen baseline
+    alpha: 1.0           # LinUCB exploration parameter
+
   # Mem0 provider configuration (used when provider: "mem0")
   mem0:
     api_key: ""  # Optional: for Mem0 cloud

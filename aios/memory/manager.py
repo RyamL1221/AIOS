@@ -95,6 +95,38 @@ class MemoryManager:
         barrier_config = memory_config.get("write_barrier", {}) or {}
         self.barrier = MemoryWriteBarrier(config=barrier_config)
 
+        # Adaptive threshold policy (LinUCB bandits). Off by default.
+        # When disabled we do NOT import or instantiate PolicyManager
+        # so the frozen-baseline add/retrieve paths are byte-for-byte
+        # unchanged and carry zero policy overhead. When enabled we
+        # lazily import and construct the manager here (one-time cost
+        # at MemoryManager construction, not on the hot path).
+        adaptive_config = (
+            memory_config.get("adaptive_policy", {}) or {}
+        )
+        self._adaptive_enabled: bool = bool(
+            adaptive_config.get("enabled", False)
+        )
+        # The LLM model the agent is currently running. Populated by
+        # sync_llm_from_query on chat flows; used only as the bandit
+        # context when adaptive policy is enabled. Defaults to
+        # "unknown" (a valid one-hot "other" bucket in the policy).
+        self._latest_llm_core: str = "unknown"
+        # Records, keyed by memory_id, the (bandit_name, arm_index,
+        # context_vector) of each adaptive add decision so a future
+        # report_reward can attribute the reward to the exact arm/
+        # context that produced it. In-memory only (v1).
+        self._pending_reward_decisions: Dict[str, Any] = {}
+        self.policy: Optional[Any] = None
+        if self._adaptive_enabled:
+            from aios.memory.policy import PolicyManager
+            alpha = float(adaptive_config.get("alpha", 1.0))
+            self.policy = PolicyManager(alpha=alpha)
+            logger.info(
+                "Adaptive threshold policy ENABLED (alpha=%.3f)",
+                alpha,
+            )
+
     @property
     def known_user_ids(self) -> Set[str]:
         """Backward-compatible set view for existing code."""
@@ -220,6 +252,102 @@ class MemoryManager:
         
         return memory_note
     
+    def _candidate_max_similarity(
+        self, content: str, user_id: Optional[str]
+    ) -> float:
+        """Return the max similarity of *content* to existing memories.
+
+        Uses the provider's own semantic search (which exposes a
+        per-result ``similarity`` field, added in the retrieval-score
+        subtask). The candidate's novelty is ``1 - max_similarity``;
+        the gate compares ``max_similarity`` against the bandit's
+        threshold. Returns ``0.0`` when there are no existing memories
+        or no similarity is available (i.e. treat as maximally novel).
+
+        This is a read-only probe; it does not write or mutate state.
+
+        Args:
+            content: The candidate memory content.
+            user_id: The scope for the search.
+
+        Returns:
+            The highest similarity in ``[?, 1]`` among existing
+            memories, or ``0.0`` if none.
+        """
+        from cerebrum.memory.apis import MemoryQuery
+
+        probe = MemoryQuery(
+            operation_type="retrieve_memory",
+            params={"content": content, "k": 5},
+        )
+        if user_id:
+            probe.params["user_id"] = user_id
+        try:
+            resp = self.provider.retrieve_memory(probe)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                "novelty gate: similarity probe failed (%s); "
+                "treating candidate as novel",
+                e,
+            )
+            return 0.0
+
+        results = getattr(resp, "search_results", None) or []
+        sims = [
+            r.get("similarity")
+            for r in results
+            if isinstance(r, dict) and r.get("similarity") is not None
+        ]
+        if not sims:
+            return 0.0
+        return float(max(sims))
+
+    def _novelty_gate_admits(
+        self, memory_note, user_id: Optional[str]
+    ) -> "tuple[bool, Any]":
+        """Decide whether to admit *memory_note* via the bandit.
+
+        Consults the ``novelty_threshold`` bandit for a threshold given
+        the current context ``(llm_core, task_type)``, then compares the
+        candidate's max similarity to existing memories against it:
+        admit iff ``max_similarity < threshold`` (i.e. the candidate is
+        novel enough).
+
+        Only called when ``self._adaptive_enabled`` is True.
+
+        Args:
+            memory_note: The candidate note (has ``.content`` and
+                ``.metadata``).
+            user_id: Scope for the similarity probe.
+
+        Returns:
+            Tuple ``(admit, decision)`` where ``decision`` is
+            ``(bandit_name, arm_index, context_vector)`` to be recorded
+            against the written memory_id for later reward attribution.
+        """
+        task_type = (
+            (memory_note.metadata or {}).get("memory_type") or ""
+        )
+        llm_core = self._latest_llm_core
+        threshold, arm_index, context = self.policy.select_threshold(
+            "novelty_threshold", llm_core, task_type
+        )
+        max_sim = self._candidate_max_similarity(
+            memory_note.content, user_id
+        )
+        admit = max_sim < threshold
+        logger.info(
+            "novelty gate: llm=%s task=%s threshold=%.3f "
+            "max_sim=%.3f -> admit=%s",
+            llm_core,
+            task_type,
+            threshold,
+            max_sim,
+            admit,
+        )
+        decision = ("novelty_threshold", arm_index, context)
+        return admit, decision
+
     def address_request(self, memory_syscall) -> MemoryResponse:
         """
         Process an agent's memory request.
@@ -309,6 +437,39 @@ class MemoryManager:
             # no-op so the fast path stays free.
             barrier_seq = getattr(memory_syscall, "barrier_seq", 0)
             barrier_user_id = memory_note.metadata.get("user_id")
+
+            # Adaptive novelty gate (opt-in). When enabled, the
+            # novelty-threshold bandit decides how novel a candidate
+            # must be to be admitted. When disabled, this block is
+            # skipped entirely and the write proceeds unconditionally
+            # exactly as before (frozen baseline).
+            novelty_decision = None
+            # ``getattr`` default keeps managers constructed via
+            # ``__new__`` (e.g. tests that bypass ``__init__``) on the
+            # frozen baseline instead of raising — flag-off is the safe
+            # default in every construction path.
+            if getattr(self, "_adaptive_enabled", False):
+                admit, novelty_decision = self._novelty_gate_admits(
+                    memory_note, barrier_user_id
+                )
+                if not admit:
+                    # Rejected as not novel enough. Do NOT write, but
+                    # release the barrier so any retrieval waiting on
+                    # this write's seq_no is not stranded. Return a
+                    # success response with no memory_id (nothing was
+                    # persisted).
+                    self.barrier.release(
+                        barrier_user_id, barrier_seq, success=True
+                    )
+                    logger.info(
+                        "add_memory: novelty gate REJECTED "
+                        "candidate (user_id=%s); not written",
+                        barrier_user_id,
+                    )
+                    return MemoryResponse(
+                        success=True, memory_id=None
+                    )
+
             resp = None
             try:
                 with open("/tmp/per_user_proof.txt", "a") as _f:
@@ -326,6 +487,25 @@ class MemoryManager:
                     getattr(resp, "memory_id", "?"),
                     getattr(resp, "error", None),
                 )
+                # Record the adaptive decision against the written
+                # memory_id so a future report_reward can attribute
+                # the reward to the exact (bandit, arm, context).
+                if (
+                    novelty_decision is not None
+                    and resp is not None
+                    and getattr(resp, "success", False)
+                ):
+                    mem_id = getattr(resp, "memory_id", None)
+                    if mem_id:
+                        self._pending_reward_decisions[mem_id] = (
+                            novelty_decision
+                        )
+                        logger.debug(
+                            "Recorded novelty decision for "
+                            "memory_id=%s: %s",
+                            mem_id,
+                            novelty_decision,
+                        )
                 return resp
             finally:
                 # ``finally`` guarantees waiters are notified even
@@ -442,6 +622,14 @@ class MemoryManager:
         Args:
             llms: The ``LLMQuery.llms`` field.
         """
+        # Capture the primary model name as the adaptive-policy
+        # bandit context (only when the policy is enabled — otherwise
+        # this is a no-op and the frozen path is unchanged).
+        if getattr(self, "_adaptive_enabled", False) and llms:
+            primary = llms[0] if isinstance(llms, list) else None
+            name = (primary or {}).get("name") if primary else None
+            if name:
+                self._latest_llm_core = name
         if self.provider:
             self.provider.sync_llm_from_query(llms)
 
