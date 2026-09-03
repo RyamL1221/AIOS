@@ -93,7 +93,7 @@ memory:
     # Optional per-trial JSONL log of policy decisions + rewards,
     # joinable to the benchmark's per-trial JSON by trial_id. Unset =
     # no logging. Only active when enabled: true.
-    # trial_log: "logs/policy_trials.jsonl"
+    trial_log: "logs/policy_trials.jsonl"
 
   # Mem0 provider configuration (used when provider: "mem0")
   mem0:
