@@ -425,3 +425,39 @@ class MemoryManager:
         """
         if self.provider:
             self.provider.sync_llm_from_query(llms)
+
+    def report_reward(
+        self,
+        memory_ids_involved: list,
+        reward_value: float,
+        trial_metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Handle a completed trial's judge reward.
+
+        This is the kernel-side entry point for the ``report_reward``
+        memory syscall — the reverse-direction flow that lets a
+        finished trial's reward propagate back into the kernel so the
+        learned policy bandits (novelty-threshold, similarity,
+        redundancy-filter) can update.
+
+        Stub implementation: for now it only logs the reported reward.
+        The bandit routing is intentionally deferred — the policy
+        layer does not exist until a later subtask, so wiring it here
+        would create a forward dependency. This handler is safe to
+        call today and must never raise on well-formed input.
+
+        Args:
+            memory_ids_involved: IDs of the memories that contributed
+                to the trial (the arms whose reward is being reported).
+            reward_value: Scalar judge reward for the trial.
+            trial_metadata: Arbitrary per-trial context. Defaults to an
+                empty dict when omitted.
+        """
+        trial_metadata = trial_metadata or {}
+        logger.info(
+            "report_reward: memory_ids_involved=%s, reward_value=%s, "
+            "trial_metadata=%s",
+            memory_ids_involved,
+            reward_value,
+            trial_metadata,
+        )
