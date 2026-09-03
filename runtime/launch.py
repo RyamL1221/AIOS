@@ -89,9 +89,34 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Output to console
-        logging.FileHandler(_KERNEL_LOG_PATH, mode="w"),  # Fresh file
     ]
 )
+
+# Explicitly attach the kernel-log FileHandler to the ROOT logger.
+# We do NOT rely on basicConfig's handlers= for the file sink: several
+# imported modules (e.g. aios.scheduler.fifo_scheduler,
+# aios.llm_core.adapter/utils) call logging.basicConfig() at import
+# time, and those imports run above before this block. Once the root
+# logger has any handler, a later basicConfig() is a silent no-op, so a
+# FileHandler passed to basicConfig here would never be attached. Adding
+# it directly to the root logger is order-independent and idempotent.
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.DEBUG)
+if not any(
+    isinstance(h, logging.FileHandler)
+    and getattr(h, "baseFilename", None)
+    == os.path.abspath(_KERNEL_LOG_PATH)
+    for h in _root_logger.handlers
+):
+    _kernel_file_handler = logging.FileHandler(
+        _KERNEL_LOG_PATH, mode="w"
+    )
+    _kernel_file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+    )
+    _root_logger.addHandler(_kernel_file_handler)
 
 logger = logging.getLogger(__name__)
 logger.info("Kernel logging to %s", _KERNEL_LOG_PATH)
@@ -940,4 +965,10 @@ if __name__ == "__main__":
     port = server_config.get("port", 8000)
     
     # print(f"Starting AIOS server on {host}:{port}")
-    uvicorn.run(app, host=host, port=port)
+    # log_config=None prevents uvicorn from applying its own logging
+    # dictConfig on startup, which would otherwise reset the root
+    # logger's handlers and detach the kernel-log FileHandler wired
+    # above -- so post-startup, per-request logs (e.g. report_reward)
+    # would never reach kernel.log. With it disabled, uvicorn's logs
+    # propagate through the root handlers we configured.
+    uvicorn.run(app, host=host, port=port, log_config=None)
