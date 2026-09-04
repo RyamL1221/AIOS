@@ -201,6 +201,59 @@ class WildcardPrecedenceTest(unittest.TestCase):
         self.assertEqual(resolve_threshold(cfg, "unknown", ""), 0.7)
 
 
+class UnknownSentinelNoSpecialCasingTest(unittest.TestCase):
+    """The ("unknown", "") sentinel is treated as an ordinary string
+    pair — the resolver has no hidden special-casing for it.
+
+    Callers (``MemoryManager._note_task_type`` /
+    ``_retrieval_context`` / ``_latest_llm_core``) pass ``llm_core =
+    "unknown"`` (its init default before any ``sync_llm_from_query``)
+    and ``task_type = ""`` (empty ``memory_type``). These tests pin
+    that a real-model wildcard never leaks onto that sentinel, and a
+    wildcard registered *under* ``"unknown"`` matches it purely by
+    string equality.
+    """
+
+    def test_real_model_wildcard_does_not_match_unknown_sentinel(
+        self,
+    ) -> None:
+        # Wildcard registered for a real model; a ("unknown", "")
+        # call must NOT borrow it — it falls through to default.
+        cfg = {
+            "default": 0.5,
+            "overrides": [{"llm_core": "gpt-4o", "value": 0.9}],
+        }
+        self.assertEqual(resolve_threshold(cfg, "unknown", ""), 0.5)
+
+    def test_wildcard_under_unknown_matches_unknown_sentinel(
+        self,
+    ) -> None:
+        # "unknown" is an ordinary llm_core string: a wildcard
+        # registered under it matches the sentinel call by pure
+        # string equality (no special-casing either way).
+        cfg = {
+            "default": 0.5,
+            "overrides": [{"llm_core": "unknown", "value": 0.42}],
+        }
+        self.assertEqual(resolve_threshold(cfg, "unknown", ""), 0.42)
+        # And it does not leak onto a real model.
+        self.assertEqual(resolve_threshold(cfg, "gpt-4o", ""), 0.5)
+
+    def test_exact_unknown_entry_still_wins_over_unknown_wildcard(
+        self,
+    ) -> None:
+        # Precedence holds even for the sentinel llm_core: an exact
+        # ("unknown", "") entry beats an ("unknown", None) wildcard.
+        cfg = {
+            "default": 0.5,
+            "overrides": [
+                {"llm_core": "unknown", "value": 0.9},
+                {"llm_core": "unknown", "task_type": "", "value": 0.3},
+            ],
+        }
+        self.assertEqual(resolve_threshold(cfg, "unknown", ""), 0.3)
+
+
 class MalformedConfigTest(unittest.TestCase):
     """Other malformed shapes raise clear errors, not silent defaults."""
 
