@@ -95,6 +95,41 @@ memory:
     # no logging. Only active when enabled: true.
     trial_log: "logs/policy_trials.jsonl"
 
+  # Static threshold gating (fixed thresholds; no learning). This is an
+  # independent variant of the OFF-of-adaptive path: when enabled, the
+  # novelty / similarity / redundancy gates run with FIXED thresholds
+  # (optionally varying by (llm_core, task_type)) instead of the LinUCB
+  # bandits. When disabled (the default), the gates are skipped entirely
+  # and memory add/retrieve behave as the frozen baseline.
+  #
+  # NOTE: static_thresholds.enabled and adaptive_policy.enabled are NOT
+  # meant to both be true. They are two mutually-exclusive gating
+  # variants over the same three gates. Enforcement/validation is a
+  # fast-follow; for now this is a documented convention only.
+  #
+  # Each of the three thresholds accepts EITHER form:
+  #   (a) bare scalar shorthand:      novelty_threshold: 0.7
+  #   (b) default + overrides table:  novelty_threshold:
+  #                                     default: 0.7
+  #                                     overrides:
+  #                                       - {llm_core: "qwen2.5:7b",
+  #                                          task_type: "profile",
+  #                                          value: 0.8}
+  # The loader (subtask 4) normalizes both into a lookup keyed on
+  # (llm_core, task_type) with a mandatory `default`. An empty/absent
+  # `overrides` list is scalar-equivalent behavior.
+  static_thresholds:
+    enabled: false       # master switch for this variant; independent of adaptive_policy.enabled
+    novelty_threshold:
+      default: 0.7       # PLACEHOLDER — replace with offline-search output
+      overrides: []      # list of {llm_core, task_type, value}; empty/absent = scalar-equivalent
+    similarity_threshold:
+      default: 0.7       # PLACEHOLDER — replace with offline-search output
+      overrides: []
+    redundancy_threshold:
+      default: 0.7       # PLACEHOLDER — replace with offline-search output
+      overrides: []
+
   # Mem0 provider configuration (used when provider: "mem0")
   mem0:
     api_key: ""  # Optional: for Mem0 cloud
