@@ -937,6 +937,13 @@ async def get_memory_gating_status():
         "static_thresholds_enabled": getattr(
             mm, "_static_thresholds_enabled", False
         ),
+        # Provenance for trial runs: the raw ``memory.static_thresholds``
+        # config block as loaded from YAML (plain bools/floats/strings
+        # and nested dicts/lists — JSON-serializable primitives only),
+        # so a trial can record exactly which threshold values were live.
+        "static_thresholds_config": getattr(
+            mm, "_static_thresholds_config", {}
+        ),
     }
 
 
