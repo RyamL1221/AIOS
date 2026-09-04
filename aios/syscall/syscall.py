@@ -218,6 +218,16 @@ class SyscallExecutor:
 
         return {
             "response": completed_response,
+            # Token usage rides on the Syscall object (set by the LLM
+            # adapter via set_token_usage) rather than on the Cerebrum
+            # LLMResponse, which is an external installed package and
+            # must not be edited. Surface it here as a sibling key so it
+            # reaches the HTTP body. get_token_usage is defined on the
+            # base Syscall class, so it is always present; it returns
+            # None for non-LLM syscalls and LLM backends that do not
+            # report usage (mirrors the error-when-absent convention:
+            # present as null).
+            "token_usage": syscall.get_token_usage(),
             "start_times": start_times,
             "end_times": end_times,
             "waiting_times": waiting_times,
