@@ -30,6 +30,20 @@ MODES:
                  policy OFF and compare admit/retrieve outcomes against
                  a pure no-policy baseline manager. Asserts identical
                  results (byte-identical decision behavior).
+  --mode kernel-shared
+                 Master regression (both adaptive AND static thresholds
+                 OFF). Faithful extension of --mode off: also runs an
+                 old config with the static_thresholds block ABSENT and
+                 installs spies proving the static elif branches never
+                 fire when disabled. This is the kernel_shared proof.
+  --mode kernel-shared-tuned
+                 Lookup-correctness pilot (static ON, adaptive OFF)
+                 with clearly-FAKE placeholder overrides. Exercises all
+                 three gates end-to-end and proves, via a spy on
+                 resolve_threshold's actual return, that an override-
+                 matching (llm_core, task_type) resolves the exact
+                 override value and a non-matching one falls to default
+                 (6 data points). Supplies NO real tuned data.
   --mode on      Flag-on pilot: run N trials with the policy ON, print
                  per-bandit selected-threshold sequences (to show the
                  bandits move off their init), observed similarity
@@ -144,6 +158,57 @@ def _build_manager(enabled: bool, trial_log: str | None):
     return MemoryManager(log_mode="console")
 
 
+def _build_manager_flags(
+    adaptive_enabled: bool,
+    static_enabled: bool,
+    include_static_block: bool = True,
+):
+    """Construct a real MemoryManager via its real __init__ with both
+    gating flags controllable, and optionally with the
+    ``static_thresholds`` block entirely ABSENT from config.
+
+    Omitting the block (``include_static_block=False``) reproduces an
+    *old* config written before Subtask 3 added the block — proving
+    such configs still load and behave as kernel_shared.
+    """
+    mem_cfg = dict(global_config.config.get("memory", {}))
+    mem_cfg["provider"] = "in-house"
+    mem_cfg["adaptive_policy"] = {
+        "enabled": adaptive_enabled, "alpha": 1.0
+    }
+    if include_static_block:
+        mem_cfg["static_thresholds"] = {
+            "enabled": static_enabled,
+            "novelty_threshold": {"default": 0.7, "overrides": []},
+            "similarity_threshold": {"default": 0.7, "overrides": []},
+            "redundancy_threshold": {"default": 0.7, "overrides": []},
+        }
+    else:
+        # Simulate an old config: no static_thresholds key at all.
+        mem_cfg.pop("static_thresholds", None)
+    global_config.config["memory"] = mem_cfg
+    sto = dict(global_config.config.get("storage", {}))
+    sto["vector_db_backend"] = "chroma"
+    global_config.config["storage"] = sto
+    return MemoryManager(log_mode="console")
+
+
+def _build_manager_static_cfg(static_cfg: dict):
+    """Construct a real MemoryManager with adaptive OFF and a caller-
+    supplied ``static_thresholds`` block (so a pilot can inject
+    override tables). The block lives in the script fixture, NOT in the
+    shared config files."""
+    mem_cfg = dict(global_config.config.get("memory", {}))
+    mem_cfg["provider"] = "in-house"
+    mem_cfg["adaptive_policy"] = {"enabled": False, "alpha": 1.0}
+    mem_cfg["static_thresholds"] = static_cfg
+    global_config.config["memory"] = mem_cfg
+    sto = dict(global_config.config.get("storage", {}))
+    sto["vector_db_backend"] = "chroma"
+    global_config.config["storage"] = sto
+    return MemoryManager(log_mode="console")
+
+
 def _add(manager, trial):
     q = MemoryQuery(
         operation_type="add_memory",
@@ -225,6 +290,344 @@ def run_off_regression(trials):
     ok = admits_match and retr_match and policy_untouched
     print(f"\n  RESULT: {'PASS' if ok else 'FAIL'}")
     return ok
+
+
+def _install_static_gate_spies(mgr):
+    """Wrap the static gate methods to count calls, WITHOUT changing
+    their behavior. Returns a dict of counters. Any non-zero count on
+    the both-flags-off baseline is a regression (the elif branches
+    must never fire when static thresholds are disabled)."""
+    counts = Counter()
+    orig_novelty = mgr._static_novelty_gate_admits
+    orig_retrieve = mgr._apply_static_retrieval_policy
+
+    def spy_novelty(*a, **k):
+        counts["static_novelty"] += 1
+        return orig_novelty(*a, **k)
+
+    def spy_retrieve(*a, **k):
+        counts["static_retrieve"] += 1
+        return orig_retrieve(*a, **k)
+
+    mgr._static_novelty_gate_admits = spy_novelty
+    mgr._apply_static_retrieval_policy = spy_retrieve
+    return counts
+
+
+def run_kernel_shared_regression(trials):
+    """Master regression: the kernel_shared baseline (BOTH flags off)
+    is byte-identical to a pure no-policy/no-static baseline.
+
+    Faithful extension of ``run_off_regression`` (same trial set, same
+    admit/retrieve comparison approach) with three additions demanded
+    by Subtask 7:
+
+    * BOTH flags are set off explicitly (not just adaptive).
+    * A run with the ``static_thresholds`` block ENTIRELY ABSENT
+      (old-config compatibility).
+    * Direct spies on the static gate methods assert the new
+      ``elif _static_thresholds_enabled`` branches NEVER fire.
+    """
+    print("=" * 72)
+    print("KERNEL_SHARED REGRESSION (adaptive=false AND static=false)")
+    print("=" * 72)
+
+    def run(adaptive, static, include_block, tag, spy=False):
+        mgr = _build_manager_flags(
+            adaptive_enabled=adaptive,
+            static_enabled=static,
+            include_static_block=include_block,
+        )
+        counts = _install_static_gate_spies(mgr) if spy else None
+        admits, retrievals = [], []
+        for t in trials:
+            r = _add(mgr, t)
+            admits.append(
+                (t["memory_id"], bool(r.success), r.memory_id)
+            )
+            rr = _retrieve(mgr, t)
+            ids = [
+                x.get("memory_id") or x.get("id")
+                for x in (rr.search_results or [])
+            ]
+            retrievals.append((t["trial_id"], tuple(ids)))
+        return admits, retrievals, mgr, counts
+
+    # A: pure baseline — adaptive off, static block absent (an old
+    #    pre-Subtask-3 config).
+    base_admits, base_retr, base_mgr, _ = run(
+        False, False, include_block=False, tag="baseline-old-config"
+    )
+    # B: current kernel_shared — both flags present and false, with the
+    #    new static_thresholds block in config. Spied.
+    ks_admits, ks_retr, ks_mgr, ks_counts = run(
+        False, False, include_block=True, tag="kernel_shared", spy=True
+    )
+    # C: old config (block absent) through the CURRENT code — must also
+    #    match the baseline and load without error. Spied.
+    old_admits, old_retr, old_mgr, old_counts = run(
+        False, False, include_block=False, tag="old-config-current",
+        spy=True,
+    )
+
+    admits_match = base_admits == ks_admits == old_admits
+    retr_match = base_retr == ks_retr == old_retr
+    static_never_fired = (
+        ks_counts["static_novelty"] == 0
+        and ks_counts["static_retrieve"] == 0
+        and old_counts["static_novelty"] == 0
+        and old_counts["static_retrieve"] == 0
+    )
+    policy_untouched = (
+        ks_mgr.policy is None
+        and ks_mgr._pending_reward_decisions == {}
+        and old_mgr.policy is None
+    )
+    # The old config must have loaded with the static flag defaulting
+    # to False even though the block was absent.
+    old_flag_default_ok = (
+        old_mgr._static_thresholds_enabled is False
+        and ks_mgr._static_thresholds_enabled is False
+    )
+
+    print(f"  trials run                     : {len(trials)}")
+    print(f"  admit decisions identical (3x) : {admits_match}")
+    print(f"  retrieval results identical(3x): {retr_match}")
+    print(f"  static novelty elif calls (KS) : "
+          f"{ks_counts['static_novelty']} (must be 0)")
+    print(f"  static retrieve elif calls (KS): "
+          f"{ks_counts['static_retrieve']} (must be 0)")
+    print(f"  static elif calls (old config) : "
+          f"{old_counts['static_novelty']}/"
+          f"{old_counts['static_retrieve']} (must be 0/0)")
+    print(f"  old config (no block) loaded OK: "
+          f"{old_flag_default_ok} (flag defaulted to False)")
+    print(f"  policy never instantiated      : "
+          f"{ks_mgr.policy is None and old_mgr.policy is None}")
+    all_admitted = all(a[1] for a in ks_admits)
+    print(f"  all candidates admitted        : {all_admitted} "
+          f"(unconditional write == baseline)")
+
+    ok = (
+        admits_match
+        and retr_match
+        and static_never_fired
+        and policy_untouched
+        and old_flag_default_ok
+    )
+    print(f"\n  RESULT: {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
+# All model names below are DELIBERATELY FAKE — the ``pilot-fake-``
+# prefix marks them as placeholder pilot fixtures, NOT real tuned
+# values. The threshold numbers are illustrative placeholders too.
+# This pilot only exercises the lookup mechanism; it supplies no real
+# tuned data and runs no search/optimization.
+_TUNED_MATCH_MODEL = "pilot-fake-model-A"     # matches overrides
+_TUNED_NOMATCH_MODEL = "pilot-fake-model-Z"   # matches nothing
+
+# Fake override table: one override per gate, each keyed on
+# (pilot-fake-model-A, <task_type>). Defaults are distinct from the
+# override values so a match vs. a fallback is unambiguous in output.
+_TUNED_STATIC_CFG = {
+    "enabled": True,
+    "novelty_threshold": {
+        "default": 0.70,  # PILOT PLACEHOLDER (fallback)
+        "overrides": [
+            {"llm_core": _TUNED_MATCH_MODEL, "task_type": "profile",
+             "value": 0.61},  # PILOT PLACEHOLDER (override)
+        ],
+    },
+    "similarity_threshold": {
+        "default": 0.50,  # PILOT PLACEHOLDER (fallback)
+        "overrides": [
+            {"llm_core": _TUNED_MATCH_MODEL, "task_type": "task",
+             "value": 0.42},  # PILOT PLACEHOLDER (override)
+        ],
+    },
+    "redundancy_threshold": {
+        "default": 0.80,  # PILOT PLACEHOLDER (fallback)
+        "overrides": [
+            {"llm_core": _TUNED_MATCH_MODEL, "task_type": "task",
+             "value": 0.88},  # PILOT PLACEHOLDER (override)
+        ],
+    },
+}
+
+
+def _tuned_add(manager, memory_id, content, user_id, memory_type):
+    q = MemoryQuery(
+        operation_type="add_memory",
+        params={
+            "content": content,
+            "memory_id": memory_id,
+            "metadata": {
+                "user_id": user_id,
+                "memory_type": memory_type,
+                "owner_agent": "ProfileAgent",
+                "sharing_policy": "shared",
+            },
+        },
+    )
+    return manager.address_request(MemorySyscall("ProfileAgent", q))
+
+
+def _tuned_retrieve(manager, content, user_id, memory_type):
+    q = MemoryQuery(
+        operation_type="retrieve_memory",
+        params={
+            "content": content,
+            "k": 5,
+            "user_id": user_id,
+            "memory_type": memory_type,
+        },
+    )
+    return manager.address_request(
+        MemorySyscall("AssistantAgent", q)
+    )
+
+
+def run_kernel_shared_tuned_pilot():
+    """kernel_shared_tuned lookup-correctness pilot.
+
+    End-to-end proof (through the real gate/manager plumbing, not the
+    pure function in isolation) that, for ALL THREE gates:
+      * a call whose (llm_core, task_type) matches an override resolves
+        that EXACT override value;
+      * a call with no matching (llm_core, task_type) falls to default.
+
+    Six data points total (three gates x {match, no-match}), each
+    traced to the real number returned by ``resolve_threshold`` via a
+    spy on its actual return value — not inferred from admit/keep
+    outcomes.
+
+    All model names / thresholds are clearly-fake pilot placeholders
+    (``pilot-fake-`` prefix); no real tuned data, no search.
+    """
+    print("=" * 72)
+    print("KERNEL_SHARED_TUNED LOOKUP PILOT (placeholder overrides)")
+    print("  adaptive_policy.enabled=false, "
+          "static_thresholds.enabled=true")
+    print("  NOTE: all model names + thresholds are FAKE placeholders")
+    print("=" * 72)
+
+    import aios.memory.static_thresholds as st_mod
+
+    # Spy on resolve_threshold: capture (gate, llm_core, task_type,
+    # returned_value) for every call, without changing behavior. The
+    # gate methods import the symbol from this module at call time, so
+    # patching it here is observed by every gate invocation.
+    captured = []
+    real_resolve = st_mod.resolve_threshold
+
+    def spy_resolve(gate_config, llm_core, task_type):
+        value = real_resolve(gate_config, llm_core, task_type)
+        # Identify the gate by matching the block object identity.
+        gate = "?"
+        for name in ("novelty_threshold", "similarity_threshold",
+                     "redundancy_threshold"):
+            if gate_config is _TUNED_STATIC_CFG[name]:
+                gate = name
+                break
+        captured.append((gate, llm_core, task_type, value))
+        return value
+
+    st_mod.resolve_threshold = spy_resolve
+    try:
+        mgr = _build_manager_static_cfg(dict(_TUNED_STATIC_CFG))
+
+        # --- NOVELTY gate (add path) ---
+        # Match: (pilot-fake-model-A, profile) -> override 0.61.
+        mgr._latest_llm_core = _TUNED_MATCH_MODEL
+        _tuned_add(mgr, "tn_match", "novelty match candidate",
+                   "u_novelty_match", "profile")
+        # No-match: model Z, profile -> no override -> default 0.70.
+        mgr._latest_llm_core = _TUNED_NOMATCH_MODEL
+        _tuned_add(mgr, "tn_nomatch", "novelty nomatch candidate",
+                   "u_novelty_nomatch", "profile")
+
+        # --- SIMILARITY + REDUNDANCY gates (retrieve path) ---
+        # These fire together in _apply_static_retrieval_policy. The
+        # overrides target task_type="task": similarity override 0.42,
+        # redundancy override 0.88.
+        # Seed a couple of memories so retrieval returns results.
+        mgr._latest_llm_core = _TUNED_MATCH_MODEL
+        _tuned_add(mgr, "seed1", "The user writes systems code.",
+                   "u_retr_match", "task")
+        _tuned_add(mgr, "seed2", "The user prefers concise code.",
+                   "u_retr_match", "task")
+        # Match: (pilot-fake-model-A, task) -> sim 0.42, redun 0.88.
+        _tuned_retrieve(mgr, "what does the user write",
+                        "u_retr_match", "task")
+        # No-match: model Z, task -> defaults sim 0.50, redun 0.80.
+        mgr._latest_llm_core = _TUNED_NOMATCH_MODEL
+        _tuned_add(mgr, "seed3", "The user likes tests.",
+                   "u_retr_nomatch", "task")
+        _tuned_retrieve(mgr, "what does the user like",
+                        "u_retr_nomatch", "task")
+    finally:
+        st_mod.resolve_threshold = real_resolve
+
+    # --- Build the per-gate evidence table from captured returns ---
+    # For each gate, find a matching-context call and a no-match call.
+    expected = {
+        "novelty_threshold": {
+            "match_ctx": (_TUNED_MATCH_MODEL, "profile"),
+            "match_val": 0.61, "default_val": 0.70,
+        },
+        "similarity_threshold": {
+            "match_ctx": (_TUNED_MATCH_MODEL, "task"),
+            "match_val": 0.42, "default_val": 0.50,
+        },
+        "redundancy_threshold": {
+            "match_ctx": (_TUNED_MATCH_MODEL, "task"),
+            "match_val": 0.88, "default_val": 0.80,
+        },
+    }
+
+    print("\n  Captured resolve_threshold() calls (gate, llm_core, "
+          "task_type -> value):")
+    for gate, llm, task, val in captured:
+        print(f"    {gate:22s} ({llm}, {task}) -> {val}")
+
+    print("\n  Per-gate evidence table "
+          "(6 data points, all FAKE placeholders):")
+    header = (
+        f"    {'gate':22s} {'case':9s} {'llm_core':20s} "
+        f"{'task_type':9s} {'resolved':9s} {'expected':9s} ok"
+    )
+    print(header)
+    print("    " + "-" * (len(header) - 4))
+
+    all_ok = True
+    for gate, exp in expected.items():
+        m_ctx = exp["match_ctx"]
+        # Match case: exact (llm_core, task_type) + override value.
+        match_calls = [
+            v for (g, lc, tt, v) in captured
+            if g == gate and (lc, tt) == m_ctx
+        ]
+        # No-match case: model Z on this gate -> default value.
+        nomatch_calls = [
+            v for (g, lc, tt, v) in captured
+            if g == gate and lc == _TUNED_NOMATCH_MODEL
+        ]
+        m_val = match_calls[0] if match_calls else None
+        n_val = nomatch_calls[0] if nomatch_calls else None
+        m_ok = m_val == exp["match_val"]
+        n_ok = n_val == exp["default_val"]
+        all_ok = all_ok and m_ok and n_ok
+        print(f"    {gate:22s} {'MATCH':9s} {m_ctx[0]:20s} "
+              f"{m_ctx[1]:9s} {str(m_val):9s} "
+              f"{str(exp['match_val']):9s} {m_ok}")
+        print(f"    {gate:22s} {'default':9s} "
+              f"{_TUNED_NOMATCH_MODEL:20s} {m_ctx[1]:9s} "
+              f"{str(n_val):9s} {str(exp['default_val']):9s} {n_ok}")
+
+    print(f"\n  RESULT: {'PASS' if all_ok else 'FAIL'} "
+          f"(all values are pilot placeholders, not tuned data)")
+    return all_ok
 
 
 def run_on_pilot(trials):
@@ -389,8 +792,14 @@ def report_calibration(trials):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["off", "on", "calib"],
-                    required=True)
+    ap.add_argument(
+        "--mode",
+        choices=[
+            "off", "kernel-shared", "kernel-shared-tuned",
+            "on", "calib",
+        ],
+        required=True,
+    )
     ap.add_argument("--trials", type=int, default=16)
     ap.add_argument(
         "--shared-user", action="store_true",
@@ -407,6 +816,29 @@ def main():
 
     if args.mode == "off":
         ok = run_off_regression(trials)
+        sys.exit(0 if ok else 1)
+    elif args.mode == "kernel-shared-tuned":
+        ok = run_kernel_shared_tuned_pilot()
+        sys.exit(0 if ok else 1)
+    elif args.mode == "kernel-shared":
+        if _SHARED_USER:
+            # A determinism proof requires deterministic retrieval.
+            # The shared-user path routes every trial into ONE shared
+            # ChromaDB collection, whose cross-run accumulated state
+            # makes retrieval ordering non-deterministic REGARDLESS of
+            # gating (two identical no-gate baselines also diverge).
+            # That would produce a misleading FAIL unrelated to the
+            # code under test, so it is rejected here.
+            print(
+                "ERROR: --shared-user is incompatible with "
+                "--mode kernel-shared: the shared collection makes "
+                "retrieval non-deterministic across runs (even for "
+                "two identical no-gate baselines), which is a store "
+                "artifact, not a gating regression. Use per-user "
+                "(default) for the determinism proof."
+            )
+            sys.exit(2)
+        ok = run_kernel_shared_regression(trials)
         sys.exit(0 if ok else 1)
     elif args.mode == "on":
         ok, _ = run_on_pilot(trials)

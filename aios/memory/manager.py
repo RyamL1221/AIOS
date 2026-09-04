@@ -141,6 +141,32 @@ class MemoryManager:
                 getattr(self.policy_logger, "path", None),
             )
 
+        # Static (fixed/tuned) threshold gating. Fully independent of
+        # the adaptive policy above: this is a non-learning variant of
+        # the same three gates that sources each threshold from
+        # ``resolve_threshold`` over the ``memory.static_thresholds``
+        # config block instead of the LinUCB bandits. Off by default;
+        # when disabled the gate branches never fire and the frozen
+        # baseline is byte-for-byte unchanged.
+        #
+        # PRECEDENCE (mutual-exclusivity is a documented, unenforced
+        # convention per the config schema): the adaptive ``if`` branch
+        # is always checked first, so if both flags are somehow true
+        # the adaptive path wins and the static ``elif`` never fires.
+        static_config = (
+            memory_config.get("static_thresholds", {}) or {}
+        )
+        self._static_thresholds_config: Dict[str, Any] = static_config
+        self._static_thresholds_enabled: bool = bool(
+            static_config.get("enabled", False)
+        )
+        if self._static_thresholds_enabled:
+            logger.info(
+                "Static threshold gating ENABLED "
+                "(adaptive_enabled=%s; adaptive wins if both true)",
+                self._adaptive_enabled,
+            )
+
     @property
     def known_user_ids(self) -> Set[str]:
         """Backward-compatible set view for existing code."""
@@ -371,9 +397,7 @@ class MemoryManager:
             recorded against the written memory_id for later reward
             attribution.
         """
-        task_type = (
-            (memory_note.metadata or {}).get("memory_type") or ""
-        )
+        task_type = self._note_task_type(memory_note)
         llm_core = self._latest_llm_core
         threshold, arm_index, context = self.policy.select_threshold(
             "novelty_threshold", llm_core, task_type
@@ -401,6 +425,69 @@ class MemoryManager:
             "novelty_threshold", arm_index, context, trial_id
         )
         return admit, decision
+
+    @staticmethod
+    def _note_task_type(memory_note) -> str:
+        """Derive ``task_type`` for a candidate note (add path).
+
+        Shared by the adaptive and static novelty gates so both derive
+        the context identically: the note's ``memory_type`` metadata,
+        or ``""`` when absent.
+        """
+        return (memory_note.metadata or {}).get("memory_type") or ""
+
+    @staticmethod
+    def _novelty_admits(max_sim: float, threshold: float) -> bool:
+        """The novelty admit comparison, shared by both paths.
+
+        A candidate is admitted iff its max similarity to existing
+        memories is strictly below the threshold (i.e. novel enough).
+        The only difference between the adaptive and static paths is
+        where ``threshold`` comes from (bandit vs. resolved static
+        value); the comparison itself is identical.
+        """
+        return max_sim < threshold
+
+    def _static_novelty_gate_admits(
+        self, memory_note, user_id: Optional[str]
+    ) -> bool:
+        """Static-path novelty gate: admit iff novel enough.
+
+        Mirrors ``_novelty_gate_admits`` exactly (same
+        ``_candidate_max_similarity`` probe, same ``_novelty_admits``
+        comparison) but sources the threshold from
+        ``resolve_threshold`` over the configured
+        ``static_thresholds.novelty_threshold`` block instead of the
+        bandit. Records **no** pending reward decision and touches no
+        bandit state — the static path is entirely disjoint from the
+        adaptive reward loop.
+
+        Only called when ``self._static_thresholds_enabled`` is True
+        (and, by precedence, ``self._adaptive_enabled`` is False).
+        """
+        from aios.memory.static_thresholds import resolve_threshold
+
+        task_type = self._note_task_type(memory_note)
+        llm_core = self._latest_llm_core
+        threshold = resolve_threshold(
+            self._static_thresholds_config["novelty_threshold"],
+            llm_core,
+            task_type,
+        )
+        max_sim = self._candidate_max_similarity(
+            memory_note.content, user_id
+        )
+        admit = self._novelty_admits(max_sim, threshold)
+        logger.info(
+            "static novelty gate: llm=%s task=%s threshold=%.3f "
+            "max_sim=%.3f -> admit=%s",
+            llm_core,
+            task_type,
+            threshold,
+            max_sim,
+            admit,
+        )
+        return admit
 
     def _retrieval_context(self, query) -> "tuple[str, str]":
         """Return the ``(llm_core, task_type)`` context for a
@@ -513,11 +600,9 @@ class MemoryManager:
                 trial_id, "similarity_threshold", "similarity",
                 sim_threshold, sim_arm, llm_core, task_type, sim_ctx,
             )
-        kept = []
-        for r in search_results:
-            sim = r.get("similarity") if isinstance(r, dict) else None
-            if sim is None or float(sim) >= sim_threshold:
-                kept.append(r)
+        kept = self._filter_by_similarity(
+            search_results, sim_threshold
+        )
         logger.info(
             "retrieve gate: similarity_threshold=%.3f kept %d/%d",
             sim_threshold,
@@ -536,28 +621,7 @@ class MemoryManager:
                 trial_id, "redundancy_threshold", "redundancy",
                 red_threshold, red_arm, llm_core, task_type, red_ctx,
             )
-        deduped = []
-        for r in kept:
-            content = (
-                r.get("content", "") if isinstance(r, dict) else ""
-            )
-            is_redundant = False
-            for existing in deduped:
-                ex_content = (
-                    existing.get("content", "")
-                    if isinstance(existing, dict)
-                    else ""
-                )
-                if (
-                    content
-                    and ex_content
-                    and self._pairwise_cosine(content, ex_content)
-                    > red_threshold
-                ):
-                    is_redundant = True
-                    break
-            if not is_redundant:
-                deduped.append(r)
+        deduped = self._dedupe_by_redundancy(kept, red_threshold)
         logger.info(
             "retrieve gate: redundancy_threshold=%.3f kept %d/%d",
             red_threshold,
@@ -581,6 +645,114 @@ class MemoryManager:
                 ("redundancy_threshold", red_arm, red_ctx, trial_id),
             )
 
+        return deduped
+
+    @staticmethod
+    def _filter_by_similarity(
+        search_results: list, threshold: float
+    ) -> list:
+        """Drop results whose query ``similarity`` is below *threshold*.
+
+        Shared by the adaptive and static retrieve paths (Gate 1). A
+        result with no ``similarity`` value is kept (fail-open,
+        mirroring the ContextInjector's relevance handling). Ordering
+        is preserved.
+        """
+        kept = []
+        for r in search_results:
+            sim = r.get("similarity") if isinstance(r, dict) else None
+            if sim is None or float(sim) >= threshold:
+                kept.append(r)
+        return kept
+
+    def _dedupe_by_redundancy(
+        self, results: list, threshold: float
+    ) -> list:
+        """Drop near-duplicate results above the redundancy *threshold*.
+
+        Shared by the adaptive and static retrieve paths (Gate 2).
+        Walks *results* in their existing (relevance-ranked) order and
+        drops any whose pairwise cosine similarity to an already-kept
+        result exceeds *threshold*; the earlier (higher-ranked) result
+        is kept. Ordering of survivors is preserved.
+        """
+        deduped = []
+        for r in results:
+            content = (
+                r.get("content", "") if isinstance(r, dict) else ""
+            )
+            is_redundant = False
+            for existing in deduped:
+                ex_content = (
+                    existing.get("content", "")
+                    if isinstance(existing, dict)
+                    else ""
+                )
+                if (
+                    content
+                    and ex_content
+                    and self._pairwise_cosine(content, ex_content)
+                    > threshold
+                ):
+                    is_redundant = True
+                    break
+            if not is_redundant:
+                deduped.append(r)
+        return deduped
+
+    def _apply_static_retrieval_policy(
+        self, search_results: list, query
+    ) -> list:
+        """Static-path retrieve gates: similarity + redundancy filter.
+
+        Mirrors ``_apply_retrieval_policy`` exactly (same
+        ``_filter_by_similarity`` then ``_dedupe_by_redundancy``
+        mechanics, same ordering guarantees) but sources both
+        thresholds from ``resolve_threshold`` over the configured
+        ``static_thresholds.*`` blocks instead of the bandits. Records
+        **no** pending reward decisions and touches no bandit state.
+
+        Only called when ``self._static_thresholds_enabled`` is True
+        (and, by precedence, ``self._adaptive_enabled`` is False).
+        """
+        if not search_results:
+            return search_results
+
+        from aios.memory.static_thresholds import resolve_threshold
+
+        llm_core, task_type = self._retrieval_context(query)
+
+        # --- Gate 1: similarity threshold ---
+        sim_threshold = resolve_threshold(
+            self._static_thresholds_config["similarity_threshold"],
+            llm_core,
+            task_type,
+        )
+        kept = self._filter_by_similarity(
+            search_results, sim_threshold
+        )
+        logger.info(
+            "static retrieve gate: similarity_threshold=%.3f "
+            "kept %d/%d",
+            sim_threshold,
+            len(kept),
+            len(search_results),
+        )
+
+        # --- Gate 2: redundancy threshold ---
+        red_threshold = resolve_threshold(
+            self._static_thresholds_config["redundancy_threshold"],
+            llm_core,
+            task_type,
+        )
+        deduped = self._dedupe_by_redundancy(kept, red_threshold)
+        logger.info(
+            "static retrieve gate: redundancy_threshold=%.3f "
+            "kept %d/%d",
+            red_threshold,
+            len(deduped),
+            len(kept),
+        )
         return deduped
 
     def address_request(self, memory_syscall) -> MemoryResponse:
@@ -704,6 +876,28 @@ class MemoryManager:
                     return MemoryResponse(
                         success=True, memory_id=None
                     )
+            # Static (fixed/tuned) novelty gate — the non-learning
+            # variant. Checked only when adaptive is OFF (adaptive wins
+            # if both flags are somehow true, per the documented
+            # precedence). Same admit/reject mechanics as above but the
+            # threshold comes from resolve_threshold, and NO reward
+            # decision is recorded (static path is disjoint from the
+            # bandit reward loop).
+            elif getattr(self, "_static_thresholds_enabled", False):
+                if not self._static_novelty_gate_admits(
+                    memory_note, barrier_user_id
+                ):
+                    self.barrier.release(
+                        barrier_user_id, barrier_seq, success=True
+                    )
+                    logger.info(
+                        "add_memory: STATIC novelty gate REJECTED "
+                        "candidate (user_id=%s); not written",
+                        barrier_user_id,
+                    )
+                    return MemoryResponse(
+                        success=True, memory_id=None
+                    )
 
             resp = None
             try:
@@ -817,6 +1011,22 @@ class MemoryManager:
                 resp.search_results = self._apply_retrieval_policy(
                     resp.search_results, query
                 )
+            # Static (fixed/tuned) retrieve gates — the non-learning
+            # variant. Checked only when adaptive is OFF (adaptive wins
+            # if both flags are somehow true, per the documented
+            # precedence). Same similarity + redundancy filter
+            # mechanics; thresholds from resolve_threshold; no bandit
+            # state touched.
+            elif (
+                getattr(self, "_static_thresholds_enabled", False)
+                and getattr(resp, "success", False)
+                and getattr(resp, "search_results", None)
+            ):
+                resp.search_results = (
+                    self._apply_static_retrieval_policy(
+                        resp.search_results, query
+                    )
+                )
             return resp
         
         elif operation_type == "retrieve_memory_raw":
@@ -871,10 +1081,14 @@ class MemoryManager:
         Args:
             llms: The ``LLMQuery.llms`` field.
         """
-        # Capture the primary model name as the adaptive-policy
-        # bandit context (only when the policy is enabled — otherwise
-        # this is a no-op and the frozen path is unchanged).
-        if getattr(self, "_adaptive_enabled", False) and llms:
+        # Capture the primary model name as the gate context. Done
+        # unconditionally whenever the query carries model info,
+        # regardless of which gating mode is active (adaptive, static,
+        # or neither). Both the adaptive bandit context and the static
+        # threshold lookup key on _latest_llm_core; capturing it here
+        # keeps them in sync with the agent's runtime model. When no
+        # gate reads it (both flags off) this is an inert assignment.
+        if llms:
             primary = llms[0] if isinstance(llms, list) else None
             name = (primary or {}).get("name") if primary else None
             if name:
