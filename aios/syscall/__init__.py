@@ -296,8 +296,22 @@ class Syscall(Thread):
         
         Accepts a usage object exposing prompt_tokens / completion_tokens /
         total_tokens attributes (e.g. a LiteLLM Usage) and stores them as a
-        plain dict. Tolerates usage=None (leaves the field unset) so it can be
-        called unconditionally.
+        plain dict.
+        
+        Graceful handling of missing/partial data:
+        - usage=None: no-op, the field stays None (call it unconditionally).
+        - Partial object (one or more of the three attributes absent):
+          getattr(..., None) yields None for each missing attribute, so the
+          stored dict is sensibly partial, e.g.
+          {"prompt_tokens": None, "completion_tokens": 12,
+           "total_tokens": None}. Missing values are left as None rather than
+          coerced to 0, so downstream consumers can tell "unknown" apart from
+          "zero tokens".
+        
+        Note: getattr with a default handles the normal missing-attribute case
+        without swallowing errors. A truly malformed object whose attribute
+        access raises something other than AttributeError will still surface —
+        that is intentional (we do not hide bugs with a blanket try/except).
         
         Example:
             ```python

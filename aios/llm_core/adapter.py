@@ -901,6 +901,13 @@ class LLMAdapter:
 
 
                 # --- Execute Call Based on Model Type ---
+                # Token-usage note: only the LiteLLM (str) branch below captures
+                # usage from the response. The context-manager path (above) and
+                # the OpenAI / HfLocalBackend branches intentionally return
+                # usage=None — surfacing usage from those backends was out of
+                # scope. These are deliberate, not accidental gaps; the 3-tuple
+                # shape (response, finished, usage) stays uniform, and the
+                # downstream Syscall.set_token_usage tolerates None.
                 if isinstance(model, str):
                     # Use LiteLLM completion
                     logger.debug(f"[{model_name}] Calling litellm.completion for model: {model}")
