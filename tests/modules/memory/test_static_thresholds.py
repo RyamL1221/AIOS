@@ -254,6 +254,60 @@ class UnknownSentinelNoSpecialCasingTest(unittest.TestCase):
         self.assertEqual(resolve_threshold(cfg, "unknown", ""), 0.3)
 
 
+class WildcardValidationTest(unittest.TestCase):
+    """Validation still holds for task_type-omitted (wildcard) entries.
+
+    The general malformed-entry tests in ``MalformedConfigTest`` all
+    happen to use task_type-shaped entries; these pin that dropping
+    ``task_type`` did not weaken llm_core/value validation for the
+    wildcard shape specifically (i.e. the optional-task_type change did
+    not reorder validation so an llm_core/value error gets swallowed).
+    """
+
+    def test_wildcard_missing_llm_core_still_raises(self) -> None:
+        # task_type omitted AND llm_core key absent -> must still raise
+        # on the missing llm_core, not be silently accepted.
+        with self.assertRaises(StaticThresholdConfigError) as ctx:
+            normalize_gate_config(
+                {"default": 0.7, "overrides": [{"value": 0.8}]}
+            )
+        self.assertIn("llm_core", str(ctx.exception))
+
+    def test_wildcard_non_numeric_value_still_raises(self) -> None:
+        # task_type omitted AND value non-numeric -> must still raise.
+        with self.assertRaises(StaticThresholdConfigError) as ctx:
+            normalize_gate_config(
+                {"default": 0.7,
+                 "overrides": [{"llm_core": "m", "value": "nope"}]}
+            )
+        self.assertIn("value", str(ctx.exception))
+
+
+class MultipleWildcardTest(unittest.TestCase):
+    """Distinct-llm_core wildcards do not cross-contaminate."""
+
+    def test_distinct_wildcards_resolve_independently(self) -> None:
+        cfg = {
+            "default": 0.5,
+            "overrides": [
+                {"llm_core": "model-a", "value": 0.8},
+                {"llm_core": "model-b", "value": 0.3},
+            ],
+        }
+        norm = normalize_gate_config(cfg)
+        self.assertEqual(
+            norm["overrides"],
+            {("model-a", None): 0.8, ("model-b", None): 0.3},
+        )
+        # Each wildcard applies only to its own llm_core, any task_type.
+        self.assertEqual(resolve_threshold(cfg, "model-a", "profile"), 0.8)
+        self.assertEqual(resolve_threshold(cfg, "model-a", "task"), 0.8)
+        self.assertEqual(resolve_threshold(cfg, "model-b", "profile"), 0.3)
+        self.assertEqual(resolve_threshold(cfg, "model-b", "task"), 0.3)
+        # A third model matches neither wildcard -> default.
+        self.assertEqual(resolve_threshold(cfg, "model-c", "profile"), 0.5)
+
+
 class MalformedConfigTest(unittest.TestCase):
     """Other malformed shapes raise clear errors, not silent defaults."""
 
