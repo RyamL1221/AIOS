@@ -898,6 +898,10 @@ class LLMAdapter:
                     logger.debug(f"[{model_name}] LiteLLM response received.")
                     
                     logger.info(f"Model usage: {response.usage}")
+                    # Capture usage so it survives past the log line and can
+                    # flow through the rest of _get_model_response. Use getattr
+                    # with a default to set up None-handling groundwork.
+                    usage = getattr(response, "usage", None)
                     # Extract content or tool calls from LiteLLM response
                     message = response.choices[0].message
                     if tools:
