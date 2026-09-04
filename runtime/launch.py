@@ -911,6 +911,35 @@ async def report_reward(request: ReportRewardRequest):
         logger.error("report_reward failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/memory/gating_status")
+async def get_memory_gating_status():
+    """Report live memory-gating configuration state.
+
+    Read-only view of which memory-gating variant is active on the
+    running MemoryManager, for trial/experiment verification. The two
+    variants are mutually exclusive by convention; the adaptive path
+    wins if both flags are somehow true.
+
+    Placed next to ``/memory/report_reward`` (both unprefixed
+    ``/memory/...`` routes) rather than under ``/core/...`` so the two
+    memory-policy endpoints sit together.
+    """
+    if "memory" not in active_components or not active_components["memory"]:
+        raise HTTPException(
+            status_code=400, detail="Memory manager not initialized"
+        )
+    mm = active_components["memory"]
+    return {
+        "adaptive_policy_enabled": getattr(
+            mm, "_adaptive_enabled", False
+        ),
+        "static_thresholds_enabled": getattr(
+            mm, "_static_thresholds_enabled", False
+        ),
+    }
+
+
 @app.post("/core/config/update")
 async def update_config(request: Request):
     """Update configuration and API keys"""
