@@ -44,6 +44,15 @@ MODES:
                  matching (llm_core, task_type) resolves the exact
                  override value and a non-matching one falls to default
                  (6 data points). Supplies NO real tuned data.
+  --mode kernel-shared-wildcard
+                 Wildcard lookup pilot (static ON, adaptive OFF) with
+                 clearly-FAKE placeholder llm_core-ONLY overrides (no
+                 task_type). Proves, via the same resolve_threshold
+                 spy, that one (llm_core, None) override resolves the
+                 same value across TWO distinct task_types per gate
+                 (task_type-agnostic), and a non-matching model still
+                 falls to default (9 data points). Supplies NO real
+                 tuned data.
   --mode on      Flag-on pilot: run N trials with the policy ON, print
                  per-bandit selected-threshold sequences (to show the
                  bandits move off their init), observed similarity
@@ -630,6 +639,189 @@ def run_kernel_shared_tuned_pilot():
     return all_ok
 
 
+# Wildcard pilot placeholders — DELIBERATELY FAKE, distinct from the
+# kernel-shared-tuned names (model-A / model-Z) to avoid any collision.
+# ``pilot-fake-model-B`` carries an llm_core-only wildcard (no
+# task_type) on every gate; ``pilot-fake-model-Z`` matches nothing.
+_WILD_MODEL = "pilot-fake-model-B"          # llm_core-only wildcard
+_WILD_NOMATCH_MODEL = "pilot-fake-model-Z"  # matches nothing
+
+# Each gate has exactly ONE override: an llm_core-only wildcard keyed on
+# (pilot-fake-model-B, None) — no task_type. Defaults are distinct from
+# the wildcard values so a wildcard-hit vs. a default-fallback is
+# unambiguous. All numbers are illustrative pilot placeholders.
+_WILDCARD_STATIC_CFG = {
+    "enabled": True,
+    "novelty_threshold": {
+        "default": 0.70,  # PILOT PLACEHOLDER (fallback)
+        "overrides": [
+            {"llm_core": _WILD_MODEL, "value": 0.63},  # wildcard
+        ],
+    },
+    "similarity_threshold": {
+        "default": 0.50,  # PILOT PLACEHOLDER (fallback)
+        "overrides": [
+            {"llm_core": _WILD_MODEL, "value": 0.44},  # wildcard
+        ],
+    },
+    "redundancy_threshold": {
+        "default": 0.80,  # PILOT PLACEHOLDER (fallback)
+        "overrides": [
+            {"llm_core": _WILD_MODEL, "value": 0.86},  # wildcard
+        ],
+    },
+}
+
+
+def run_kernel_shared_wildcard_pilot():
+    """Wildcard lookup pilot: an llm_core-only override is task_type-
+    agnostic end-to-end.
+
+    Companion to ``run_kernel_shared_tuned_pilot`` (same conventions:
+    fake placeholders, adaptive OFF / static ON, a spy on
+    ``resolve_threshold`` capturing its ACTUAL return, a per-gate
+    evidence table, a RESULT line). The difference: each gate's single
+    override omits ``task_type`` (a ``(llm_core, None)`` wildcard), and
+    the pilot resolves each gate for TWO distinct ``task_type`` values
+    to prove the wildcard applies regardless of task_type — plus one
+    no-match model call per gate proving it still falls to default.
+
+    Evidence: 3 gates x (2 wildcard-hit task_types + 1 default) = 9
+    data points, each traced to the real ``resolve_threshold`` return.
+    All model names / thresholds are clearly-fake pilot placeholders
+    (``pilot-fake-`` prefix); no real tuned data, no search.
+    """
+    print("=" * 72)
+    print("KERNEL_SHARED WILDCARD PILOT (llm_core-only overrides)")
+    print("  adaptive_policy.enabled=false, "
+          "static_thresholds.enabled=true")
+    print("  proves an llm_core-only wildcard is task_type-agnostic")
+    print("  NOTE: all model names + thresholds are FAKE placeholders")
+    print("=" * 72)
+
+    import aios.memory.static_thresholds as st_mod
+
+    # Spy on resolve_threshold: capture (gate, llm_core, task_type,
+    # value) per call without changing behavior, identifying the gate
+    # by block-object identity (same technique as the tuned pilot).
+    captured = []
+    real_resolve = st_mod.resolve_threshold
+
+    def spy_resolve(gate_config, llm_core, task_type):
+        value = real_resolve(gate_config, llm_core, task_type)
+        gate = "?"
+        for name in ("novelty_threshold", "similarity_threshold",
+                     "redundancy_threshold"):
+            if gate_config is _WILDCARD_STATIC_CFG[name]:
+                gate = name
+                break
+        captured.append((gate, llm_core, task_type, value))
+        return value
+
+    st_mod.resolve_threshold = spy_resolve
+    try:
+        mgr = _build_manager_static_cfg(dict(_WILDCARD_STATIC_CFG))
+
+        # --- NOVELTY gate (add path): two distinct task_types under
+        #     the wildcard model, both must hit the wildcard 0.63. ---
+        mgr._latest_llm_core = _WILD_MODEL
+        _tuned_add(mgr, "wn_profile", "wildcard novelty profile",
+                   "u_wild_novelty_p", "profile")
+        _tuned_add(mgr, "wn_task", "wildcard novelty task",
+                   "u_wild_novelty_t", "task")
+        # No-match model -> novelty default 0.70.
+        mgr._latest_llm_core = _WILD_NOMATCH_MODEL
+        _tuned_add(mgr, "wn_nomatch", "wildcard novelty nomatch",
+                   "u_wild_novelty_n", "profile")
+
+        # --- SIMILARITY + REDUNDANCY gates (retrieve path). These fire
+        #     together in _apply_static_retrieval_policy. Seed then
+        #     retrieve under the wildcard model with TWO distinct
+        #     task_types; each retrieve resolves BOTH gates, so two
+        #     retrieves give two task_types per gate. ---
+        mgr._latest_llm_core = _WILD_MODEL
+        _tuned_add(mgr, "wseed1", "The user writes systems code.",
+                   "u_wild_retr", "task")
+        _tuned_add(mgr, "wseed2", "The user prefers concise code.",
+                   "u_wild_retr", "task")
+        # Retrieve #1: task_type="task" -> sim 0.44, redun 0.86.
+        _tuned_retrieve(mgr, "what does the user write",
+                        "u_wild_retr", "task")
+        # Retrieve #2: task_type="conversation" -> same wildcard values
+        # (proves task_type-agnostic on the retrieve gates too).
+        _tuned_retrieve(mgr, "what does the user write",
+                        "u_wild_retr", "conversation")
+        # No-match model -> sim default 0.50, redun default 0.80.
+        mgr._latest_llm_core = _WILD_NOMATCH_MODEL
+        _tuned_add(mgr, "wseed3", "The user likes tests.",
+                   "u_wild_retr_n", "task")
+        _tuned_retrieve(mgr, "what does the user like",
+                        "u_wild_retr_n", "task")
+    finally:
+        st_mod.resolve_threshold = real_resolve
+
+    # Expected: per gate, the wildcard value for the two probed
+    # task_types, and the default for the no-match model.
+    expected = {
+        "novelty_threshold": {
+            "task_types": ("profile", "task"),
+            "wild_val": 0.63, "default_val": 0.70,
+        },
+        "similarity_threshold": {
+            "task_types": ("task", "conversation"),
+            "wild_val": 0.44, "default_val": 0.50,
+        },
+        "redundancy_threshold": {
+            "task_types": ("task", "conversation"),
+            "wild_val": 0.86, "default_val": 0.80,
+        },
+    }
+
+    print("\n  Captured resolve_threshold() calls (gate, llm_core, "
+          "task_type -> value):")
+    for gate, llm, task, val in captured:
+        print(f"    {gate:22s} ({llm}, {task}) -> {val}")
+
+    print("\n  Per-gate evidence table "
+          "(9 data points, all FAKE placeholders):")
+    header = (
+        f"    {'gate':22s} {'case':9s} {'llm_core':20s} "
+        f"{'task_type':13s} {'resolved':9s} {'expected':9s} ok"
+    )
+    print(header)
+    print("    " + "-" * (len(header) - 4))
+
+    all_ok = True
+    for gate, exp in expected.items():
+        # Two wildcard-hit rows (distinct task_types, same model).
+        for tt in exp["task_types"]:
+            hits = [
+                v for (g, lc, t, v) in captured
+                if g == gate and lc == _WILD_MODEL and t == tt
+            ]
+            val = hits[0] if hits else None
+            ok = val == exp["wild_val"]
+            all_ok = all_ok and ok
+            print(f"    {gate:22s} {'WILDCARD':9s} {_WILD_MODEL:20s} "
+                  f"{tt:13s} {str(val):9s} "
+                  f"{str(exp['wild_val']):9s} {ok}")
+        # One no-match row -> default.
+        nomatch = [
+            v for (g, lc, t, v) in captured
+            if g == gate and lc == _WILD_NOMATCH_MODEL
+        ]
+        n_val = nomatch[0] if nomatch else None
+        n_ok = n_val == exp["default_val"]
+        all_ok = all_ok and n_ok
+        print(f"    {gate:22s} {'default':9s} "
+              f"{_WILD_NOMATCH_MODEL:20s} {'(any)':13s} "
+              f"{str(n_val):9s} {str(exp['default_val']):9s} {n_ok}")
+
+    print(f"\n  RESULT: {'PASS' if all_ok else 'FAIL'} "
+          f"(all values are pilot placeholders, not tuned data)")
+    return all_ok
+
+
 def run_on_pilot(trials):
     """Flag-on pilot: prove bandits move + no crash/deadlock."""
     print("=" * 72)
@@ -796,7 +988,7 @@ def main():
         "--mode",
         choices=[
             "off", "kernel-shared", "kernel-shared-tuned",
-            "on", "calib",
+            "kernel-shared-wildcard", "on", "calib",
         ],
         required=True,
     )
@@ -819,6 +1011,9 @@ def main():
         sys.exit(0 if ok else 1)
     elif args.mode == "kernel-shared-tuned":
         ok = run_kernel_shared_tuned_pilot()
+        sys.exit(0 if ok else 1)
+    elif args.mode == "kernel-shared-wildcard":
+        ok = run_kernel_shared_wildcard_pilot()
         sys.exit(0 if ok else 1)
     elif args.mode == "kernel-shared":
         if _SHARED_USER:
