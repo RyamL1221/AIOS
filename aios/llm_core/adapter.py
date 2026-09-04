@@ -768,11 +768,12 @@ class LLMAdapter:
                     model=model_identifier, # Pass model identifier if needed
                     message_return_type=message_return_type
                 )
-                # `usage` (token usage from the LiteLLM call, or None) is now in
-                # scope here alongside the processed_response, threaded from
-                # _get_model_response. It rides separately from the LLMResponse
-                # object, whose shape is intentionally left untouched. Attaching
-                # it to the syscall result is handled by a later subtask.
+                # `usage` (token usage from the LiteLLM call, or None) is
+                # threaded from _get_model_response and rides separately from
+                # the LLMResponse object, whose shape is left untouched. Record
+                # it on the syscall alongside the timing metrics. The setter
+                # tolerates usage=None, so this call is unconditional.
+                llm_syscall.set_token_usage(usage)
                 return (llm_syscall, processed_response)
 
             except Exception as e:
