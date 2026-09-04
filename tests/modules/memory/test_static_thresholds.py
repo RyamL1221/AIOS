@@ -158,6 +158,49 @@ class TaskTypeOptionalOverrideTest(unittest.TestCase):
         self.assertEqual(norm["overrides"], {("m", "t"): 0.8})
 
 
+class WildcardPrecedenceTest(unittest.TestCase):
+    """resolve_threshold honors exact > wildcard > default."""
+
+    def test_wildcard_only_matches_any_task_type(self) -> None:
+        cfg = {"default": 0.5,
+               "overrides": [{"llm_core": "m", "value": 0.9}]}
+        self.assertEqual(resolve_threshold(cfg, "m", "profile"), 0.9)
+        self.assertEqual(resolve_threshold(cfg, "m", "task"), 0.9)
+
+    def test_wildcard_does_not_leak_to_other_llm_core(self) -> None:
+        cfg = {"default": 0.5,
+               "overrides": [{"llm_core": "m", "value": 0.9}]}
+        self.assertEqual(resolve_threshold(cfg, "other", "profile"), 0.5)
+
+    def test_exact_wins_over_wildcard(self) -> None:
+        cfg = {
+            "default": 0.5,
+            "overrides": [
+                {"llm_core": "m", "value": 0.9},
+                {"llm_core": "m", "task_type": "profile", "value": 0.8},
+            ],
+        }
+        self.assertEqual(resolve_threshold(cfg, "m", "profile"), 0.8)
+        # Any other task_type for m falls to the wildcard.
+        self.assertEqual(resolve_threshold(cfg, "m", "task"), 0.9)
+
+    def test_no_match_falls_to_default(self) -> None:
+        cfg = {
+            "default": 0.6,
+            "overrides": [
+                {"llm_core": "m", "task_type": "p", "value": 0.8},
+            ],
+        }
+        self.assertEqual(resolve_threshold(cfg, "x", "y"), 0.6)
+
+    def test_empty_task_type_does_not_collide_with_wildcard(self) -> None:
+        # A sentinel ("unknown", "") call still routes through the
+        # wildcard step; "" never string-collides with the None key.
+        cfg = {"default": 0.6,
+               "overrides": [{"llm_core": "unknown", "value": 0.7}]}
+        self.assertEqual(resolve_threshold(cfg, "unknown", ""), 0.7)
+
+
 class MalformedConfigTest(unittest.TestCase):
     """Other malformed shapes raise clear errors, not silent defaults."""
 

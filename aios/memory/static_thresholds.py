@@ -171,9 +171,21 @@ def resolve_threshold(
 ) -> float:
     """Resolve the fixed threshold for a gate under a context.
 
-    Pure and stateless: normalizes *gate_config*, then does an
-    exact-match lookup on ``(llm_core, task_type)``, falling back to
-    ``default`` on a miss.
+    Pure and stateless: normalizes *gate_config*, then resolves the
+    threshold using the following precedence, highest to lowest:
+
+    1. **Exact match** — an override keyed on ``(llm_core, task_type)``.
+    2. **Wildcard** — an override keyed on ``(llm_core, None)``, which
+       matches any ``task_type`` for that ``llm_core`` (see
+       ``normalize_gate_config`` for how a ``task_type``-less/``null``
+       override entry becomes a ``None`` sentinel key).
+    3. **Default** — the block's mandatory ``default``, on no match.
+
+    The wildcard key stays the Python ``None`` sentinel and is never
+    string-coerced, so sentinel-style calls like ``("unknown", "")``
+    are unaffected: they still take the exact-match step, then the
+    ``(llm_core, None)`` wildcard step, then ``default`` — a
+    ``task_type`` of ``""`` never collides with the ``None`` wildcard.
 
     Args:
         gate_config: A ``static_thresholds.<gate>`` block in either the
@@ -191,7 +203,16 @@ def resolve_threshold(
             ``normalize_gate_config``).
     """
     normalized = normalize_gate_config(gate_config)
-    return normalized["overrides"].get(
-        (str(llm_core), str(task_type)),
-        normalized["default"],
-    )
+    overrides = normalized["overrides"]
+    llm_core = str(llm_core)
+    # 1. Exact match (unchanged from the pre-wildcard behavior).
+    exact = overrides.get((llm_core, str(task_type)))
+    if exact is not None:
+        return exact
+    # 2. Wildcard on llm_core alone. The key is the None sentinel, not
+    # the string "None", to match what normalize_gate_config stored.
+    wildcard = overrides.get((llm_core, None))
+    if wildcard is not None:
+        return wildcard
+    # 3. Fall back to the mandatory default.
+    return normalized["default"]
