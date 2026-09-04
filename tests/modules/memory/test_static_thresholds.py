@@ -131,6 +131,33 @@ class MissingDefaultErrorTest(unittest.TestCase):
             normalize_gate_config({"overrides": []})
 
 
+class TaskTypeOptionalOverrideTest(unittest.TestCase):
+    """task_type may be omitted/null -> wildcard-on-llm_core entry."""
+
+    def test_absent_task_type_normalizes_to_none(self) -> None:
+        norm = normalize_gate_config(
+            {"default": 0.5,
+             "overrides": [{"llm_core": "m", "value": 0.8}]}
+        )
+        self.assertEqual(norm["overrides"], {("m", None): 0.8})
+
+    def test_explicit_null_task_type_same_as_absent(self) -> None:
+        norm = normalize_gate_config(
+            {"default": 0.5,
+             "overrides": [{"llm_core": "m", "task_type": None,
+                            "value": 0.8}]}
+        )
+        self.assertEqual(norm["overrides"], {("m", None): 0.8})
+
+    def test_full_entry_unchanged(self) -> None:
+        norm = normalize_gate_config(
+            {"default": 0.5,
+             "overrides": [{"llm_core": "m", "task_type": "t",
+                            "value": 0.8}]}
+        )
+        self.assertEqual(norm["overrides"], {("m", "t"): 0.8})
+
+
 class MalformedConfigTest(unittest.TestCase):
     """Other malformed shapes raise clear errors, not silent defaults."""
 
@@ -142,16 +169,31 @@ class MalformedConfigTest(unittest.TestCase):
         with self.assertRaises(StaticThresholdConfigError):
             normalize_gate_config({"default": 0.7, "overrides": {}})
 
-    def test_override_missing_keys(self) -> None:
+    def test_override_missing_value(self) -> None:
+        # value stays mandatory; task_type is now optional so an entry
+        # with only llm_core still fails, but only on the missing value.
         with self.assertRaises(StaticThresholdConfigError) as ctx:
             normalize_gate_config(
                 {"default": 0.7,
                  "overrides": [{"llm_core": "qwen2.5:7b"}]}
             )
-        # Both missing keys are reported.
         msg = str(ctx.exception)
-        self.assertIn("task_type", msg)
         self.assertIn("value", msg)
+
+    def test_override_missing_llm_core(self) -> None:
+        with self.assertRaises(StaticThresholdConfigError) as ctx:
+            normalize_gate_config(
+                {"default": 0.7,
+                 "overrides": [{"task_type": "profile", "value": 0.8}]}
+            )
+        self.assertIn("llm_core", str(ctx.exception))
+
+    def test_override_empty_llm_core(self) -> None:
+        with self.assertRaises(StaticThresholdConfigError):
+            normalize_gate_config(
+                {"default": 0.7,
+                 "overrides": [{"llm_core": "", "value": 0.8}]}
+            )
 
     def test_override_non_numeric_value(self) -> None:
         with self.assertRaises(StaticThresholdConfigError):

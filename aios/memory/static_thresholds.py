@@ -30,7 +30,7 @@ is independently testable.
 from __future__ import annotations
 
 from numbers import Real
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 class StaticThresholdConfigError(ValueError):
@@ -113,7 +113,9 @@ def normalize_gate_config(gate_config: Any) -> NormalizedThresholds:
 
     default = _coerce_float(gate_config["default"], "default")
 
-    overrides: Dict[Tuple[str, str], float] = {}
+    # Keys are (llm_core, task_type); task_type is None for a
+    # wildcard-on-llm_core override entry.
+    overrides: Dict[Tuple[str, Optional[str]], float] = {}
     # Only an absent key or an explicit None means "no overrides". A
     # present-but-wrong-type value (e.g. a dict) must error rather than
     # be silently coerced to an empty list — otherwise an empty dict
@@ -132,10 +134,13 @@ def normalize_gate_config(gate_config: Any) -> NormalizedThresholds:
         if not isinstance(entry, dict):
             raise StaticThresholdConfigError(
                 f"overrides[{i}] must be a mapping with keys "
-                "llm_core, task_type, value"
+                "llm_core, value (task_type optional)"
             )
+        # llm_core and value stay mandatory; task_type is optional. A
+        # missing key or an explicit None both mean "wildcard on
+        # llm_core alone" and normalize to task_type = None internally.
         missing = [
-            k for k in ("llm_core", "task_type", "value")
+            k for k in ("llm_core", "value")
             if k not in entry
         ]
         if missing:
@@ -143,7 +148,15 @@ def normalize_gate_config(gate_config: Any) -> NormalizedThresholds:
                 f"overrides[{i}] is missing key(s): "
                 f"{', '.join(missing)}"
             )
-        key = (str(entry["llm_core"]), str(entry["task_type"]))
+        llm_core = entry["llm_core"]
+        if not isinstance(llm_core, str) or not llm_core:
+            raise StaticThresholdConfigError(
+                f"overrides[{i}].llm_core must be a non-empty string"
+            )
+        # task_type: None denotes a wildcard-on-llm_core entry.
+        raw_task_type = entry.get("task_type")
+        task_type = None if raw_task_type is None else str(raw_task_type)
+        key = (llm_core, task_type)
         overrides[key] = _coerce_float(
             entry["value"], f"overrides[{i}].value"
         )
