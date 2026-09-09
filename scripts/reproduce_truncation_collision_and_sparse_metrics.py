@@ -132,6 +132,20 @@ def _add(provider: Mem0Provider, user_id: str, owner: str, mem_type: str,
     return note.id
 
 
+def _distinct_users_in_collection(provider: Mem0Provider, coll_name: str):
+    """Return the sorted distinct ``user_id`` values physically stored in
+    the named ChromaDB collection, reading rows directly (bypassing the
+    per-user_id-value filter). Returns ``[]`` if the collection does not
+    exist (post-fix, each identity has its own collection, so the other
+    identity's collection simply won't contain this one's rows)."""
+    try:
+        raw = provider._persistent_client.get_collection(coll_name).get()
+    except Exception:
+        return []
+    metadatas = raw.get("metadatas") or []
+    return sorted({(m or {}).get("user_id", "?") for m in metadatas})
+
+
 def part_a_collision(provider: Mem0Provider) -> bool:
     print("=" * 72)
     print("PART A — 63-char truncation collision -> real data commingling")
@@ -158,16 +172,19 @@ def part_a_collision(provider: Mem0Provider) -> bool:
          "Project CUSTOMER-FEEDBACK: user prefers PyCharm and Go.")
 
     # (c) Raw collection-level read (bypasses the user_id-value filter) to
-    # prove both identities' rows physically share one collection.
-    raw = provider._persistent_client.get_collection(coll_a).get()
-    metadatas = raw.get("metadatas") or []
-    docs = raw.get("documents") or []
-    users_in_collection = sorted({(m or {}).get("user_id", "?") for m in metadatas})
-    print(f"(b) rows physically in collection {coll_a!r}: {len(docs)}")
-    print(f"    distinct user_ids co-resident in that ONE collection:")
-    for u in users_in_collection:
-        print(f"        - {u}")
-    commingled = len(users_in_collection) > 1
+    # check whether either identity's rows physically co-reside with the
+    # other's. Pre-fix both user_ids mapped to ONE collection name, so a
+    # single read showed both rows commingled. Post-fix the names differ,
+    # so we read EACH identity's own collection and confirm neither holds
+    # the other identity's rows.
+    users_in_a = _distinct_users_in_collection(provider, coll_a)
+    users_in_b = _distinct_users_in_collection(provider, coll_b)
+    print(f"(b) distinct user_ids co-resident per physical collection:")
+    print(f"    {coll_a!r} -> {users_in_a}")
+    print(f"    {coll_b!r} -> {users_in_b}")
+    # Commingling = more than one distinct identity in a single physical
+    # collection (the real cross-user-leak hazard). Post-fix must be False.
+    commingled = len(users_in_a) > 1 or len(users_in_b) > 1
     print(f"(c) COMMINGLING (>1 distinct identity in one collection)? {commingled}")
 
     # Show the provider's own retrieve_memory masks it via user_id-value filter.
@@ -187,19 +204,26 @@ def part_a_collision(provider: Mem0Provider) -> bool:
           "user_id value) currently MASKS the commingling at retrieval time "
           "(subtask 3 finding).")
 
-    # Mechanism note: the two identities get DISTINCT per-user Memory clients
-    # (cached by full user_id), but both clients are handed the SAME truncated
-    # collection_name and the SAME shared PersistentClient — so they bind to
-    # one physical ChromaDB collection. Distinct clients + shared physical
-    # collection is precisely why (b)/(c) show both identities' rows co-resident.
-    # The commingling is therefore at the PHYSICAL COLLECTION layer, regardless
-    # of whether the client objects are identical. The pass criterion is the
-    # real hazard: same collection name AND >1 distinct identity physically
-    # co-resident in that one collection.
-    ok = same_name and commingled
-    print(f"\nPART A result: {'REPRODUCED' if ok else 'NOT reproduced'}  "
-          f"(same_collection_name={same_name}, distinct_clients_share_"
-          f"physical_collection={commingled})")
+    # Mechanism note (post-fix): _collection_name_for_user now appends an
+    # 8-char SHA-256 suffix of the FULL user_id whenever truncation would
+    # occur, so two user_ids sharing a long common prefix no longer collapse
+    # to one collection name. Distinct names => distinct physical ChromaDB
+    # collections => no cross-identity commingling. The SUCCESS criterion is
+    # therefore INVERTED from the bug-demonstration version of this script:
+    # the fix is confirmed when the collection names DIFFER *and* neither
+    # collection holds more than one identity's rows.
+    #
+    # NOTE (assertion update, subtask 2): this script was originally written
+    # to *reproduce* the bug, so its Part A gate was ``same_name and
+    # commingled`` (PASS == bug present). Now that _collection_name_for_user
+    # is patched, that gate is inverted to assert the FIXED behavior:
+    # ``(not same_name) and (not commingled)`` (PASS == collision-free). This
+    # is an intended update to the verification script's success criteria to
+    # match the changed code under test, not a change to any production code.
+    ok = (not same_name) and (not commingled)
+    print(f"\nPART A result: {'FIX CONFIRMED' if ok else 'FAIL'}  "
+          f"(distinct_collection_names={not same_name}, "
+          f"no_commingling={not commingled})")
     return ok
 
 
