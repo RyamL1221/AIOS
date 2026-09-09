@@ -6,6 +6,7 @@ management capabilities including automatic memory extraction, semantic search,
 and intelligent memory organization.
 """
 import copy
+import hashlib
 import logging
 import os
 import re
@@ -359,9 +360,25 @@ class Mem0Provider(MemoryProvider):
             prefix = "mem0"
             max_user_len = 63 - len(prefix) - 1
 
-        sanitized_user_id = (
-            sanitized_user_id[:max_user_len].strip("_-")
-        )
+        if len(sanitized_user_id) > max_user_len:
+            # Truncation would occur. A bare prefix slice can collapse
+            # two distinct user_ids that share a long common prefix onto
+            # the same collection name (a scoping/cross-user-leak
+            # hazard). Reserve the last 8 chars of the budget for a
+            # deterministic hash of the ORIGINAL, full, untruncated
+            # user_id so distinct user_ids stay distinct.
+            hash8 = hashlib.sha256(
+                user_id.encode()
+            ).hexdigest()[:8]
+            prefix_len = max_user_len - len(hash8)
+            truncated_prefix = (
+                sanitized_user_id[:prefix_len].strip("_-")
+            )
+            sanitized_user_id = f"{truncated_prefix}{hash8}"
+        else:
+            # Fits within budget: byte-identical to the pre-fix path
+            # (no hash suffix, no behavior change).
+            sanitized_user_id = sanitized_user_id.strip("_-")
 
         if not sanitized_user_id:
             sanitized_user_id = "default"
