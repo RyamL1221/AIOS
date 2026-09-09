@@ -184,3 +184,83 @@ change, so it is left as a recommendation rather than performed here.
   definition + docstring.
 - `../Cerebrum/benchmarks/shared_memory/join_policy_actions.py` — the
   post-hoc enrichment join.
+
+---
+
+## Addendum — post-hoc join executed (scoped) and verified
+
+Following the determination above, the operational remedy (the
+`join_policy_actions.py` post-hoc enrichment) was run against this run's
+results, with the mandatory run-window scoping applied. The raw run file
+was left untouched; the enriched output is a new file.
+
+### The contamination hazard was real and quantified
+
+`logs/policy_trials.jsonl` is a **shared, run-agnostic** log: it spans
+**2026-09-03 16:10 → 2026-09-09 15:06 (six days)**, contains records for
+`gpt-4o`, `llama3.1:8b`, and `qwen2.5:7b`, and `trial_id` resets to
+`0..149` on every run with no run identifier in the record. An unscoped
+join would have been badly contaminated: of the reward records with
+integer `trial_id` in `0..149`, only **1,786 belong to this gpt-4o run**
+while **9,363 records from other runs/models were outside the window**
+and had to be excluded. `--since/--until` scoping was therefore
+mandatory, not optional.
+
+### Window derivation
+
+- **`--since 1788965747`** — the kernel process's `PolicyManager
+  initialized` line in `kernel.log` (`2026-09-09 10:55:47`), i.e. the
+  start of this run's kernel.
+- **`--until 1788973580`** — `2026-09-09 13:06:20`, just past this run's
+  last `gpt-4o` select record (`13:06:12.96`) and *before* the next
+  (llama) run's first records (`13:06:23`). The results file's metadata
+  `timestamp` (`13:05:30`) is the write/end time and was used only as a
+  cross-check, not the bound.
+
+### Model-purity spot-check (the real safety gate)
+
+`join_policy_actions.py` keys purely on `trial_id` and has no `llm_core`
+awareness, so the window was checked directly. Within
+`[1788965747, 1788973580]` the `select` records are **1194 `gpt-4o` + 4
+`unknown`**, with **zero `llama3.1:8b` / `qwen2.5:7b`**. The 4 `unknown`
+are the first gpt-4o trial's pre-`llm_core`-sync startup calls and carry
+`trial_id=None`, so the join skips them regardless. The window is
+model-pure for everything the join consumes.
+
+### Join result
+
+```
+reward records joined  : 1786
+distinct trial_ids     : 150
+outside ts window      : 9363   (correctly excluded — other runs/models)
+dropped trial_id=null  : 0
+dropped trial_id=str   : 0
+trials enriched (>=1)   : 150 / 150
+```
+
+Output: `Cerebrum/results/adaptive_report_v2/gpt4o/results_kernel_shared_adaptive_joined.json`
+(the raw `results_kernel_shared_adaptive.json` remains `policy_action:
+null` — unmodified). All 150 trials now carry `policy_action` reward
+entries; arm selections span all six arms per bandit (consistent with
+the exploration the LinUCB reward-normalization fix restored), and
+rewards are on the raw 1–5 judge scale, attributed per `memory_id`.
+
+### Caveat on the "adaptive ≈ tuned convergence" question
+
+The joined `policy_action` is **outcome-side reward history** (one entry
+per bandit reward, aggregated over the run), not the decision-side
+converged threshold. The aggregate arm distribution is close to
+**uniform** across all six arms per bandit — which is what LinUCB
+exploration history looks like, **not** evidence of convergence onto a
+particular arm. Testing whether the bandit *converges* toward
+`kernel_shared_tuned`'s per-model overrides (gpt-4o novelty=0.7 /
+similarity=0.8 / redundancy=0.5) requires inspecting the **late-run
+argmax per context** (e.g. the last-N `select` records' chosen arm, or
+replaying the learned bandit state), not this reward-frequency
+distribution. That convergence analysis is a **separate question** and
+was deliberately not concluded from the aggregate here — stating it
+plainly rather than overclaiming convergence from exploration counts.
+
+This addendum performed a **data-enrichment action only** (ran an
+existing Cerebrum script, wrote a new results file). No AIOS kernel or
+Cerebrum source code was modified.
