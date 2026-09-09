@@ -158,3 +158,47 @@ updated with the same reward.
 - `aios/memory/policy.py` — `PolicyManager` (the LinUCB bandits)
 - `.kiro/steering/memory-providers.md` — adaptive policy overview
 - `.kiro/steering/sdk-and-api.md` — HTTP API reference
+
+## Reward normalization: confirmed insertion point and denominator
+
+Investigation for the upcoming reward-normalization change (recorded
+here before any code is written).
+
+### Chosen insertion point (exactly one place)
+
+`PolicyManager.update(bandit_name, arm_index, context_vector,
+reward_value)` in `aios/memory/policy.py` (the method beginning at the
+`def update(` around line 426).
+
+Rationale — this is the single choke point every bandit update flows
+through. `MemoryManager.report_reward` (`aios/memory/manager.py`, the
+loop that pops from `_pending_reward_decisions` and calls
+`self.policy.update(bandit_name, arm_index, context_vector,
+float(reward_value))`) replays *N* decisions per trial, calling
+`PolicyManager.update` once per decision. `PolicyManager.update` in turn
+is the sole caller of the per-arm `LinUCBBandit.update`. Normalizing
+inside `PolicyManager.update` therefore covers all three current
+bandits (novelty, similarity, redundancy) **and** any future bandit with
+a single conversion, and keeps `report_reward` free of scale knowledge.
+Normalizing in `report_reward` would be per-call-site and would miss any
+future direct caller of `PolicyManager.update`.
+
+### Confirmed denominator
+
+Fixed denominator: **5.0**, confirmed against the judge documentation —
+not assumed.
+
+Source: the evaluation paper (`paper_1.tex` §Evaluation, line ~619;
+mirrored in `paper_2.tex` line ~469): "Each trial is scored by GPT-5.4
+along three dimensions on a 1--5 scale" (Profile Usage, Task Usage,
+Integration). The abstract restates it as a "5-point scale"
+(`paper_1.tex` line ~59). The reward is a flat per-dimension score, not
+a weighted composite of criteria, so the practical maximum is a flat
+5.0 — there is no criteria/component weighting to derive a different
+max from.
+
+Caveat to carry into the implementation subtask: the judge scale is
+**1–5, not 0–5** (floor is 1). A plain `reward / 5.0` maps the range to
+`[0.2, 1.0]` rather than `[0, 1]`. Whether to also subtract the floor
+(min-max to `[0, 1]`) is an implementation decision for the next
+subtask; this subtask only confirms the fixed max denominator is 5.0.
