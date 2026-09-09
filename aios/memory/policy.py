@@ -65,12 +65,27 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# Maximum score the trial judge can assign. The GPT-5.4 judge scores
-# each trial on a 1--5 scale (paper §Evaluation), so 5.0 is the fixed
-# upper bound of the raw reward. Used to normalize the incoming reward
-# to roughly [0, 1] before it reaches the bandit, so the reward magnitude
-# is comparable to the LinUCB UCB exploration bonus (which is on an
-# ~O(1) scale at alpha=1.0). See PolicyManager.update.
+# Maximum score the trial judge can assign — the fixed upper bound of
+# the RAW reward that arrives via report_reward.
+#
+# (a) Assumed reward range: 1--5, NOT 0--5. The judge's floor is 1, not
+#     0. We still divide by the max (5.0) rather than min-max rescaling
+#     off the floor; see the rationale at the normalization line in
+#     PolicyManager.update.
+# (b) Source: the GPT-5.4 judge rubric (paper §Evaluation). Each trial
+#     is scored on three dimensions — Profile Usage, Task Usage, and
+#     Integration — EACH on a 1--5 scale. The reward reported back is on
+#     that same 1--5 scale, so its maximum is a flat 5.0 (a per-dimension
+#     score, not a weighted composite of criteria).
+# (c) What breaks if this drifts: this constant is the ONLY place the
+#     judge's max is encoded. If the judge's scale changes (e.g. to
+#     0--10 or 0--1) and this stays 5.0, the reward reaching the bandit
+#     is silently mis-scaled relative to the LinUCB exploration bonus.
+#     If the true max grows, normalized rewards shrink toward 0 and the
+#     UCB bonus dominates forever — reintroducing the exact
+#     "always picks arm 0 / never learns" bug this normalization was
+#     added to fix, with NO error and NO test failure. So: if the judge
+#     rubric's scale ever changes, update THIS one constant.
 JUDGE_MAX_SCORE: float = 5.0
 
 
@@ -441,8 +456,9 @@ class PolicyManager:
     ) -> None:
         """Apply a reward to a previously-selected decision.
 
-        This is the reward path that a future ``report_reward`` handler
-        will call. It is *not* wired into the kernel in this subtask.
+        This is the reward path ``MemoryManager.report_reward`` calls
+        (once per recorded decision) when a trial's judge reward flows
+        back into the kernel.
 
         Args:
             bandit_name: One of ``bandit_names``.
@@ -465,6 +481,19 @@ class PolicyManager:
         # a nonzero reward (1/5 = 0.2, not 0.0) is harmless for LinUCB —
         # the bandit compares arms by *relative* reward, so a constant
         # offset does not change which arm wins. alpha is untouched.
+        #
+        # Why this line exists at all (for a reader without git-blame):
+        # LinUCB picks the arm with the highest (mean estimate + UCB
+        # bonus). At alpha=1.0 with this module's context geometry
+        # (x·x = 3: two one-hot slots + a bias term), an unexplored
+        # arm's bonus is alpha * sqrt(x^T A^-1 x) ≈ 1.7. A raw judge
+        # reward of up to 5.0 would swamp that ~1.7 bonus, so whichever
+        # arm happened to be tried first would keep winning and the
+        # others would never be explored ("always picks arm 0"). Dividing
+        # by JUDGE_MAX_SCORE puts the reward in ~[0.2, 1.0], comparable
+        # to the ~1.7 bonus, so exploration and exploitation stay
+        # balanced. If you change this formula, re-check it against that
+        # bonus magnitude — not just the constant.
         normalized_reward = float(reward_value) / JUDGE_MAX_SCORE
         bandit = self._get_bandit(bandit_name)
         bandit.update(arm_index, context_vector, normalized_reward)
