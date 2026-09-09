@@ -65,6 +65,15 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+# Maximum score the trial judge can assign. The GPT-5.4 judge scores
+# each trial on a 1--5 scale (paper §Evaluation), so 5.0 is the fixed
+# upper bound of the raw reward. Used to normalize the incoming reward
+# to roughly [0, 1] before it reaches the bandit, so the reward magnitude
+# is comparable to the LinUCB UCB exploration bonus (which is on an
+# ~O(1) scale at alpha=1.0). See PolicyManager.update.
+JUDGE_MAX_SCORE: float = 5.0
+
+
 # ---------------------------------------------------------------------
 # Context feature space
 # ---------------------------------------------------------------------
@@ -439,15 +448,32 @@ class PolicyManager:
             bandit_name: One of ``bandit_names``.
             arm_index: The arm returned by ``select_threshold``.
             context_vector: The context returned by ``select_threshold``.
-            reward_value: Observed scalar reward.
+            reward_value: Observed *raw* judge reward (on the judge's
+                1--5 scale). It is normalized here before reaching the
+                bandit; callers pass the reward unchanged.
         """
+        # Normalize the raw judge reward to the same scale as the UCB
+        # exploration bonus BEFORE it reaches the bandit. This is the
+        # single choke point every bandit reward flows through
+        # (MemoryManager.report_reward calls this once per decision, and
+        # this is the sole caller of LinUCBBandit.update), so normalizing
+        # here covers all three bandits and any future bandit with one
+        # conversion. Simple max-scale division (r / JUDGE_MAX_SCORE) is
+        # used rather than a min-max rescale off the 1.0 floor: the
+        # master design specifies r / 5.0, it keeps the transform a
+        # single well-known constant, and preserving the judge's floor as
+        # a nonzero reward (1/5 = 0.2, not 0.0) is harmless for LinUCB —
+        # the bandit compares arms by *relative* reward, so a constant
+        # offset does not change which arm wins. alpha is untouched.
+        normalized_reward = float(reward_value) / JUDGE_MAX_SCORE
         bandit = self._get_bandit(bandit_name)
-        bandit.update(arm_index, context_vector, reward_value)
+        bandit.update(arm_index, context_vector, normalized_reward)
         logger.debug(
-            "update[%s]: arm=%d reward=%.4f",
+            "update[%s]: arm=%d raw_reward=%.4f normalized=%.4f",
             bandit_name,
             arm_index,
             reward_value,
+            normalized_reward,
         )
 
     def arm_scores(
