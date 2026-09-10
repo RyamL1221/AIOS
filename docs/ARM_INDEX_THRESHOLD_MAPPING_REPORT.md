@@ -1,10 +1,18 @@
 # Arm-Index → Threshold-Value Mapping for the LinUCB Bandits
 
-Read-only investigation (subtask 1 of the adaptive-convergence analysis).
 Establishes exactly what threshold value each `arm_index` (0–5) maps to
-for each of the three bandits, so late-window `policy_action` arm
-selections can be translated into comparable threshold values against
-the `kernel_shared_tuned` overrides. **No kernel code was modified.**
+for each of the three bandits, so `policy_action` arm selections can be
+translated into comparable threshold values against the
+`kernel_shared_tuned` overrides.
+
+> **UPDATED (action-space widening).** The `similarity_threshold` and
+> `redundancy_threshold` action spaces were **widened** so their arms
+> can reach all three models' offline-tuned winners (they previously
+> could not — see "Tuned-winner reachability" below). This report has
+> been corrected to the new mapping. The original narrow ranges
+> (similarity `0.20–0.70`, redundancy `0.70–0.95`) are retained inline
+> only as struck-through historical context. `novelty_threshold` is
+> unchanged.
 
 ---
 
@@ -13,15 +21,21 @@ the `kernel_shared_tuned` overrides. **No kernel code was modified.**
 All arm definitions live in `aios/memory/policy.py` — a single
 class-level constant `PolicyManager.ACTION_SPACES`. Confirmed (not
 assumed): there is no separate config module or constants file; the
-bandits are constructed directly from this dict. Direct source lines
-(`aios/memory/policy.py`, lines 371–376):
+bandits are constructed directly from this dict. Current source:
 
 ```python
     ACTION_SPACES: Dict[str, List[float]] = {
         "novelty_threshold": [0.50, 0.59, 0.68, 0.77, 0.86, 0.95],
-        "similarity_threshold": [0.20, 0.30, 0.40, 0.50, 0.60, 0.70],
-        "redundancy_threshold": [0.70, 0.75, 0.80, 0.85, 0.90, 0.95],
+        "similarity_threshold": [0.50, 0.60, 0.70, 0.80, 0.90, 0.95],
+        "redundancy_threshold": [0.50, 0.60, 0.70, 0.80, 0.90, 0.95],
     }
+```
+
+Prior (pre-widening) values, for historical reference only:
+
+```python
+    #   similarity_threshold: [0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+    #   redundancy_threshold: [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
 ```
 
 Each `LinUCBBandit` is built once from these lists (lines 387–394):
@@ -58,26 +72,60 @@ So `arm_index N` for a given bandit is unambiguously
 
 | arm_index | `novelty_threshold` | `similarity_threshold` | `redundancy_threshold` |
 |-----------|---------------------|------------------------|------------------------|
-| 0 | 0.50 | 0.20 | 0.70 |
-| 1 | 0.59 | 0.30 | 0.75 |
-| 2 | 0.68 | 0.40 | 0.80 |
-| 3 | 0.77 | 0.50 | 0.85 |
-| 4 | 0.86 | 0.60 | 0.90 |
-| 5 | 0.95 | 0.70 | 0.95 |
+| 0 | 0.50 | 0.50 | 0.50 |
+| 1 | 0.59 | 0.60 | 0.60 |
+| 2 | 0.68 | 0.70 | 0.70 |
+| 3 | 0.77 | 0.80 | 0.80 |
+| 4 | 0.86 | 0.90 | 0.90 |
+| 5 | 0.95 | 0.95 | 0.95 |
 
-## Are the three lists the same across bandits? — NO
+> Historical (pre-widening) mapping — do **not** use for post-widening
+> runs:
+>
+> | arm_index | `similarity_threshold` (old) | `redundancy_threshold` (old) |
+> |-----------|------------------------------|------------------------------|
+> | 0 | 0.20 | 0.70 |
+> | 1 | 0.30 | 0.75 |
+> | 2 | 0.40 | 0.80 |
+> | 3 | 0.50 | 0.85 |
+> | 4 | 0.60 | 0.90 |
+> | 5 | 0.70 | 0.95 |
+>
+> Any `policy_trials.jsonl` produced BEFORE the widening must be
+> interpreted with the old table; runs AFTER it use the new table above.
 
-The three action spaces are **distinct**, not a shared symmetric list.
-Per the per-bandit rationale comments (`policy.py` lines ~353–371):
+## Tuned-winner reachability (why the widening was made)
+
+The offline `kernel_shared_tuned` winners
+(`memory.static_thresholds.*.overrides` in `config.yaml`) are:
+
+| bandit | gpt-4o | llama3.1:8b | qwen2.5:7b | reachable pre-widening? |
+|--------|--------|-------------|------------|-------------------------|
+| similarity_threshold | 0.8 | 0.5 | 0.9 | **No** — old max was 0.70, so 0.8 & 0.9 unreachable |
+| redundancy_threshold | 0.5 | 0.5 | 0.7 | **No** — old min was 0.70, so 0.5 unreachable |
+| novelty_threshold | 0.7 | 0.6 | 0.6 | Yes (inside 0.50–0.95); left unchanged |
+
+Post-widening, every similarity and redundancy winner is now an **exact
+arm**: similarity winners 0.5, 0.8, 0.9 are arms 0, 3, 4; redundancy
+winners 0.5 and 0.7 are arms 0 and 2. The bandits can therefore
+converge to the tuned optima, which was structurally impossible before.
+
+## Are the three lists the same across bandits? — PARTIALLY (post-widening)
+
+Per the per-bandit rationale comments in `policy.py`:
 - `novelty_threshold` spans 0.50–0.95 in irregular steps
-  (0.50, 0.59, 0.68, 0.77, 0.86, 0.95).
-- `similarity_threshold` spans 0.20–0.70 in 0.10 steps.
-- `redundancy_threshold` spans 0.70–0.95 in 0.05 steps.
+  (0.50, 0.59, 0.68, 0.77, 0.86, 0.95) — unchanged by the widening.
+- `similarity_threshold` now spans 0.50–0.95
+  (0.50, 0.60, 0.70, 0.80, 0.90, 0.95).
+- `redundancy_threshold` now spans 0.50–0.95
+  (0.50, 0.60, 0.70, 0.80, 0.90, 0.95).
 
-Do **not** assume symmetry: the same `arm_index` means different
-threshold values (and lives in a different range) for each bandit. E.g.
-`arm_index=0` is 0.50 for novelty, 0.20 for similarity, 0.70 for
-redundancy.
+After the widening, `similarity_threshold` and `redundancy_threshold`
+happen to share the **same** list, but `novelty_threshold` is still
+distinct (irregular steps). Do **not** assume all three are symmetric:
+`arm_index=0` is 0.50 for all three now, but higher indices diverge
+(e.g. `arm_index=1` is 0.59 for novelty vs 0.60 for the other two). Treat
+each bandit's list independently and use the table above.
 
 ## Is the mapping `llm_core`-dependent? — NO
 
