@@ -1113,12 +1113,28 @@ class MemoryManager:
         For each memory_id in ``memory_ids_involved`` it replays every
         recorded ``(bandit_name, arm_index, context_vector)`` decision
         (from ``_pending_reward_decisions``) into
-        ``PolicyManager.update`` using naive equal-credit assignment:
-        the full ``reward_value`` is applied to each distinct bandit
-        decision that touched the memory (v1 attribution rule — the
-        reward is *not* split, since each bandit's decision is
-        independent). Consumed entries are removed afterward so the
-        pending map does not grow unbounded.
+        ``PolicyManager.update`` using **equal-split** attribution (v2):
+        the trial's ``reward_value`` is divided evenly across the total
+        number of decisions credited in this call, so each decision
+        receives ``reward_value / N``. This conserves the trial's total
+        reward signal (it sums to ``reward_value``) instead of the v1
+        behavior, which applied the *full* ``reward_value`` to every
+        decision and thus injected ``N * reward_value`` of signal for a
+        single trial. Consumed entries are removed afterward (pop-on-
+        reward is unchanged from v1) so the pending map does not grow
+        unbounded.
+
+        Attribution scheme choice (design Option A). Option B — weight
+        each decision by a content-derived signal such as the retrieval
+        ``similarity`` — was rejected: the decision tuples do not carry
+        similarity (it exists only at retrieval time, and would require
+        extending ``_pending_reward_decisions``), and more fundamentally
+        there is no single coherent per-memory relevance scalar shared
+        across the three bandits (the novelty gate's stored signal is a
+        max-similarity-to-existing at add time, while the retrieve gates
+        use query-similarity), so weighting by it would mix incomparable
+        signals. Option A uses only data already present and treats each
+        credited decision as an equal contributor to the trial outcome.
 
         No-ops safely when the adaptive policy is disabled or no
         decisions were recorded for the given memory_ids. Never raises
@@ -1154,6 +1170,23 @@ class MemoryManager:
         # emitting one line per arm.
         touched_bandits: Set[str] = set()
         touched_memory_ids: list = []
+
+        # --- Attribution: equal-SPLIT credit (v2) ---
+        # Pass 1: pop and collect every decision credited in THIS trial
+        # (across all memory_ids). Popping here preserves the existing
+        # pop-on-reward / consume-once mechanics unchanged — we only
+        # change how much reward each popped decision receives, not when
+        # decisions are consumed.
+        #
+        # v1 applied the FULL reward_value to every decision, so a trial
+        # touching N decisions injected N * reward_value of total signal
+        # into the bandits — over-counting a single trial's outcome. v2
+        # splits the trial reward evenly across the N decisions credited
+        # in this call, so the total signal conserves to reward_value
+        # (each decision gets reward_value / N). This is Option A from
+        # the design: it uses only data already present in the decision
+        # tuples and needs no per-memory relevance signal.
+        pending: list = []  # (memory_id, bandit, arm, ctx, trial_id)
         for memory_id in memory_ids_involved or []:
             decisions = self._pending_reward_decisions.pop(
                 memory_id, None
@@ -1167,35 +1200,66 @@ class MemoryManager:
                 decision_trial_id = (
                     decision[3] if len(decision) > 3 else None
                 )
-                try:
-                    self.policy.update(
-                        bandit_name,
-                        arm_index,
-                        context_vector,
-                        float(reward_value),
-                    )
-                    updates += 1
-                    touched_bandits.add(bandit_name)
-                    if memory_id not in touched_memory_ids:
-                        touched_memory_ids.append(memory_id)
-                    if getattr(self, "policy_logger", None):
-                        self.policy_logger.log_reward(
-                            decision_trial_id
-                            or (trial_metadata or {}).get("trial_id"),
-                            bandit_name,
-                            arm_index,
-                            float(reward_value),
-                            memory_id,
-                        )
-                except Exception as e:  # pragma: no cover
-                    logger.warning(
-                        "report_reward: policy.update failed for "
-                        "memory_id=%s bandit=%s arm=%s (%s)",
+                pending.append(
+                    (
                         memory_id,
                         bandit_name,
                         arm_index,
-                        e,
+                        context_vector,
+                        decision_trial_id,
                     )
+                )
+
+        n_decisions = len(pending)
+        # Even split. Guard against div-by-zero (no decisions -> loop
+        # below doesn't run anyway). The split reward stays on the
+        # judge's 1--5 scale (just smaller), so PolicyManager.update's
+        # r / JUDGE_MAX_SCORE normalization still applies unchanged and
+        # needs no re-tuning: LinUCB compares arms by *relative* reward,
+        # so a consistent per-trial divisor preserves which arm wins.
+        split_reward = (
+            float(reward_value) / n_decisions
+            if n_decisions > 0
+            else 0.0
+        )
+
+        # Pass 2: apply the split reward to each collected decision.
+        for (
+            memory_id,
+            bandit_name,
+            arm_index,
+            context_vector,
+            decision_trial_id,
+        ) in pending:
+            try:
+                self.policy.update(
+                    bandit_name,
+                    arm_index,
+                    context_vector,
+                    split_reward,
+                )
+                updates += 1
+                touched_bandits.add(bandit_name)
+                if memory_id not in touched_memory_ids:
+                    touched_memory_ids.append(memory_id)
+                if getattr(self, "policy_logger", None):
+                    self.policy_logger.log_reward(
+                        decision_trial_id
+                        or (trial_metadata or {}).get("trial_id"),
+                        bandit_name,
+                        arm_index,
+                        split_reward,
+                        memory_id,
+                    )
+            except Exception as e:  # pragma: no cover
+                logger.warning(
+                    "report_reward: policy.update failed for "
+                    "memory_id=%s bandit=%s arm=%s (%s)",
+                    memory_id,
+                    bandit_name,
+                    arm_index,
+                    e,
+                )
         # Auditable server-side signal: emitted ONLY when a genuine
         # bandit update happened (updates > 0), so the no-pending /
         # no-op case stays silent and this line remains meaningful.
