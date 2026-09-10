@@ -361,17 +361,45 @@ class PolicyManager:
     #
     # similarity_threshold: a retrieved memory is injected only if its
     #   similarity to the query is ABOVE this value. Buckets span
-    #   0.2–0.7: this is the practical relevance band for the injection
-    #   pipeline (cf. the default relevance_threshold of 0.5 in config).
-    #   6 buckets.
+    #   0.5–0.95 so the arms BRACKET all three models' offline-tuned
+    #   winners (gpt-4o 0.8, llama3.1:8b 0.5, qwen2.5:7b 0.9 — see
+    #   memory.static_thresholds.similarity_threshold.overrides in
+    #   config.yaml). The prior range (0.2–0.7) could not reach 0.8 or
+    #   0.9, so the bandit could never converge to the gpt-4o/qwen
+    #   optima regardless of learning. Each tuned winner (0.5, 0.8, 0.9)
+    #   is an EXACT arm; the remaining arms (0.6, 0.7, 0.95) fill the
+    #   band and give a high ceiling. 6 buckets.
     #
     # redundancy_threshold: two retrieved memories are redundant if their
-    #   pairwise similarity is ABOVE this value. Buckets span 0.7–0.95:
-    #   only fairly-to-very similar pairs should be collapsed. 6 buckets.
+    #   pairwise similarity is ABOVE this value. Buckets span 0.5–0.95 so
+    #   the arms BRACKET all three tuned winners (gpt-4o 0.5,
+    #   llama3.1:8b 0.5, qwen2.5:7b 0.7). The prior range (0.7–0.95)
+    #   could not reach 0.5, so two of three models' optima were
+    #   unreachable. Both distinct winners (0.5, 0.7) are EXACT arms; the
+    #   upper arms (0.8, 0.9, 0.95) are retained so genuine near-
+    #   duplicate collapsing is still expressible. 6 buckets.
+    #
+    # NOTE (redundancy calibration): a prior pilot observed pairwise
+    #   MiniLM cosine similarities among *distinct* memories sitting well
+    #   below 0.70 (max ≈ 0.45). Lowering the redundancy floor to 0.5
+    #   moves the low end nearer that observed mass, so the gate is
+    #   *slightly less* inert than under the 0.7 floor — a mild
+    #   improvement for reachability of the tuned 0.5 winner. It does NOT
+    #   fully resolve the calibration gap (the embedding-space split
+    #   between the novelty/retriever similarity and the separately-
+    #   loaded MiniLM redundancy cosine is unchanged), and it does not
+    #   worsen it. See memory-providers.md "Known calibration caveat".
+    #
+    # novelty_threshold: unchanged. Its tuned winners (gpt-4o 0.7,
+    #   llama3.1:8b 0.6, qwen2.5:7b 0.6) already fall inside the existing
+    #   0.5–0.95 span, so no widening is required for this bandit (this
+    #   subtask scopes the fix to similarity + redundancy). The winners
+    #   land between existing arms rather than on them, which is a
+    #   granularity question, not a reachability one, and is out of scope.
     ACTION_SPACES: Dict[str, List[float]] = {
         "novelty_threshold": [0.50, 0.59, 0.68, 0.77, 0.86, 0.95],
-        "similarity_threshold": [0.20, 0.30, 0.40, 0.50, 0.60, 0.70],
-        "redundancy_threshold": [0.70, 0.75, 0.80, 0.85, 0.90, 0.95],
+        "similarity_threshold": [0.50, 0.60, 0.70, 0.80, 0.90, 0.95],
+        "redundancy_threshold": [0.50, 0.60, 0.70, 0.80, 0.90, 0.95],
     }
 
     def __init__(self, alpha: float = 1.0):
