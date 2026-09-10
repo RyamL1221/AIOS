@@ -1080,7 +1080,93 @@ class Mem0Provider(MemoryProvider):
                 success=False,
                 error=f"Mem0 get_memory failed: {str(e)}"
             )
-    
+
+    def _collection_space(self, collection) -> str:
+        """Read a ChromaDB collection's configured distance metric.
+
+        Mirrors ``ChromaRetriever.space`` in ``aios/memory/retrievers``:
+        Chroma defaults to ``l2`` when no ``hnsw:space`` is set. Read
+        defensively across Chroma versions; falls back to ``l2``.
+        """
+        try:
+            cfg = collection._model.configuration_json
+            return cfg.get("hnsw", {}).get("space", "l2")
+        except Exception:
+            meta = getattr(collection, "metadata", None) or {}
+            return meta.get("hnsw:space", "l2")
+
+    def _raw_similarity_by_id(
+        self, content: str, user_id: str
+    ) -> Dict[str, float]:
+        """Map memory id -> real similarity for a query.
+
+        Queries the per-user ChromaDB collection directly for the raw
+        distance of each stored memory to ``content`` (the semantic
+        signal Mem0's get_all/search paths do not expose usably), then
+        converts each distance to a bounded, monotonic similarity via
+        the metric-aware ``distance_to_similarity`` helper.
+
+        Best-effort: returns an empty map on any failure (missing
+        client/collection, empty query, Chroma error) so the caller
+        falls back to ``similarity=None`` (fail-open) rather than
+        breaking retrieval.
+
+        Args:
+            content: The query text to score memories against.
+            user_id: The resolved per-user collection scope.
+
+        Returns:
+            ``{memory_id: similarity}`` for every stored memory in the
+            user's collection (empty on failure).
+        """
+        if not content:
+            return {}
+        try:
+            from aios.memory.retrievers import distance_to_similarity
+
+            client = self._get_client_for_user(user_id)
+            embedder = getattr(client, "embedding_model", None)
+            vector_store = getattr(client, "vector_store", None)
+            collection = getattr(vector_store, "collection", None)
+            if embedder is None or collection is None:
+                return {}
+
+            space = self._collection_space(collection)
+            query_embedding = embedder.embed(content, "search")
+
+            # Score every memory in this (small, per-user) collection.
+            n_results = max(collection.count(), 1)
+            res = collection.query(
+                query_embeddings=[list(query_embedding)],
+                n_results=n_results,
+            )
+
+            ids = res.get("ids") or []
+            distances = res.get("distances") or []
+            id_row = ids[0] if ids and isinstance(ids[0], list) else ids
+            dist_row = (
+                distances[0]
+                if distances and isinstance(distances[0], list)
+                else distances
+            )
+
+            sim_by_id: Dict[str, float] = {}
+            for doc_id, distance in zip(id_row, dist_row):
+                if doc_id is None or distance is None:
+                    continue
+                sim_by_id[doc_id] = distance_to_similarity(
+                    distance, space
+                )
+            return sim_by_id
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                "retrieve_memory: raw-distance similarity probe "
+                "failed for user_id=%s (%s); similarity will be None",
+                user_id,
+                e,
+            )
+            return {}
+
     def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
         """Search for memories in Mem0 matching the query.
         
@@ -1148,6 +1234,21 @@ class Mem0Provider(MemoryProvider):
 
             # Normalise get_all response into a flat list.
             items = self._normalize_get_all_result(raw_result)
+
+            # Real similarity signal: get_all() does not return a
+            # distance/score (Mem0 drops it via model_dump(exclude=
+            # {"score"})) and Mem0's search() clamps the semantic
+            # distance to a saturated 1.0 ceiling, so both leave the
+            # 'similarity' field unusable for the retrieve-time gates.
+            # Instead, query the per-user ChromaDB collection directly
+            # for the raw distance per memory id and convert it with the
+            # metric-aware distance_to_similarity helper (the same
+            # conversion the InHouseProvider path uses). Best-effort:
+            # any failure leaves similarity as None (fail-open), never
+            # breaking retrieval.
+            similarity_by_id = self._raw_similarity_by_id(
+                content, search_user_id
+            )
 
             # --- Diagnostic ---
             logger.info(
@@ -1220,13 +1321,14 @@ class Mem0Provider(MemoryProvider):
                         "timestamp", ""
                     ),
                     "score": item.get("score"),
-                    # Additive alias so every provider's
-                    # search_results entry exposes a consistently
-                    # named 'similarity' field (consumed by the
-                    # similarity-threshold policy). Mem0's score is
-                    # already a cosine similarity, so this mirrors it
-                    # without renaming the existing 'score' key.
-                    "similarity": item.get("score"),
+                    # Real, differentiated similarity computed from the
+                    # raw ChromaDB distance via distance_to_similarity
+                    # (metric-aware). Falls back to None when the raw
+                    # distance for this id is unavailable so the
+                    # gate consumers fail open rather than break.
+                    "similarity": similarity_by_id.get(
+                        item.get("id")
+                    ),
                     "metadata": metadata,
                 })
             
