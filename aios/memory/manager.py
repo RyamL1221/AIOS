@@ -48,7 +48,22 @@ class MemoryManager:
             ``ContextInjector`` (inline waits). Configured via
             ``memory.write_barrier.*``.
     """
-    
+
+    # Number of reward updates the SELECTED ``similarity_threshold``
+    # arm must have received before its total-wipeout rejection is
+    # trusted. Below this, the adaptive retrieve gate fails open on a
+    # total wipeout to keep the reward loop alive (see
+    # ``_apply_retrieval_policy``); at/above it, that arm's strict
+    # rejection is honored and may empty the set. Checked PER ARM (via
+    # ``PolicyManager.arm_update_count``), not whole-bandit: the trap is
+    # a specific arm that keeps wiping out without ever being validated,
+    # and each arm must earn trust independently. Set to 1 so an arm is
+    # trusted as soon as it has received ANY real reward signal — one
+    # genuine reward is enough to break the "never learns" cycle for
+    # that arm. Only the adaptive path consults this; the static/tuned
+    # path never does.
+    BOOTSTRAP_MIN_UPDATES: int = 1
+
     def __init__(
         self,
         log_mode: str = "console",
@@ -603,6 +618,60 @@ class MemoryManager:
         kept = self._filter_by_similarity(
             search_results, sim_threshold
         )
+        # Bootstrap-only fail-open (adaptive path ONLY). If the
+        # similarity gate would drop EVERY row of a non-empty set AND
+        # the SELECTED arm has not yet received enough reward updates to
+        # trust its rejection, keep the full set so ≥1 creditable id
+        # still flows to report_reward. Without this, an over-aggressive
+        # arm empties the retrieval -> the harness reports an empty
+        # memory_ids_involved -> report_reward credits nothing -> that
+        # arm never gets validated: a self-reinforcing trap that starves
+        # its own learning.
+        #
+        # Gated PER ARM (``arm_update_count(sim_arm)``), NOT on the
+        # whole-bandit total. The wipeout decision was made by the
+        # specific arm ``sim_arm`` selected this trial, and reward
+        # attribution is per-arm (see the decision recorded below), so
+        # the arm that made the call is the one whose evidence must be
+        # checked. A whole-bandit counter would wrongly turn the
+        # fail-open OFF for a never-tested arm the moment any *sibling*
+        # arm got its first reward — and because LinUCB's optimism keeps
+        # selecting untested arms, that reopens the trap for every arm
+        # past the first. Once THIS arm has been rewarded
+        # (``>= BOOTSTRAP_MIN_UPDATES``), its strict rejection (e.g. a
+        # converged 0.90) is trusted and may empty the set again,
+        # restoring the gate's ceiling. The static (kernel_shared_tuned)
+        # path never reaches this branch (it calls _filter_by_similarity
+        # directly), so its deliberately-strict thresholds are honored
+        # unchanged.
+        if search_results and not kept:
+            arm_updates = self.policy.arm_update_count(
+                "similarity_threshold", sim_arm
+            )
+            if arm_updates < self.BOOTSTRAP_MIN_UPDATES:
+                logger.info(
+                    "retrieve gate: similarity_threshold=%.3f (arm %d) "
+                    "would drop all %d result(s) but this arm is still "
+                    "bootstrapping (arm_updates=%d < %d); failing open "
+                    "to avoid starving the reward loop",
+                    sim_threshold,
+                    sim_arm,
+                    len(search_results),
+                    arm_updates,
+                    self.BOOTSTRAP_MIN_UPDATES,
+                )
+                kept = list(search_results)
+            else:
+                logger.info(
+                    "retrieve gate: similarity_threshold=%.3f (arm %d) "
+                    "dropped all %d result(s); honoring converged arm "
+                    "(arm_updates=%d >= %d)",
+                    sim_threshold,
+                    sim_arm,
+                    len(search_results),
+                    arm_updates,
+                    self.BOOTSTRAP_MIN_UPDATES,
+                )
         logger.info(
             "retrieve gate: similarity_threshold=%.3f kept %d/%d",
             sim_threshold,
@@ -657,6 +726,19 @@ class MemoryManager:
         result with no ``similarity`` value is kept (fail-open,
         mirroring the ContextInjector's relevance handling). Ordering
         is preserved.
+
+        This helper does NOT special-case a total wipeout: if the
+        threshold drops every row, it returns ``[]``. That strict
+        behavior is correct for a *converged* / *tuned* threshold that
+        deliberately rejects everything, and it is what the static
+        (``kernel_shared_tuned``) path expects. The adaptive path
+        layers a *bootstrap-only* fail-open on top of this in
+        ``_apply_retrieval_policy`` — gated on the bandit not yet having
+        received reward updates — so an under-informed arm-0 threshold
+        cannot permanently starve its own learning while a converged
+        arm can still reject everything. Keeping the total-wipeout
+        policy out of this shared helper is deliberate: it is the reason
+        the static path is untouched.
         """
         kept = []
         for r in search_results:

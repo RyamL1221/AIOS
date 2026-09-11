@@ -228,6 +228,24 @@ class LinUCBBandit:
         self._b: List[np.ndarray] = [
             np.zeros(self.d) for _ in range(self.n_arms)
         ]
+        # Reward updates received, tracked PER ARM. Counts every
+        # ``update`` call for the played arm regardless of the reward
+        # value (a reward of 0.0 is still learning signal), so it is a
+        # truer "has this arm been validated" signal than inspecting
+        # ``_b`` (which a 0.0 reward leaves unchanged).
+        #
+        # Per-arm (not whole-bandit) is deliberate: a caller asking
+        # "can I trust this arm's decision yet?" must key on the arm
+        # that MADE the decision, because reward attribution is per-arm
+        # (see MemoryManager._record_decision, which stores the selected
+        # arm) and LinUCB's optimism means a never-rewarded arm can
+        # still be *selected*. A whole-bandit counter would falsely
+        # report "validated" for an untested arm the moment any sibling
+        # arm was rewarded once. The whole-bandit total is still exposed
+        # via the ``update_count`` property (sum over arms) for logging.
+        self._arm_update_counts: List[int] = [
+            0 for _ in range(self.n_arms)
+        ]
 
     def _validate_context(self, context: np.ndarray) -> np.ndarray:
         """Coerce and validate a context vector to shape ``(d,)``."""
@@ -329,6 +347,38 @@ class LinUCBBandit:
         x = self._validate_context(context)
         self._A[arm_index] += np.outer(x, x)
         self._b[arm_index] += float(reward) * x
+        self._arm_update_counts[arm_index] += 1
+
+    @property
+    def update_count(self) -> int:
+        """Total number of reward updates applied to this bandit
+        (summed over all arms).
+
+        Zero means the bandit is still at its optimistic init and has
+        received no learning signal on any arm. NOTE: for the bootstrap
+        fail-open, prefer ``arm_update_count(arm_index)`` — a nonzero
+        whole-bandit total does not mean the *currently-selected* arm
+        has been validated.
+        """
+        return sum(self._arm_update_counts)
+
+    def arm_update_count(self, arm_index: int) -> int:
+        """Number of reward updates applied to a specific arm.
+
+        Zero means this arm has never received reward evidence, even if
+        other arms of the same bandit have. This is the signal the
+        bootstrap fail-open keys on: an unrewarded arm's total-wipeout
+        rejection should not be trusted.
+
+        Raises:
+            IndexError: If ``arm_index`` is out of range.
+        """
+        if not (0 <= arm_index < self.n_arms):
+            raise IndexError(
+                f"arm_index {arm_index} out of range "
+                f"[0, {self.n_arms})"
+            )
+        return self._arm_update_counts[arm_index]
 
 
 # ---------------------------------------------------------------------
@@ -353,53 +403,63 @@ class PolicyManager:
     # cosine-similarity scale exposed by the retriever (higher == more
     # similar). Rationale per bandit:
     #
-    # novelty_threshold: a candidate is admitted only if its *max
-    #   similarity* to existing memories is BELOW this value (i.e. it is
-    #   novel enough). Buckets span 0.5–0.95: below 0.5 almost nothing is
-    #   novel enough to reject, above 0.95 only near-duplicates are
-    #   rejected. 6 buckets.
+    # ALL THREE bandits were extended DOWNWARD toward near-zero below the
+    # prior 0.50 floor while KEEPING their existing upper arms for
+    # exploration completeness (Option A). similarity floors at 0.0
+    # (11 arms); novelty and redundancy floor at 0.1 (10 arms each) to
+    # avoid a degenerate 0.0 arm (see the per-gate note + the
+    # ACTION_SPACES comment below). Motivation: a live trace of
+    # the 900-trial accum run showed the adaptive similarity gate
+    # dropping ALL retained rows on 96.6% of retrievals because
+    # genuinely-relevant post-Fix-1 similarities run ~0.45–0.65 — BELOW
+    # the old 0.50 floor — so no reachable arm could retain them (see
+    # docs/FILTER_TO_HARNESS_DROP_TRACE.md). The added low arms give each
+    # bandit a reachable "permissive" region. NOTE the per-gate direction
+    # differs, so "low" means different things:
     #
-    # similarity_threshold: a retrieved memory is injected only if its
-    #   similarity to the query is ABOVE this value. Buckets span
-    #   0.5–0.95 so the arms BRACKET all three models' offline-tuned
-    #   winners (gpt-4o 0.8, llama3.1:8b 0.5, qwen2.5:7b 0.9 — see
-    #   memory.static_thresholds.similarity_threshold.overrides in
-    #   config.yaml). The prior range (0.2–0.7) could not reach 0.8 or
-    #   0.9, so the bandit could never converge to the gpt-4o/qwen
-    #   optima regardless of learning. Each tuned winner (0.5, 0.8, 0.9)
-    #   is an EXACT arm; the remaining arms (0.6, 0.7, 0.95) fill the
-    #   band and give a high ceiling. 6 buckets.
+    # novelty_threshold (ADD gate): admit iff max-similarity-to-existing
+    #   < threshold. LOWER arm = admit FEWER (stricter). The new 0.0–0.4
+    #   arms are the strict extreme (a 0.0 arm admits almost nothing);
+    #   the upper 0.50–0.95 arms remain for the permissive/novel-friendly
+    #   end. Tuned winners (gpt-4o 0.7, llama 0.6, qwen 0.6) still exact/
+    #   near-exact arms.
     #
-    # redundancy_threshold: two retrieved memories are redundant if their
-    #   pairwise similarity is ABOVE this value. Buckets span 0.5–0.95 so
-    #   the arms BRACKET all three tuned winners (gpt-4o 0.5,
-    #   llama3.1:8b 0.5, qwen2.5:7b 0.7). The prior range (0.7–0.95)
-    #   could not reach 0.5, so two of three models' optima were
-    #   unreachable. Both distinct winners (0.5, 0.7) are EXACT arms; the
-    #   upper arms (0.8, 0.9, 0.95) are retained so genuine near-
-    #   duplicate collapsing is still expressible. 6 buckets.
+    # similarity_threshold (RETRIEVE relevance gate): keep iff query
+    #   similarity >= threshold. LOWER arm = keep MORE. The new 0.0–0.4
+    #   arms are the fix's target: they let the bandit retain the
+    #   observed ~0.45–0.65 relevant rows that the 0.50 floor dropped.
+    #   Upper arms (incl. tuned winners gpt-4o 0.8, llama 0.5, qwen 0.9)
+    #   retained for exploration completeness so a context that wants a
+    #   strict threshold can still choose one.
     #
-    # NOTE (redundancy calibration): a prior pilot observed pairwise
-    #   MiniLM cosine similarities among *distinct* memories sitting well
-    #   below 0.70 (max ≈ 0.45). Lowering the redundancy floor to 0.5
-    #   moves the low end nearer that observed mass, so the gate is
-    #   *slightly less* inert than under the 0.7 floor — a mild
-    #   improvement for reachability of the tuned 0.5 winner. It does NOT
-    #   fully resolve the calibration gap (the embedding-space split
-    #   between the novelty/retriever similarity and the separately-
-    #   loaded MiniLM redundancy cosine is unchanged), and it does not
-    #   worsen it. See memory-providers.md "Known calibration caveat".
-    #
-    # novelty_threshold: unchanged. Its tuned winners (gpt-4o 0.7,
-    #   llama3.1:8b 0.6, qwen2.5:7b 0.6) already fall inside the existing
-    #   0.5–0.95 span, so no widening is required for this bandit (this
-    #   subtask scopes the fix to similarity + redundancy). The winners
-    #   land between existing arms rather than on them, which is a
-    #   granularity question, not a reachability one, and is out of scope.
+    # redundancy_threshold (RETRIEVE dedup gate): drop a row iff its
+    #   pairwise similarity to an already-kept row > threshold. LOWER arm
+    #   = drop MORE as redundant (a 0.0 arm collapses everything to one
+    #   row — the aggressive-dedup extreme, NOT permissive). Upper arms
+    #   (incl. tuned winners gpt-4o/llama 0.5, qwen 0.7) retained. Prior
+    #   calibration note still applies: distinct-memory MiniLM pairwise
+    #   sims sit ~<=0.45, so realistic dedup lives in the low arms; this
+    #   extension makes that region reachable but does not resolve the
+    #   embedding-space split (see memory-providers.md "Known calibration
+    #   caveat").
     ACTION_SPACES: Dict[str, List[float]] = {
-        "novelty_threshold": [0.50, 0.59, 0.68, 0.77, 0.86, 0.95],
-        "similarity_threshold": [0.50, 0.60, 0.70, 0.80, 0.90, 0.95],
-        "redundancy_threshold": [0.50, 0.60, 0.70, 0.80, 0.90, 0.95],
+        # novelty/redundancy floor at 0.1 (NOT 0.0): a 0.0 arm is
+        # degenerate for these gates — novelty 0.0 admits nothing
+        # (reject-all), redundancy 0.0 collapses all retrieved rows to
+        # one (dedup-all). similarity keeps its 0.0 arm (keep-all), which
+        # is the permissive extreme the retrieve-gate fix targets.
+        "novelty_threshold": [
+            0.1, 0.2, 0.3, 0.4,
+            0.50, 0.59, 0.68, 0.77, 0.86, 0.95,
+        ],
+        "similarity_threshold": [
+            0.0, 0.1, 0.2, 0.3, 0.4,
+            0.50, 0.60, 0.70, 0.80, 0.90, 0.95,
+        ],
+        "redundancy_threshold": [
+            0.1, 0.2, 0.3, 0.4,
+            0.50, 0.60, 0.70, 0.80, 0.90, 0.95,
+        ],
     }
 
     def __init__(self, alpha: float = 1.0):
@@ -474,6 +534,44 @@ class PolicyManager:
             arm_index,
         )
         return threshold_value, arm_index, context
+
+    def update_count(self, bandit_name: str) -> int:
+        """Return how many reward updates the named bandit has received
+        (summed over all arms).
+
+        NOTE: for the bootstrap fail-open, prefer
+        ``arm_update_count`` — a nonzero whole-bandit total does not
+        mean the *currently-selected* arm has been validated. This
+        whole-bandit view is retained for logging / diagnostics.
+
+        Args:
+            bandit_name: One of ``bandit_names``.
+
+        Returns:
+            The total reward-update count for that bandit.
+        """
+        return self._get_bandit(bandit_name).update_count
+
+    def arm_update_count(self, bandit_name: str, arm_index: int) -> int:
+        """Return how many reward updates a specific arm has received.
+
+        Zero means the arm has never been rewarded, even if sibling
+        arms of the same bandit have. This is the signal the bootstrap
+        fail-open keys on: the total-wipeout rejection made by a
+        *specific* selected arm should be trusted only once that arm
+        itself has real reward evidence — reward attribution is per-arm
+        (the selected arm is what ``report_reward`` credits), and
+        LinUCB's optimism means a never-rewarded arm can still be
+        selected.
+
+        Args:
+            bandit_name: One of ``bandit_names``.
+            arm_index: The arm returned by ``select_threshold``.
+
+        Returns:
+            The reward-update count for that arm.
+        """
+        return self._get_bandit(bandit_name).arm_update_count(arm_index)
 
     def update(
         self,

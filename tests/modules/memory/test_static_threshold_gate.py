@@ -261,8 +261,11 @@ class AdaptivePrecedenceTest(unittest.TestCase):
     def test_adaptive_branch_wins_on_add(self) -> None:
         # If the static branch had fired we'd see no reward decision
         # tracking; the adaptive branch records a pending decision on
-        # an admitted write. Use low similarities so adaptive admits.
-        provider = FakeProvider(probe_similarities=[0.1])
+        # an admitted write. Use max_sim 0.0 so the candidate is novel
+        # enough to be admitted under ANY novelty arm the bandit picks
+        # (admit iff max_sim < threshold; the lowest novelty arm is now
+        # 0.1, so 0.0 admits regardless of exploration choice).
+        provider = FakeProvider(probe_similarities=[0.0])
         m = _make_manager(
             provider, static_enabled=True, adaptive_enabled=True
         )

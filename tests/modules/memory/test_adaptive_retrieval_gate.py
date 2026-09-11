@@ -87,10 +87,17 @@ def _retrieve_syscall(content="q", user_id="alex", k=10):
     return MemorySyscall("AssistantAgent", q)
 
 
-def _force_thresholds(m, sim=None, red=None):
+def _force_thresholds(m, sim=None, red=None, sim_arm=None):
     """Monkeypatch policy.select_threshold to force deterministic
     thresholds while returning real context vectors/arms. Returns a
-    list recording (bandit_name,) calls."""
+    list recording (bandit_name,) calls.
+
+    ``sim_arm`` optionally PINS the similarity_threshold arm index
+    (and returns the real context for that arm), so a test can control
+    which arm the per-arm bootstrap fail-open checks — otherwise the
+    real (state-dependent) LinUCB argmax is used, which can change after
+    an update and is not safe to rely on for a converged-arm assertion.
+    """
     calls = []
     real = m.policy.select_threshold
 
@@ -99,6 +106,10 @@ def _force_thresholds(m, sim=None, red=None):
     def spy(bandit_name, llm_core, task_type):
         value, arm, ctx = real(bandit_name, llm_core, task_type)
         calls.append(bandit_name)
+        if bandit_name == "similarity_threshold" and sim_arm is not None:
+            from aios.memory.policy import build_context_vector
+            arm = sim_arm
+            ctx = build_context_vector(llm_core, task_type)
         override = forced.get(bandit_name)
         if override is not None:
             return override, arm, ctx
@@ -148,16 +159,26 @@ class FlagOnSimilarityGateTest(unittest.TestCase):
         self.assertIn("similarity_threshold", calls)
 
     def test_threshold_value_is_decisive(self) -> None:
+        from aios.memory.policy import build_context_vector
         results = [
             {"memory_id": "a", "content": "x", "similarity": 0.45},
         ]
-        # threshold 0.5 > 0.45 -> dropped
+        # threshold 0.5 > 0.45 -> dropped. This is a TOTAL wipeout
+        # (the only row is dropped), so it is honored ONLY once the
+        # SELECTED arm is past its bootstrap window (per-arm gate);
+        # otherwise the bootstrap fail-open would keep the row. Pin the
+        # gate to arm 3 and validate THAT arm so the strict drop stands.
         m1 = _make_manager(True, FakeProvider(results))
-        _force_thresholds(m1, sim=0.5, red=0.99)
+        arm = 3
+        m1.policy.update(
+            "similarity_threshold", arm,
+            build_context_vector(m1._latest_llm_core, ""), 1.0
+        )
+        _force_thresholds(m1, sim=0.5, red=0.99, sim_arm=arm)
         m1._pairwise_cosine = lambda a, b: 0.0
         r1 = m1.address_request(_retrieve_syscall())
         self.assertEqual(r1.search_results, [])
-        # threshold 0.4 < 0.45 -> kept
+        # threshold 0.4 < 0.45 -> kept (partial keep; no wipeout).
         m2 = _make_manager(True, FakeProvider(results))
         _force_thresholds(m2, sim=0.4, red=0.99)
         m2._pairwise_cosine = lambda a, b: 0.0
@@ -165,6 +186,41 @@ class FlagOnSimilarityGateTest(unittest.TestCase):
         self.assertEqual(
             [r["memory_id"] for r in r2.search_results], ["a"]
         )
+
+    def test_bootstrap_failopen_vs_converged_wipeout(self) -> None:
+        """Total wipeout fails open while the SELECTED arm is
+        bootstrapping, then is honored once THAT arm has a learning
+        signal (per-arm semantics)."""
+        from aios.memory.policy import build_context_vector
+        results = [
+            {"memory_id": "a", "content": "x", "similarity": 0.45},
+        ]
+        arm = 3
+        # Bootstrap (selected arm has 0 updates): wipeout at sim=0.5 ->
+        # fail open, row survives so a creditable id reaches
+        # report_reward.
+        m_boot = _make_manager(True, FakeProvider(results))
+        self.assertEqual(
+            m_boot.policy.arm_update_count("similarity_threshold", arm),
+            0,
+        )
+        _force_thresholds(m_boot, sim=0.5, red=0.99, sim_arm=arm)
+        m_boot._pairwise_cosine = lambda a, b: 0.0
+        r_boot = m_boot.address_request(_retrieve_syscall())
+        self.assertEqual(
+            [r["memory_id"] for r in r_boot.search_results], ["a"]
+        )
+        # Converged (selected arm >= BOOTSTRAP_MIN_UPDATES): same
+        # wipeout -> honored, returns empty.
+        m_conv = _make_manager(True, FakeProvider(results))
+        m_conv.policy.update(
+            "similarity_threshold", arm,
+            build_context_vector(m_conv._latest_llm_core, ""), 1.0
+        )
+        _force_thresholds(m_conv, sim=0.5, red=0.99, sim_arm=arm)
+        m_conv._pairwise_cosine = lambda a, b: 0.0
+        r_conv = m_conv.address_request(_retrieve_syscall())
+        self.assertEqual(r_conv.search_results, [])
 
 
 class FlagOnRedundancyGateTest(unittest.TestCase):
