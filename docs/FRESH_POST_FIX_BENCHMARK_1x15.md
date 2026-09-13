@@ -165,3 +165,54 @@ too, not just in the bandit internals.
 - Harness results: `../Cerebrum/results/subtask4_fresh_1x15/`
   (`results_kernel_shared_adaptive.json`, `results.csv`)
 - Kernel log: `kernel.log` (PID 69841)
+
+## Investigation closeout (attribution + open questions)
+
+This run closes the "Close the Adaptive-Policy Reward Loop" investigation
+chain. Recorded here so a future session or reviewer does not overclaim
+from one small run.
+
+### Confirmed as of commit `d3a79cb`
+- **Reward normalization** (`286c10c`, `r / JUDGE_MAX_SCORE`) and the
+  **per-arm bootstrap fail-open + downward-extended action spaces**
+  (`b6ffd7e`) are both present and working: the loop closes (119 reward
+  events), all three bandits leave arm 0, and both fail-open branches
+  engage as designed.
+- **The original "15/15 identical" / flat-reward / all-arm-0 symptom is
+  attributed to TIMELINE, not to a live bug in current code.** Per
+  Subtask 2's reconciliation (`docs/BENCHMARK_TIMELINE_RECONCILIATION.md`)
+  and Subtask 3's assessment (`docs/POST_BOOTSTRAP_FIX_SYMPTOM_STATUS.md`):
+  the identical-results run predated `b6ffd7e` (and the only prior
+  closure evidence ran on an uncommitted working tree with the old 6-arm
+  space). On committed HEAD with the extended action space, the symptom
+  does not reproduce. **No bug was found or fixed in this chain — the
+  fixes already in history resolved it; this run is the confirmation.**
+
+### Explicitly OPEN (not fixed, not broken — untested at this scale)
+1. **Are 0.8 / 0.7 / 0.2 good converged values?** UNKNOWN. This run shows
+   similarity concentrating on arm 8 (0.8), redundancy on arm 6 (0.7),
+   novelty on arm 1 (0.2), but N=15 on one user cannot tell "converged to
+   a *useful* threshold" from "converged to a *reachable* one." Only a
+   larger, multi-user run with held-out evaluation can answer this. The
+   observed concentration is partly LinUCB's mandatory initial optimism
+   sweep, not proof of learned optimality.
+2. **Are `similarity_threshold` and `redundancy_threshold` two
+   independent signals or one coupled signal?** In this run's timeline
+   they moved and concentrated *together* (both swept 0→top then settled,
+   n=74 each, reward n=59 each). They co-fire on every retrieve decision
+   and share equal-split reward attribution, so this run cannot separate
+   them. Whether they carry genuinely independent learning signal remains
+   untested — a larger run must instrument per-gate credit (or decorrelate
+   their firing) to answer it. This matches the standing "similarity and
+   redundancy are ONE shared signal" observation in
+   `docs/AIOS_ARM_CONVERGENCE_REPORT.md` and `memory-providers.md`; it is
+   recorded here as still-open, not resolved.
+
+### Related docs (this chain)
+- `docs/LINUCB_IMPLEMENTATION_LOCATIONS.md` — confirmed code locations.
+- `docs/BENCHMARK_TIMELINE_RECONCILIATION.md` — 150-trial run dated
+  between `286c10c` and `b6ffd7e`.
+- `docs/POST_BOOTSTRAP_FIX_SYMPTOM_STATUS.md` — pre-commit closure
+  evidence used the old 6-arm space; current-HEAD status was open.
+- `docs/REWARD_NORMALIZATION_FIX_REPORT.md` — the normalization fix
+  (stale "six buckets" wording corrected to note the later extension).

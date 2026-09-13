@@ -22,8 +22,18 @@ arm's exploration bonus is `≈ 1.7`. A reward of up to 5.0 dwarfs that
 `~1.7` bonus, so once any single arm accrued reward its exploitation
 term dominated every other arm's exploration optimism permanently. The
 bandit collapsed onto one arm (the "always picks arm 0 / never learns"
-symptom) instead of exploring the six threshold buckets and learning a
-per-context best. The reward scale, not the algorithm, was the defect.
+symptom) instead of exploring its discrete threshold buckets and
+learning a per-context best. The reward scale, not the algorithm, was
+the defect.
+
+> Note (added retroactively): when this report was written each bandit's
+> action space had **6** buckets, so earlier drafts said "the six
+> threshold buckets." Commit `b6ffd7e` later extended the spaces downward
+> (`similarity_threshold` → 11 arms, `novelty_threshold` /
+> `redundancy_threshold` → 10 arms each). The normalization fix described
+> here is independent of the arm count, so the wording was generalized to
+> "its discrete threshold buckets." See `docs/FRESH_POST_FIX_BENCHMARK_1x15.md`
+> and `aios/memory/policy.py` `ACTION_SPACES` for the current arms.
 
 ## 2. The fix
 
