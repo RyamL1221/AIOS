@@ -507,7 +507,13 @@ async def select_llm(request: Request):
     logger.info(f"Received select LLM request: {data}")
 
     if data:
-        selected_llms["llms"] = copy.deepcopy(data)
+        # The request contract is {"llms": [{"name", "backend"}, ...]}.
+        # Store the inner list, not the whole body — writing the whole
+        # body double-nested it as {"llms": {"llms": [...]}}, which then
+        # broke every reader of selected_llms["llms"]. Guard with
+        # .get("llms", []) so a malformed body degrades to "nothing
+        # selected" rather than KeyError-ing the endpoint.
+        selected_llms["llms"] = copy.deepcopy(data.get("llms", []))
         return {"status": "success", "message": f"LLMs {selected_llms['llms']} selected"}
     else:
         return {"status": "warning", "message": "No LLM selected"}
@@ -803,9 +809,9 @@ async def handle_query(request: QueryRequest):
                 if len(selected_llms["llms"]) > 0:
                     # Check if selected LLMs contain all required LLMs
                     for required_llm in query_required_llms:
-                        if not any(required_llm["name"] == sel["name"] and required_llm["provider"] == sel["provider"] 
+                        if not any(required_llm["name"] == sel["name"] and required_llm["backend"] == sel["backend"] 
                                 for sel in selected_llms["llms"]):
-                            raise ValueError(f"Required LLM {required_llm['name']} from {required_llm['provider']} is not selected")
+                            raise ValueError(f"Required LLM {required_llm['name']} from {required_llm['backend']} is not selected")
                         
             query = LLMQuery(
                 llms=query_required_llms,
