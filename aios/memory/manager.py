@@ -329,6 +329,47 @@ class MemoryManager:
             The highest similarity in ``[?, 1]`` among existing
             memories, or ``0.0`` if none.
         """
+        max_sim, _ = self._candidate_novelty_probe(
+            content, user_id, memory_type=None
+        )
+        return max_sim
+
+    def _candidate_novelty_probe(
+        self,
+        content: str,
+        user_id: Optional[str],
+        memory_type: Optional[str],
+    ) -> "tuple[float, bool]":
+        """Single-round-trip novelty probe: max similarity + type presence.
+
+        Wraps the same ``retrieve_memory(MemoryQuery(k=5, user_id=...))``
+        call that ``_candidate_max_similarity`` uses and, from the *one*
+        result set, derives both signals the adaptive novelty gate
+        needs:
+
+        - ``max_sim``: the highest ``similarity`` among existing
+          memories (``0.0`` when none / unavailable — treat as
+          maximally novel), identical to ``_candidate_max_similarity``.
+        - ``has_type``: whether any returned memory carries
+          ``metadata["memory_type"] == memory_type``. Used by the
+          per-task-type bootstrap fail-open: when ``False`` (no memory
+          of this type exists yet for this user), the gate admits the
+          first-of-type candidate even if the threshold would reject.
+          Always ``False`` when ``memory_type`` is falsy (nothing to
+          bootstrap).
+
+        This is a read-only probe; it does not write or mutate state.
+
+        Args:
+            content: The candidate memory content.
+            user_id: The scope for the search.
+            memory_type: The candidate's ``memory_type`` (from
+                ``_note_task_type``), or ``None`` to skip the
+                type-presence check.
+
+        Returns:
+            ``(max_sim, has_type)``.
+        """
         from cerebrum.memory.apis import MemoryQuery
 
         probe = MemoryQuery(
@@ -345,7 +386,7 @@ class MemoryManager:
                 "treating candidate as novel",
                 e,
             )
-            return 0.0
+            return 0.0, False
 
         results = getattr(resp, "search_results", None) or []
         sims = [
@@ -353,9 +394,19 @@ class MemoryManager:
             for r in results
             if isinstance(r, dict) and r.get("similarity") is not None
         ]
-        if not sims:
-            return 0.0
-        return float(max(sims))
+        max_sim = float(max(sims)) if sims else 0.0
+
+        has_type = False
+        if memory_type:
+            for r in results:
+                if not isinstance(r, dict):
+                    continue
+                meta = r.get("metadata") or {}
+                if meta.get("memory_type") == memory_type:
+                    has_type = True
+                    break
+
+        return max_sim, has_type
 
     def _record_decision(self, memory_id: str, decision) -> None:
         """Append an adaptive decision tuple for *memory_id*.
@@ -423,10 +474,23 @@ class MemoryManager:
                 trial_id, "novelty_threshold", "novelty",
                 threshold, arm_index, llm_core, task_type, context,
             )
-        max_sim = self._candidate_max_similarity(
-            memory_note.content, user_id
+        max_sim, has_type = self._candidate_novelty_probe(
+            memory_note.content, user_id, task_type
         )
-        admit = max_sim < threshold
+        admit = self._novelty_admits(max_sim, threshold)
+        # Per-task-type bootstrap fail-open (adaptive path ONLY).
+        # If the threshold would reject the candidate but there is not
+        # yet a single memory of this ``memory_type`` for this user
+        # (``has_type`` is False), admit it anyway so the type can
+        # bootstrap. Without this, an exploring bandit that picks a
+        # strict novelty arm (e.g. 0.1-0.2) rejects the first-of-type
+        # write, the type never gets a memory, and every subsequent
+        # write of that type is rejected against cross-type neighbors
+        # forever. The check is against real storage state, so once one
+        # memory of this type exists it stops firing (see below).
+        # The static/tuned and baseline paths never reach this branch.
+        if not admit and not has_type:
+            admit = True
         logger.info(
             "novelty gate: llm=%s task=%s threshold=%.3f "
             "max_sim=%.3f -> admit=%s",
