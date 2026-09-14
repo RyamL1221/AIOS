@@ -491,6 +491,15 @@ class MemoryManager:
         # The static/tuned and baseline paths never reach this branch.
         if not admit and not has_type:
             admit = True
+            logger.info(
+                "novelty gate BOOTSTRAP FAIL-OPEN: task_type=%s "
+                "bootstrapping (0 existing memories of this type for "
+                "this user); admitting first write despite "
+                "threshold=%.3f max_sim=%.3f",
+                task_type,
+                threshold,
+                max_sim,
+            )
         logger.info(
             "novelty gate: llm=%s task=%s threshold=%.3f "
             "max_sim=%.3f -> admit=%s",
