@@ -109,6 +109,10 @@ class MockMemoryManager(KernelRetrievalDouble):
         self.provider = provider
         self.known_user_ids = known_user_ids or set()
         self.barrier = MemoryWriteBarrier(config={})
+        self.latest_user_id = None
+
+    def _register_user_id(self, user_id: str) -> None:
+        self.known_user_ids.add(user_id)
 
 
 # ------------------------------------------------------------------
@@ -290,10 +294,9 @@ class TestP4ConversationExtractorScoping(unittest.TestCase):
         # Call the synchronous internal method directly to
         # avoid threading complexity in tests.
         extractor._store_conversation(
-            agent_name=agent_name,
-            user_message=user_msg,
-            assistant_message=assistant_msg,
-            user_id=user_id,
+            extractor._build_syscall(
+                agent_name, user_msg, assistant_msg, user_id,
+            )
         )
 
         # Verify a memory was added.

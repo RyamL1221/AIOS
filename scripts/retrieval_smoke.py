@@ -96,12 +96,64 @@ def check_own_roundtrip_without_metadata():
 
 
 def check_get_memory_visibility():
-    memory_id = write("default", "profile_agent", f"held {RUN}")
-    allowed = memory("profile_agent", "get_memory", memory_id=memory_id)
+    user = f"smoke_{RUN}_get"
+    memory_id = write(user, "profile_agent", f"held {RUN}")
+    allowed = memory(
+        "profile_agent", "get_memory", memory_id=memory_id, user_id=user
+    )
     assert allowed["response"]["content"] == f"held {RUN}", allowed
-    denied = memory("assistant_agent", "get_memory", memory_id=memory_id)
+    denied = memory(
+        "assistant_agent", "get_memory", memory_id=memory_id, user_id=user
+    )
     assert not denied["response"]["success"], denied
     assert denied["response"]["content"] is None, denied
+
+
+def check_update_delete_owner_only():
+    user = f"smoke_{RUN}_owner"
+    for policy in ("private", "shared"):
+        memory_id = write(user, "profile_agent", f"{policy} v1", policy)
+        for operation, extra in (
+            ("update_memory", {"content": "stolen"}),
+            ("remove_memory", {}),
+        ):
+            refused = memory(
+                "assistant_agent",
+                operation,
+                memory_id=memory_id,
+                user_id=user,
+                **extra,
+            )
+            assert refused["response"]["error"] == "Memory not found", refused
+        contents = {r["content"] for r in search("profile_agent", user)}
+        assert f"{policy} v1" in contents, contents
+        assert "stolen" not in contents, contents
+        updated = memory(
+            "profile_agent",
+            "update_memory",
+            memory_id=memory_id,
+            content=f"{policy} v2",
+            user_id=user,
+        )
+        assert updated["response"]["success"], updated
+        contents = {r["content"] for r in search("profile_agent", user)}
+        assert f"{policy} v2" in contents, contents
+        removed = memory(
+            "profile_agent", "remove_memory", memory_id=memory_id, user_id=user
+        )
+        assert removed["response"]["success"], removed
+        contents = {r["content"] for r in search("profile_agent", user)}
+        assert f"{policy} v2" not in contents, contents
+
+
+def check_conversation_write_visible_immediately():
+    user = f"smoke_{RUN}_conversation"
+    chat(user)
+    rows = search("assistant_agent", user)
+    kinds = [r["metadata"]["memory_type"] for r in rows]
+    assert kinds == ["conversation"], rows
+    assert rows[0]["metadata"]["sharing_policy"] == "private", rows
+    assert search("profile_agent", user) == [], "conversation leaked"
 
 
 def check_memory_id_and_update():
@@ -144,6 +196,8 @@ CHECKS = [
     check_privacy_gap,
     check_own_roundtrip_without_metadata,
     check_get_memory_visibility,
+    check_update_delete_owner_only,
+    check_conversation_write_visible_immediately,
     check_memory_id_and_update,
     check_cap_and_top_k,
 ]

@@ -2,15 +2,18 @@
 Conversation Extractor for the AIOS personalization pipeline.
 
 Extracts user+assistant conversation pairs from completed LLM turns
-and stores them as memories via the configured memory provider.
+and stores them as memories through ``MemoryManager.address_request``.
 Runs asynchronously in a daemon thread so it never blocks LLM responses.
 """
 import logging
 import threading
 from typing import TYPE_CHECKING
 
+from cerebrum.memory.apis import MemoryQuery
+
 if TYPE_CHECKING:
     from aios.memory.manager import MemoryManager
+    from aios.syscall.memory import MemorySyscall
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +21,10 @@ logger = logging.getLogger(__name__)
 class ConversationExtractor:
     """Extracts conversation turns and stores them as memories.
 
-    Uses the memory provider's ``add_memory`` operation (never
-    ``add_agentic_memory``) to persist conversation pairs scoped
-    to the originating agent name.
+    Sends ``add_memory`` (never ``add_agentic_memory``) through the
+    manager, so a conversation write gets the same barrier stamp,
+    owner, and user registration as any other write. Conversation
+    memories are private to the originating agent.
     """
 
     def __init__(
@@ -66,15 +70,19 @@ class ConversationExtractor:
         if not self.enabled:
             return
 
+        syscall = None
         try:
+            syscall = self._build_syscall(
+                agent_name, user_message, assistant_message, user_id,
+            )
+            # Stamp here, on the request thread, and not in the
+            # background: the chat response must not return before the
+            # write is pending, or a retrieval issued right after it
+            # could snapshot the barrier too early and miss the write.
+            self.memory_manager.stamp_syscall(syscall)
             thread = threading.Thread(
                 target=self._store_conversation,
-                args=(
-                    agent_name,
-                    user_message,
-                    assistant_message,
-                    user_id,
-                ),
+                args=(syscall,),
                 daemon=True,
             )
             thread.start()
@@ -83,63 +91,84 @@ class ConversationExtractor:
                 "Failed to spawn extraction thread",
                 exc_info=True,
             )
+            self._release(syscall)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _store_conversation(
+    def _build_syscall(
         self,
         agent_name: str,
         user_message: str,
         assistant_message: str,
         user_id: str | None = None,
-    ) -> None:
+    ) -> "MemorySyscall":
+        """Build the write, as a syscall that only carries data: it goes
+        straight to ``address_request`` and is never started or queued.
+
+        Uses the resolved user_id when available so the memory lands in
+        the same Mem0 scope as profile/task memories written by other
+        agents for this user. Falls back to agent_name.
+        """
+        from aios.syscall.memory import MemorySyscall
+
+        query = MemoryQuery(
+            operation_type="add_memory",
+            params={
+                "content": self._build_conversation_content(
+                    user_message, assistant_message,
+                ),
+                "context": "conversation",
+                "category": "conversation",
+                "metadata": {
+                    "user_id": user_id or agent_name,
+                    "owner_agent": agent_name,
+                    "memory_type": "conversation",
+                    "sharing_policy": "private",
+                },
+            },
+        )
+        return MemorySyscall(agent_name, query)
+
+    def _release(self, syscall: "MemorySyscall | None") -> None:
+        """Release a write that failed before ``address_request`` could.
+        A second release of the same write is a no-op."""
+        seq_no = getattr(syscall, "barrier_seq", 0)
+        if seq_no:
+            self.memory_manager.barrier.release(
+                syscall.query.params["metadata"]["user_id"],
+                seq_no,
+                success=False,
+            )
+
+    def _store_conversation(self, syscall: "MemorySyscall") -> None:
         """Synchronous storage called from the background thread."""
+        metadata = syscall.query.params["metadata"]
         try:
-            from aios.memory.note import MemoryNote
-
-            content = self._build_conversation_content(
-                user_message, assistant_message,
-            )
-
-            # Use the resolved user_id when available so
-            # the conversation memory lands in the same
-            # Mem0 scope as profile/task memories written
-            # by other agents for this user.  Fall back to
-            # agent_name for backward compatibility.
-            effective_user_id = user_id or agent_name
-
-            memory_note = MemoryNote(
-                content=content,
-                context="conversation",
-                category="conversation",
-            )
-            memory_note.metadata = {
-                "user_id": effective_user_id,
-                "owner_agent": agent_name,
-                "memory_type": "conversation",
-                "sharing_policy": "private",
-            }
-
-            result = self.memory_manager.provider.add_memory(
-                memory_note
-            )
-
+            response = self.memory_manager.address_request(syscall)
+            if not response.success:
+                logger.warning(
+                    "Conversation extraction failed for user_id=%s: %s",
+                    metadata["user_id"],
+                    response.error,
+                )
+                return
             logger.info(
                 "Stored conversation memory for "
                 "user_id=%s (agent=%s): %s",
-                effective_user_id,
-                agent_name,
-                content[:80],
+                metadata["user_id"],
+                syscall.agent_name,
+                syscall.query.params["content"][:80],
             )
-        except Exception as e:
+        except Exception:
             logger.warning(
                 "Conversation extraction failed for "
                 "user_id=%s",
-                agent_name,
+                metadata["user_id"],
                 exc_info=True,
             )
+            self._release(syscall)
 
     @staticmethod
     def _build_conversation_content(

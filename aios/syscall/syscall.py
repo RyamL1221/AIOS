@@ -126,19 +126,9 @@ class SyscallExecutor:
             if not syscall.get_pid():
                 syscall.set_pid(syscall_id)
 
-            # Acceptance-time barrier stamping for memory writes.
-            # The MemoryWriteBarrier (owned by MemoryManager) must
-            # record this write *before* the syscall is enqueued so
-            # that any concurrent retrieval scoped to the same
-            # ``user_id`` observes the pending entry when it captures
-            # its barrier_snapshot. ``add_agentic_memory`` is included
-            # defensively even though ``execute_request`` typically
-            # rewrites it to ``add_memory`` before reaching this path.
-            # When ``self.memory_manager`` was not injected (tests, or
-            # before launch wiring runs), fall back to the
-            # ``context_injector``'s reference; when neither is wired,
-            # skip stamping entirely so the sentinel ``0`` makes the
-            # eventual ``release`` a no-op.
+            # Stamp memory syscalls before they are enqueued. See
+            # ``MemoryManager.stamp_syscall``. When no manager is wired
+            # (tests), the sentinel ``0`` makes ``release`` a no-op.
             from aios.syscall.memory import MemorySyscall
             if isinstance(syscall, MemorySyscall):
                 mm = self.memory_manager or (
@@ -146,27 +136,7 @@ class SyscallExecutor:
                     if self.context_injector else None
                 )
                 if mm is not None:
-                    op = syscall.query.operation_type
-                    if op in ("add_memory", "add_agentic_memory"):
-                        uid = (
-                            syscall.query.params.get("metadata", {})
-                            .get("user_id")
-                        )
-                        if uid:
-                            syscall.barrier_seq = mm.barrier.acquire(uid)
-                    elif op in (
-                        "retrieve_memory",
-                        "retrieve_memory_raw",
-                    ):
-                        # Capture the high-water mark *at acceptance*
-                        # so any pending writes stamped with later
-                        # sequence numbers do not block this
-                        # retrieval (Clause 3.x ordering preservation).
-                        uid = syscall.query.params.get("user_id")
-                        if uid:
-                            syscall.barrier_snapshot = (
-                                mm.barrier.snapshot(uid)
-                            )
+                    mm.stamp_syscall(syscall)
 
             if isinstance(syscall, LLMSyscall):
                 global_llm_req_queue_add_message(syscall)

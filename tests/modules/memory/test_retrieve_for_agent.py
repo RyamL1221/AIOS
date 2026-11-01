@@ -358,7 +358,7 @@ def sdk_get(manager, agent):
 
 def test_get_memory_hides_another_agents_private_memory():
     manager = make_manager([])
-    manager.provider.get_memory.return_value = stored_memory(
+    manager.provider.get_memory_for_user.return_value = stored_memory(
         "agent_a", "private"
     )
     response = sdk_get(manager, "agent_b")
@@ -369,11 +369,11 @@ def test_get_memory_hides_another_agents_private_memory():
 
 def test_get_memory_allows_owner_and_shared():
     manager = make_manager([])
-    manager.provider.get_memory.return_value = stored_memory(
+    manager.provider.get_memory_for_user.return_value = stored_memory(
         "agent_a", "private"
     )
     assert sdk_get(manager, "agent_a").content == "body"
-    manager.provider.get_memory.return_value = stored_memory(
+    manager.provider.get_memory_for_user.return_value = stored_memory(
         "agent_a", "shared"
     )
     assert sdk_get(manager, "agent_b").content == "body"
@@ -381,7 +381,7 @@ def test_get_memory_allows_owner_and_shared():
 
 def test_get_memory_fails_closed_without_an_owner():
     manager = make_manager([])
-    manager.provider.get_memory.return_value = MemoryResponse(
+    manager.provider.get_memory_for_user.return_value = MemoryResponse(
         success=True, content="body", metadata={}
     )
     assert not sdk_get(manager, "agent_b").success

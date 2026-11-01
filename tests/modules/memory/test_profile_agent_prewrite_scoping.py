@@ -611,6 +611,13 @@ class ProfileAgentPreWriteScopingPreservationTests(
         # that's the expected mock behavior, not a test failure
         self.assertIsNotNone(get_resp)
 
+        # By-id writes are owner-only, so these need a stored memory.
+        provider.get_memory = lambda memory_id: MemoryResponse(
+            success=True,
+            content="stored",
+            metadata={"owner_agent": agent_name},
+        )
+
         # --- update_memory: verify it processes normally ---
         update_query = MemoryQuery(
             operation_type="update_memory",

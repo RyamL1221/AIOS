@@ -389,10 +389,12 @@ class TestMultiUserIsolation(unittest.TestCase):
             config={"auto_extract": True},
         )
         extractor._store_conversation(
-            agent_name="assistant_agent",
-            user_message="Tell me about my preferences",
-            assistant_message="You prefer dark mode.",
-            user_id=diag["resolved_user_id"],
+            extractor._build_syscall(
+                "assistant_agent",
+                "Tell me about my preferences",
+                "You prefer dark mode.",
+                diag["resolved_user_id"],
+            )
         )
 
         # The add_memory call should have stored with

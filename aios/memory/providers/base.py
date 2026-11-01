@@ -6,7 +6,7 @@ implementations must follow. The interface enables pluggable memory backends
 while maintaining a consistent API across different storage solutions.
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
@@ -247,6 +247,23 @@ class MemoryProvider(ABC):
         """
         pass
     
+    def get_memory_for_user(
+        self, memory_id: str, user_id: Optional[str] = None
+    ) -> MemoryResponse:
+        """Retrieve a memory by ID from ``user_id``'s storage.
+
+        Override in a provider that partitions storage by user, where
+        an id alone cannot find a memory. ``None`` is the default scope.
+        """
+        return self.get_memory(memory_id)
+
+    def remove_memory_for_user(
+        self, memory_id: str, user_id: Optional[str] = None
+    ) -> MemoryResponse:
+        """Remove a memory by ID from ``user_id``'s storage. See
+        ``get_memory_for_user``."""
+        return self.remove_memory(memory_id)
+
     def close(self) -> None:
         """Clean up resources.
         

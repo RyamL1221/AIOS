@@ -22,6 +22,7 @@ do not describe this branch.
 | # | Subtask | Status |
 |---|---------|--------|
 | 1 | Single kernel retrieval path | Done |
+| 2 | Conversation writes through the kernel; owner-only by-id writes | Done |
 
 ### Subtask 1
 
@@ -29,6 +30,12 @@ do not describe this branch.
 Details, behavior changes and the before/after result are in
 `docs/RETRIEVAL_PATH.md`. Smoke: `scripts/retrieval_smoke.py` against a
 running kernel.
+
+### Subtask 2
+
+Every write reaches the store through `address_request`. The extractor
+stamps its write on the request thread, and by-id update and delete are
+owner-only. See "Writes" in `docs/RETRIEVAL_PATH.md`.
 
 ## Test baselines
 
@@ -48,18 +55,23 @@ These fail on `workshop-postrun` too and are not caused by later work.
    note: gpt-4o ran before Cerebrum `6255bee`, llama and qwen after.
 3. `config.yaml` (0.3 / 10 / 2000) and `config.yaml.example`
    (0.5 / 5 / 1500) still differ.
-4. `Mem0Provider.add_memory` still writes `/tmp/per_user_proof.txt`.
-5. `ConversationExtractor` writes directly to the provider, outside the
-   write barrier.
-6. `update_memory` and `remove_memory` by id have no visibility check.
-7. `get_memory` on Mem0 only reads the default user's collection: it
-   receives an id and no user, so a memory in a per-user collection is
-   "not found" even for its owner.
-8. `get_memory` on Zep always answers "not found": Zep episodes carry no
-   owner, so the visibility rule fails closed.
+4. `get_memory`, `update_memory` and `remove_memory` on Zep always
+   answer "not found": Zep episodes carry no owner, so the rules fail
+   closed. The same goes for any row stored without an `owner_agent`.
+5. `update_memory` is not stamped against the write barrier, so a
+   retrieval right after an update can read the old content.
+6. `test_write_barrier_stress.py::Scenario2DisjointUsersTests` is flaky:
+   it compares sub-millisecond medians. It failed 5 of 8 runs at
+   `workshop-postrun`, 3 of 8 at `neurips-subtask-01`, 6 of 8 at
+   Subtask 2. Treat a failure of it alone as noise.
 
 ## Fixed
 
 - `get_memory` visibility: an agent reads a memory by id only if it owns
   it or it is shared. Anything else gets the same "Memory not found" as
   a missing id.
+- `get_memory` and `remove_memory` on Mem0 find rows in per-user
+  collections (`*_for_user` provider methods).
+- `update_memory` and `remove_memory` by id are owner-only.
+- `ConversationExtractor` writes through the manager, inside the barrier.
+- `/tmp/per_user_proof.txt` writes removed.

@@ -239,6 +239,59 @@ class MemoryManager:
             return WaitOutcome.BYPASSED
         return barrier.wait_until_drained(user_id, barrier_snapshot)
 
+    def stamp_syscall(self, memory_syscall) -> None:
+        """Stamp a memory syscall against the write barrier.
+
+        The only stamping site. It must run before the write can be
+        observed as accepted: a write records itself before it is
+        enqueued, so any retrieval accepted later sees it pending; a
+        retrieval records the high-water mark at acceptance, so later
+        writes never delay it. ``add_agentic_memory`` is included
+        because this can run before ``execute_request`` rewrites it.
+        """
+        query = memory_syscall.query
+        operation = query.operation_type
+        if operation in ("add_memory", "add_agentic_memory"):
+            user_id = query.params.get("metadata", {}).get("user_id")
+            if user_id:
+                memory_syscall.barrier_seq = self.barrier.acquire(user_id)
+        elif operation in ("retrieve_memory", "retrieve_memory_raw"):
+            user_id = query.params.get("user_id")
+            if user_id:
+                memory_syscall.barrier_snapshot = self.barrier.snapshot(
+                    user_id
+                )
+
+    @staticmethod
+    def _can_write(agent_name: str, metadata: Optional[dict]) -> bool:
+        """Only the owner may update or delete a memory, shared or not.
+        Fails closed: a memory with no owner is not writable."""
+        return (metadata or {}).get("owner_agent") == agent_name
+
+    def _locate_memory(
+        self, query: MemoryQuery, agent_name: str
+    ) -> MemoryResponse:
+        """Fetch a memory named by id, wherever it is stored.
+
+        Mem0 keeps one collection per user, so an id alone cannot find
+        a row. Uses the caller's user_id when given; otherwise tries the
+        agent's own scope, then the provider's default.
+        """
+        params = query.params
+        user_id = (
+            params.get("user_id")
+            or (params.get("metadata") or {}).get("user_id")
+        )
+        scopes = [user_id] if user_id else [agent_name, None]
+        response = MemoryResponse(success=False, error="Memory not found")
+        for scope in scopes:
+            response = self.provider.get_memory_for_user(
+                params["memory_id"], scope
+            )
+            if response.success:
+                break
+        return response
+
     @staticmethod
     def _can_read(agent_name: str, metadata: Optional[dict]) -> bool:
         """Apply the visibility rule to one memory read by id. Fails
@@ -610,14 +663,37 @@ class MemoryManager:
                 )
         
         elif operation_type == "remove_memory":
-            return self.provider.remove_memory(query.params["memory_id"])
+            found = self._locate_memory(query, memory_syscall.agent_name)
+            if not found.success or not self._can_write(
+                memory_syscall.agent_name, found.metadata
+            ):
+                return MemoryResponse(
+                    success=False, error="Memory not found"
+                )
+            return self.provider.remove_memory_for_user(
+                query.params["memory_id"],
+                found.metadata.get("user_id") or None,
+            )
         
         elif operation_type == "update_memory":
+            found = self._locate_memory(query, memory_syscall.agent_name)
+            if not found.success or not self._can_write(
+                memory_syscall.agent_name, found.metadata
+            ):
+                return MemoryResponse(
+                    success=False, error="Memory not found"
+                )
             memory_note = self._analyze_query_to_memory(query)
+            # Route to the collection the memory was found in.
+            stored_user_id = found.metadata.get("user_id")
+            if stored_user_id:
+                if memory_note.metadata is None:
+                    memory_note.metadata = {}
+                memory_note.metadata["user_id"] = stored_user_id
             return self.provider.update_memory(memory_note)
         
         elif operation_type == "get_memory":
-            resp = self.provider.get_memory(query.params["memory_id"])
+            resp = self._locate_memory(query, memory_syscall.agent_name)
             if resp.success and not self._can_read(
                 memory_syscall.agent_name, resp.metadata
             ):

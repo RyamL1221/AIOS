@@ -12,6 +12,9 @@ class KernelRetrievalDouble:
 
     relevance_threshold = 0.0
     retrieve_for_agent = MemoryManager.retrieve_for_agent
+    address_request = MemoryManager.address_request
+    _analyze_query_to_memory = MemoryManager._analyze_query_to_memory
+    stamp_syscall = MemoryManager.stamp_syscall
     _resolve_user_id = MemoryManager._resolve_user_id
     _await_pending_writes = MemoryManager._await_pending_writes
     _fetch_candidates = MemoryManager._fetch_candidates

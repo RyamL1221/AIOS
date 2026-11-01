@@ -784,8 +784,6 @@ class Mem0Provider(MemoryProvider):
             MemoryResponse with success=True and memory_id on success,
             or success=False with error message on failure.
         """
-        with open("/tmp/per_user_proof.txt", "a") as _f:
-            _f.write("add_memory ENTERED\n")
         from aios.memory.note import MemoryNote
         
         if not isinstance(memory_note, MemoryNote):
@@ -869,11 +867,6 @@ class Mem0Provider(MemoryProvider):
                 f"user_id={user_id}\n"
             )
             sys.stderr.flush()
-            with open("/tmp/per_user_proof.txt", "a") as f:
-                f.write(
-                    f"add_memory user_id={user_id} "
-                    f"client_id={id(client)}\n"
-                )
             logger.debug(
                 "Routing add_memory to user_id=%s", user_id
             )
@@ -954,12 +947,17 @@ class Mem0Provider(MemoryProvider):
             MemoryResponse with success=True on successful removal,
             or success=False with error message on failure.
         """
+        return self.remove_memory_for_user(memory_id)
+
+    def remove_memory_for_user(
+        self, memory_id: str, user_id: Optional[str] = None
+    ) -> MemoryResponse:
+        """Remove a memory from ``user_id``'s collection, or the
+        default user's when ``None``."""
         try:
-            # Without additional context, route to the default
-            # user's collection. Callers that need precise
-            # routing should ensure the memory was written to the
-            # correct per-user collection.
-            user_id = self._resolve_op_user_id()
+            user_id = self._resolve_op_user_id(
+                params={"user_id": user_id}
+            )
             client = self._get_client_for_user(user_id)
             logger.debug(
                 "Routing remove_memory to user_id=%s",
@@ -1024,6 +1022,13 @@ class Mem0Provider(MemoryProvider):
             MemoryResponse with success=True, content, and metadata on success,
             or success=False with error message if memory not found.
         """
+        return self.get_memory_for_user(memory_id)
+
+    def get_memory_for_user(
+        self, memory_id: str, user_id: Optional[str] = None
+    ) -> MemoryResponse:
+        """Retrieve a memory from ``user_id``'s collection, or the
+        default user's when ``None``."""
         if not isinstance(memory_id, str):
             return MemoryResponse(
                 success=False,
@@ -1031,9 +1036,9 @@ class Mem0Provider(MemoryProvider):
             )
         
         try:
-            # get_memory only receives memory_id — no user_id
-            # context. Route to the default user's collection.
-            user_id = self._resolve_op_user_id()
+            user_id = self._resolve_op_user_id(
+                params={"user_id": user_id}
+            )
             client = self._get_client_for_user(user_id)
             logger.debug(
                 "Routing get_memory to user_id=%s",

@@ -86,11 +86,39 @@ be injected twice when both rows are own-list rows.
 ## Not on this path
 
 `get_memory` applies the same owner-or-shared rule in `address_request`
-(`_can_read`), failing closed on a missing owner. `update_memory` and
-`remove_memory` by id have no visibility check. `retrieve_memory_raw` is
-reachable only inside `add_agentic_memory`, and its provider-level
+(`_can_read`), failing closed on a missing owner. `retrieve_memory_raw`
+is reachable only inside `add_agentic_memory`, and its provider-level
 filter still depends on the caller's `sharing_policy`, and still has
 Mem0's 20-row limit.
+
+## Writes
+
+Every write reaches the store through `MemoryManager.address_request`.
+
+**One stamping site.** `MemoryManager.stamp_syscall` holds the barrier
+stamping. `SyscallExecutor` calls it before enqueueing a memory syscall;
+`ConversationExtractor.extract_async` calls it directly. The extractor
+does not go through the executor: that would block on the memory queue,
+and from the background thread the stamp could land after the chat
+response.
+
+**Stamped on the request thread.** The write itself runs on a daemon
+thread, but `extract_async` stamps it first, before `execute_request`
+returns. A retrieval accepted after the chat response therefore always
+finds the write pending and waits for it. `address_request` releases it
+in a `finally`; the extractor releases it if the thread cannot start.
+The wait is bounded by `write_barrier.timeout_ms`, as for any write.
+
+**By-id writes are owner-only.** `update_memory` and `remove_memory`
+first fetch the memory; anyone but its owner gets "Memory not found",
+also for a shared memory, which others can read. The fetch uses the
+caller's `user_id` when given, otherwise the agent's own scope, then the
+provider's default, because Mem0 cannot find a row from its id alone.
+
+A conversation memory is private to the agent that had the conversation,
+so that agent can see it on later turns and no other agent can. In a
+single-turn trial it is written after injection, so it never appears in
+that trial's `own_fetched` or `after_visibility`.
 
 ## Before/after check
 
