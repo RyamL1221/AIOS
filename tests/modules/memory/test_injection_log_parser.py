@@ -517,3 +517,18 @@ class TestPreservationExistingKernelPaths:
             "MemoryManager attributes changed after "
             "importing injection_log_parser"
         )
+
+
+def test_parses_the_current_resolved_user_id_line():
+    """The injector logs ``resolved_user_id=``, not ``user_id=``."""
+    from aios.memory.injection_log_parser import parse_injection_line
+
+    record = parse_injection_line(
+        "2026-11-01 10:00:00 - aios.memory.context_injector - INFO - "
+        "Injected 3 memories (1 own + 2 shared) for "
+        "agent=assistant_agent, resolved_user_id=alice_1"
+    )
+    assert record is not None
+    assert record.injected_count == 3
+    assert record.agent_name == "assistant_agent"
+    assert record.user_id == "alice_1"

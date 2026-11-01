@@ -205,6 +205,7 @@ class ZepProvider(MemoryProvider):
                          or {})
                 )
                 search_results.append({
+                    "memory_id": getattr(edge, 'uuid_', None),
                     "content": fact,
                     "keywords": [],
                     "tags": [],

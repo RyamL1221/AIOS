@@ -8,7 +8,7 @@ queries cannot confirm injection occurred.
 
 The log format parsed is:
     Injected %d memories (%d own + %d shared)
-    for agent=%s, user_id=%s
+    for agent=%s, resolved_user_id=%s
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class InjectionRecord:
 _INJECTION_PATTERN = re.compile(
     r"Injected (\d+) memories "
     r"\((\d+) own \+ (\d+) shared\) "
-    r"for agent=(.+), user_id=(.+)"
+    r"for agent=(.+), (?:resolved_)?user_id=(.+)"
 )
 
 

@@ -35,6 +35,9 @@ from cerebrum.llm.apis import LLMQuery
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.context_injector import ContextInjector
+from tests.modules.memory._doubles.kernel_retrieval import (
+    KernelRetrievalDouble,
+)
 from aios.memory.providers.base import MemoryProvider
 from aios.memory.write_barrier import MemoryWriteBarrier
 
@@ -167,7 +170,7 @@ class TracingProvider(MemoryProvider):
         pass
 
 
-class FakeMemoryManager:
+class FakeMemoryManager(KernelRetrievalDouble):
     """Mirrors the real MemoryManager's user_id registry."""
 
     def __init__(self, provider: TracingProvider) -> None:
@@ -249,7 +252,7 @@ class TestLegacyFallbackBehavior(unittest.TestCase):
         self.manager._register_user_id("jordan_matthews_75157bae")
         self.manager._register_user_id("olivia_ramirez_d9f04b72")
 
-        resolved = self.injector._resolve_user_id(
+        resolved = self.manager._resolve_user_id(
             "assistant_agent"
         )
         self.assertIsNone(resolved)
@@ -455,7 +458,7 @@ class TestRequestScopedUserIdentity(unittest.TestCase):
         self.manager._register_user_id("jordan_matthews_75157bae")
         self.manager._register_user_id("olivia_ramirez_d9f04b72")
 
-        resolved = self.injector._resolve_user_id(
+        resolved = self.manager._resolve_user_id(
             "assistant_agent",
             request_user_id="jordan_matthews_75157bae",
         )
@@ -535,7 +538,7 @@ class TestRequestScopedUserIdentity(unittest.TestCase):
         self.manager._register_user_id("olivia_ramirez_d9f04b72")
 
         # Explicit None behaves same as omitting the param
-        resolved = self.injector._resolve_user_id(
+        resolved = self.manager._resolve_user_id(
             "assistant_agent",
             request_user_id=None,
         )
@@ -549,7 +552,7 @@ class TestRequestScopedUserIdentity(unittest.TestCase):
         """
         self.manager._register_user_id("olivia_ramirez_d9f04b72")
 
-        resolved = self.injector._resolve_user_id(
+        resolved = self.manager._resolve_user_id(
             "assistant_agent",
             request_user_id="assistant_agent",
         )

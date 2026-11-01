@@ -228,6 +228,7 @@ class InHouseProvider(MemoryProvider):
             success=True, 
             content=memory.content, 
             metadata={
+                **_enrich_metadata(dict(memory.metadata or {})),
                 'keywords': memory.keywords, 
                 'tags': memory.tags, 
                 'category': memory.category, 
@@ -298,6 +299,7 @@ class InHouseProvider(MemoryProvider):
                     dict(memory.metadata)
                 )
                 search_results.append({
+                    'memory_id': memory.id,
                     'content': memory.content,
                     'keywords': memory.keywords,
                     'tags': memory.tags,

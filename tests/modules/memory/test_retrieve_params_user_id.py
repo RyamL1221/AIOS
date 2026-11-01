@@ -278,10 +278,10 @@ class TestRetrieveMemoryTopLevelUserId(unittest.TestCase):
             "by the log extraction.",
         )
 
-    def test_nested_metadata_user_id_propagated_to_provider(self):
-        """When user_id is ONLY in metadata (not top-level params),
-        the provider retrieval still receives the query with
-        metadata intact."""
+    def test_nested_metadata_user_id_is_not_a_retrieval_scope(self):
+        """Only top-level params["user_id"] scopes a retrieval. A
+        user_id nested in metadata never did, and the kernel path builds
+        its own provider query, so it must not widen the scope."""
         manager, provider = _create_manager()
 
         query = MemoryQuery(
@@ -301,15 +301,7 @@ class TestRetrieveMemoryTopLevelUserId(unittest.TestCase):
         self.assertEqual(len(provider.retrieve_calls), 1)
         received_query = provider.retrieve_calls[0]
 
-        # The metadata dict should be passed through
-        self.assertEqual(
-            received_query.params.get("metadata", {}).get(
-                "user_id"
-            ),
-            TEST_USER_ID,
-            "Nested metadata user_id must be preserved in "
-            "the query passed to the provider.",
-        )
+        self.assertNotIn("user_id", received_query.params)
 
 
 class TestRetrieveMemoryUserIdEndToEnd(unittest.TestCase):

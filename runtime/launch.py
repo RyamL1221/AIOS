@@ -496,6 +496,21 @@ async def get_status():
     }
 
 
+@app.get("/memory/config")
+async def get_memory_config():
+    """Report the live kernel's memory selection settings."""
+    manager = active_components.get("memory")
+    if manager is None:
+        raise HTTPException(
+            status_code=400, detail="Memory manager not initialized"
+        )
+    return {
+        "relevance_threshold": manager.relevance_threshold,
+        "max_injected_memories": manager.max_injected_memories,
+        "max_memory_tokens": manager.max_memory_tokens,
+    }
+
+
 @app.get("/core/llms/check")
 async def check_llms():
     """Check if what LLM cores are initialized."""

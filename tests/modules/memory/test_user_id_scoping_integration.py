@@ -26,6 +26,9 @@ from cerebrum.llm.apis import LLMQuery
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.context_injector import ContextInjector
+from tests.modules.memory._doubles.kernel_retrieval import (
+    KernelRetrievalDouble,
+)
 from aios.memory.conversation_extractor import ConversationExtractor
 from aios.memory.providers.base import (
     MemoryProvider,
@@ -160,7 +163,7 @@ class RecordingProvider(MemoryProvider):
 # ------------------------------------------------------------------
 
 
-class MockMemoryManager:
+class MockMemoryManager(KernelRetrievalDouble):
     """A minimal mock MemoryManager with the real OrderedDict-based
     _known_user_ids, _register_user_id() method, and
     latest_user_id property.

@@ -42,6 +42,9 @@ from cerebrum.llm.apis import LLMQuery
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.context_injector import ContextInjector
+from tests.modules.memory._doubles.kernel_retrieval import (
+    KernelRetrievalDouble,
+)
 from aios.memory.providers.base import (
     MemoryProvider,
     _apply_sharing_filter,
@@ -215,7 +218,7 @@ class RecordingProvider(MemoryProvider):
 # ------------------------------------------------------------------
 
 
-class MockMemoryManager:
+class MockMemoryManager(KernelRetrievalDouble):
     """A minimal mock MemoryManager that exposes the known_user_ids
     set and barrier for ContextInjector to use.
 

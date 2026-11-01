@@ -1046,7 +1046,10 @@ class Mem0Provider(MemoryProvider):
             
             # Extract content and metadata from Mem0 result
             content = result.get("memory", "") if isinstance(result, dict) else str(result)
-            metadata = result.get("metadata", {}) if isinstance(result, dict) else {}
+            metadata = (
+                _enrich_metadata(self._extract_filter_metadata(result))
+                if isinstance(result, dict) else _enrich_metadata({})
+            )
             
             return MemoryResponse(
                 success=True,
@@ -1055,7 +1058,11 @@ class Mem0Provider(MemoryProvider):
                     "keywords": metadata.get("keywords", []),
                     "tags": metadata.get("tags", []),
                     "category": metadata.get("category", "Uncategorized"),
-                    "timestamp": metadata.get("timestamp", "")
+                    "timestamp": metadata.get("timestamp", ""),
+                    "owner_agent": metadata["owner_agent"],
+                    "user_id": metadata["user_id"],
+                    "sharing_policy": metadata["sharing_policy"],
+                    "memory_type": metadata["memory_type"],
                 }
             )
         except Exception as e:
@@ -1125,8 +1132,12 @@ class Mem0Provider(MemoryProvider):
             if agent_id:
                 get_all_filters["agent_id"] = agent_id
 
+            # get_all returns only 20 rows unless told otherwise.
+            top_k = query.params.get("top_k")
+            get_all_kwargs = {} if top_k is None else {"top_k": top_k}
             raw_result = client.get_all(
                 filters=get_all_filters,
+                **get_all_kwargs,
             )
 
             # Normalise get_all response into a flat list.
@@ -1188,6 +1199,7 @@ class Mem0Provider(MemoryProvider):
                     self._extract_filter_metadata(item)
                 )
                 search_results.append({
+                    "memory_id": item.get("id"),
                     "content": item.get("memory", ""),
                     "keywords": metadata.get(
                         "keywords", []

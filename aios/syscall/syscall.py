@@ -731,6 +731,7 @@ class SyscallExecutor:
                     )
 
                 # Context injection (before LLM call)
+                injection_diag = None
                 if self.context_injector:
                     # Extract per-request user_id attached by the
                     # kernel request handler (runtime/launch.py).
@@ -751,6 +752,10 @@ class SyscallExecutor:
                     )
 
                 llm_response = self.execute_llm_syscall(agent_name, query)
+
+                # Sibling of ``response`` so it reaches the HTTP caller.
+                if injection_diag is not None:
+                    llm_response["injection_diagnostics"] = injection_diag
 
                 # Conversation extraction (after LLM call, async)
                 if (self.conversation_extractor

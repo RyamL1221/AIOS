@@ -41,6 +41,9 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 from aios.memory.providers.mem0 import Mem0Provider
 from aios.memory.providers.base import _enrich_metadata
 from aios.memory.context_injector import ContextInjector
+from tests.modules.memory._doubles.kernel_retrieval import (
+    KernelRetrievalDouble,
+)
 from aios.memory.write_barrier import WaitOutcome
 
 
@@ -246,7 +249,8 @@ class TestContextInjectorCrossAgentInjection:
         provider.retrieve_memory.side_effect = _mock_retrieve
 
         # Mock MemoryManager
-        memory_manager = MagicMock()
+        memory_manager = KernelRetrievalDouble()
+        memory_manager.barrier = MagicMock()
         memory_manager.provider = provider
         # Barrier mock: always bypass
         memory_manager.barrier.snapshot.return_value = 0

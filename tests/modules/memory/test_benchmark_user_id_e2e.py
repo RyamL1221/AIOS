@@ -41,6 +41,9 @@ from cerebrum.llm.apis import LLMQuery
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.context_injector import ContextInjector
+from tests.modules.memory._doubles.kernel_retrieval import (
+    KernelRetrievalDouble,
+)
 from aios.memory.providers.base import MemoryProvider
 from aios.memory.write_barrier import MemoryWriteBarrier
 
@@ -161,7 +164,7 @@ class BenchmarkProvider(MemoryProvider):
         pass
 
 
-class BenchmarkMemoryManager:
+class BenchmarkMemoryManager(KernelRetrievalDouble):
     """Minimal manager for benchmark simulation."""
 
     def __init__(self, provider: BenchmarkProvider) -> None:
@@ -218,6 +221,9 @@ class TestBenchmarkEndToEnd(unittest.TestCase):
         self.log_handler.setLevel(logging.INFO)
         logger = logging.getLogger("aios.memory.context_injector")
         logger.addHandler(self.log_handler)
+        manager_logger = logging.getLogger("aios.memory.manager")
+        manager_logger.addHandler(self.log_handler)
+        manager_logger.setLevel(logging.INFO)
         logger.setLevel(logging.INFO)
 
         # Seed all users' memories (simulates ProfileAgent writes)
@@ -238,6 +244,9 @@ class TestBenchmarkEndToEnd(unittest.TestCase):
     def tearDown(self) -> None:
         logger = logging.getLogger("aios.memory.context_injector")
         logger.removeHandler(self.log_handler)
+        logging.getLogger("aios.memory.manager").removeHandler(
+            self.log_handler
+        )
 
     def _get_system_content(self, query: LLMQuery) -> str:
         for msg in query.messages:
