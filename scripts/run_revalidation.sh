@@ -3,6 +3,8 @@
 # trials each, on three models, one fresh kernel per model. Resumable: a
 # cell whose results file already holds every trial is skipped. Stops at
 # the first cell that fails. Run from the AIOS repo, detached.
+# mem0_default is the deprecated name of kernel_private (Subtask 4). It is
+# kept here so the script matches the Subtask 3 result directories.
 set -u
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"

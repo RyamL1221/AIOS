@@ -2,10 +2,13 @@
 Smoke checks for the kernel retrieval path, over real HTTP.
 
 Needs a running kernel with the Mem0 provider and a local Ollama. Each
-check writes to its own new user, so runs do not affect each other.
+check writes to its own new user, so runs do not affect each other. With
+``--kernel-log``, the kernel's log file, it also sends one GPT-4o chat on
+Azure and checks that the Mem0 LLM synced to it.
 
-    python scripts/retrieval_smoke.py
+    python scripts/retrieval_smoke.py [--kernel-log logs/kernel.log]
 """
+import argparse
 import sys
 import time
 
@@ -13,7 +16,9 @@ import requests
 
 BASE_URL = "http://localhost:8000"
 MODEL = {"name": "qwen2.5:7b", "backend": "ollama"}
+AZURE_MODEL = {"name": "gpt-4o", "backend": "azure"}
 RUN = int(time.time())
+KERNEL_LOG = None
 
 
 def post(agent, query_type, query_data, user_id=None):
@@ -56,10 +61,10 @@ def search(agent, user=None, k=5, **params):
     return result["response"]["search_results"]
 
 
-def chat(user):
+def chat(user, model=MODEL):
     """Send a chat turn and return its injection diagnostics."""
     result = post("assistant_agent", "llm", {
-        "llms": [MODEL],
+        "llms": [model],
         "messages": [{"role": "user", "content": "hi"}],
         "action_type": "chat",
         "max_new_tokens": 8,
@@ -191,6 +196,18 @@ def check_cap_and_top_k():
     assert diagnostics["scores_present"] is False, diagnostics
 
 
+def check_azure_mem0_llm_sync():
+    if KERNEL_LOG is None:
+        raise RuntimeError("needs --kernel-log")
+    with open(KERNEL_LOG) as handle:
+        handle.seek(0, 2)
+        chat(f"smoke_{RUN}_azure", AZURE_MODEL)
+        time.sleep(1)
+        new = handle.read()
+    assert "Failed to sync Mem0 LLM" not in new, new[-2000:]
+    assert "Mem0 LLM synced to azure_openai/gpt-4o" in new, new[-2000:]
+
+
 CHECKS = [
     check_config,
     check_privacy_gap,
@@ -200,13 +217,21 @@ CHECKS = [
     check_conversation_write_visible_immediately,
     check_memory_id_and_update,
     check_cap_and_top_k,
+    check_azure_mem0_llm_sync,
 ]
 
 
 def main() -> int:
     """Run every check and report each result."""
+    global KERNEL_LOG
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--kernel-log")
+    KERNEL_LOG = parser.parse_args().kernel_log
     failed = 0
     for check in CHECKS:
+        if check is check_azure_mem0_llm_sync and KERNEL_LOG is None:
+            print(f"SKIP {check.__name__}: no --kernel-log")
+            continue
         try:
             check()
             print(f"PASS {check.__name__}")

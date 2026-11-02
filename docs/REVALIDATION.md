@@ -6,6 +6,12 @@ The result is the paper's baseline. The workshop runs are not cited as
 evidence again, because they span several code states and recorded no
 commit, config or injected sets.
 
+`mem0_default` was renamed `kernel_private` in Subtask 4: it is the
+kernel pipeline with sharing off, not Mem0's own behavior. This document
+keeps the old name where it describes the Subtask 3 run, whose result
+directories keep it too. The paper's baseline is the judge prompt v2
+re-scoring at the end ("Judge prompt v2").
+
 ## Pre-registration
 
 Committed before any trial ran. Analysis:
@@ -188,3 +194,81 @@ Mean assistant latency in seconds, new against workshop.
   each GPT-4o chat (no `api_version`). Kernel mode stores with
   `infer=False`, so Mem0's LLM is not called and scores are unaffected.
   It would matter in native mode.
+
+## Judge prompt v2
+
+Subtask 4 re-scored the 900 stored responses above with judge prompt
+version 2 (`JUDGE_PROMPT_VERSION = 2`, SHA-256 `17f43dd9...a623b2ce`),
+using `benchmarks/shared_memory/rejudge.py` in Cerebrum: the same
+`HybridJudge` and judge model (`gpt-5.4:azure`), judge calls only, no
+assistant or memory calls. All 900 trials were re-scored, none failed,
+and each keeps its `trial_index` and response. Files:
+`results/revalidation_v2/` in Cerebrum (`judge_comparison.csv`,
+`summary.csv` and `PROVENANCE.md` committed; the JSON is in
+`repo-artifacts/Cerebrum/revalidation_v2/`).
+
+v1 differs from v2 in two places, and this comparison cannot separate
+them:
+
+- The system prompt no longer says the assistant "had access to shared
+  memories injected by the kernel". It now asks whether the response
+  reflects the profile and task context given, for every condition.
+- The plausible-actions section is gone. Results files never stored the
+  actions, so a re-judge could not show them, and keeping the section
+  would have judged the baseline and later runs on different inputs.
+
+The rubric and the rest of the user prompt are byte-identical. The keyword
+half of `HybridJudge` is deterministic, so only the LLM half could change.
+
+**The v2 numbers are the paper's baseline.**
+
+### Old against new
+
+Rho is Spearman's between the two judges' per-trial scores; "> 1 pt" is
+the share of trials whose score moved by more than one point; "same" is
+the share with an identical score. Rho is undefined where one side is
+constant.
+
+| Condition | Model | Dimension | v1 | v2 | Diff | Rho | > 1 pt | Same |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| `kernel_shared` | GPT-4o | Profile | 4.587 | 4.627 | +0.040 | 0.779 | 0.7% | 88.7% |
+| `kernel_shared` | GPT-4o | Task | 4.993 | 5.000 | +0.007 | n/a | 0.0% | 99.3% |
+| `kernel_shared` | GPT-4o | Integration | 4.560 | 4.573 | +0.013 | 0.719 | 0.0% | 85.3% |
+| `kernel_shared` | Llama-3.1:8B | Profile | 3.927 | 3.773 | -0.153 | 0.747 | 2.7% | 78.0% |
+| `kernel_shared` | Llama-3.1:8B | Task | 4.320 | 4.460 | +0.140 | 0.724 | 0.0% | 80.7% |
+| `kernel_shared` | Llama-3.1:8B | Integration | 3.667 | 3.573 | -0.093 | 0.868 | 1.3% | 85.3% |
+| `kernel_shared` | Qwen-2.5:7B | Profile | 3.707 | 3.693 | -0.013 | 0.763 | 0.7% | 70.0% |
+| `kernel_shared` | Qwen-2.5:7B | Task | 4.600 | 4.740 | +0.140 | 0.571 | 0.0% | 79.3% |
+| `kernel_shared` | Qwen-2.5:7B | Integration | 3.547 | 3.553 | +0.007 | 0.870 | 0.7% | 84.0% |
+| `kernel_private` | GPT-4o | Profile | 1.067 | 1.067 | 0.000 | 1.000 | 0.0% | 100.0% |
+| `kernel_private` | GPT-4o | Task | 1.020 | 1.020 | 0.000 | 1.000 | 0.0% | 100.0% |
+| `kernel_private` | GPT-4o | Integration | 1.007 | 1.007 | 0.000 | 1.000 | 0.0% | 100.0% |
+| `kernel_private` | Llama-3.1:8B | Profile | 1.100 | 1.093 | -0.007 | 0.886 | 0.0% | 98.0% |
+| `kernel_private` | Llama-3.1:8B | Task | 1.273 | 1.267 | -0.007 | 0.983 | 0.0% | 99.3% |
+| `kernel_private` | Llama-3.1:8B | Integration | 1.020 | 1.020 | 0.000 | 1.000 | 0.0% | 100.0% |
+| `kernel_private` | Qwen-2.5:7B | Profile | 1.167 | 1.180 | +0.013 | 0.955 | 0.0% | 98.7% |
+| `kernel_private` | Qwen-2.5:7B | Task | 1.300 | 1.300 | 0.000 | 1.000 | 0.0% | 100.0% |
+| `kernel_private` | Qwen-2.5:7B | Integration | 1.087 | 1.087 | 0.000 | 1.000 | 0.0% | 100.0% |
+
+- **Means.** No cell shifts by more than 0.25; the largest is -0.153
+  (Llama profile). `kernel_private` is all but unchanged.
+- **Rho is below the expected 0.8 in 7 of the 8 `kernel_shared` cells
+  where it is defined** (0.571 to 0.870; Qwen task is lowest). The
+  disagreement is small in size: at most 2.7% of trials moved by more
+  than one point and 70-89% scored the same. Rho is low because these
+  cells' scores sit almost entirely on 4 and 5, so a one-point move
+  between them reorders many tied trials. The two judges do not rank
+  responses within a cell the same way, so per-trial scores under v1 and
+  v2 are not interchangeable; compare only like with like.
+- **Direction.** Under v2, task scores rose for Llama and Qwen (+0.14)
+  and Llama's profile score fell (-0.15). Whether the prompt sentence
+  or the missing actions section causes this is not identifiable here.
+
+### v2 against the workshop
+
+For reference only: the pre-registered verdict above stays on v1, since
+the workshop was judged under v1. With v2 scores against the workshop's
+v1, `kernel_shared` passes 7 of 9 cells with a largest shift of 0.34
+(Qwen task, 4.740 against 4.400; Llama task also fails TOST at +0.13),
+which still meets the rule. `kernel_private` is unchanged: 8 of 9 match,
+Qwen task -0.30.

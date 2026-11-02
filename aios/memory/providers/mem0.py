@@ -56,6 +56,8 @@ class Mem0Provider(MemoryProvider):
         # interleaving problem that caused dropped memories.
         self._user_clients: Dict[str, Any] = {}
         self._user_clients_lock = threading.RLock()
+        # The LLM set by sync_llm_from_query, applied to every client.
+        self._synced_llm = None
         self._default_collection_prefix = "mem0_memories"
 
         # Shared ChromaDB PersistentClient (set during initialize).
@@ -471,6 +473,8 @@ class Mem0Provider(MemoryProvider):
 
             # Create the per-user Memory instance.
             client = Memory.from_config(user_config)
+            if self._synced_llm is not None:
+                client.llm = self._synced_llm
 
             # Cache it.
             self._user_clients[user_id] = client
@@ -529,6 +533,22 @@ class Mem0Provider(MemoryProvider):
         "vllm": "vllm",
         "litellm": "litellm",
     }
+
+    @staticmethod
+    def _azure_kwargs(deployment: str) -> Dict[str, Any]:
+        """Return Mem0's Azure client settings from the variables the
+        kernel's LiteLLM calls use (``AZURE_API_KEY``,
+        ``AZURE_API_BASE``, ``AZURE_API_VERSION``). The deployment is the
+        model name, as in LiteLLM's ``azure/<deployment>``. Unset
+        variables are left out, so Mem0 falls back to its own
+        ``LLM_AZURE_*`` variables."""
+        settings = {
+            "api_key": os.environ.get("AZURE_API_KEY"),
+            "azure_endpoint": os.environ.get("AZURE_API_BASE"),
+            "api_version": os.environ.get("AZURE_API_VERSION"),
+            "azure_deployment": deployment,
+        }
+        return {k: v for k, v in settings.items() if v}
 
     def sync_llm_from_query(
         self,
@@ -596,17 +616,14 @@ class Mem0Provider(MemoryProvider):
 
             llm_config: Dict[str, Any] = {"model": model_name}
 
-            # Resolve API key for the target provider.
-            api_key = self._get_api_key(
-                # Mem0 provider names mostly align with
-                # ConfigManager key names. For azure_openai,
-                # fall back to "openai" since AIOS stores the
-                # key under that name.
-                "openai" if mem0_provider.startswith("azure")
-                else mem0_provider
-            )
-            if api_key:
-                llm_config["api_key"] = api_key
+            if mem0_provider == "azure_openai":
+                llm_config["azure_kwargs"] = self._azure_kwargs(
+                    model_name
+                )
+            else:
+                api_key = self._get_api_key(mem0_provider)
+                if api_key:
+                    llm_config["api_key"] = api_key
 
             # For Ollama, include the hostname from kernel config.
             if mem0_provider == "ollama":
@@ -627,7 +644,13 @@ class Mem0Provider(MemoryProvider):
             new_llm = LlmFactory.create(
                 mem0_provider, llm_config
             )
-            self.client.llm = new_llm
+            # Writes go through the per-user clients, so they take the
+            # synced LLM too, and so does every client created later.
+            with self._user_clients_lock:
+                self._synced_llm = new_llm
+                self.client.llm = new_llm
+                for client in self._user_clients.values():
+                    client.llm = new_llm
             logger.info(
                 "Mem0 LLM synced to %s/%s",
                 mem0_provider,

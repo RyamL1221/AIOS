@@ -24,6 +24,7 @@ do not describe this branch.
 | 1 | Single kernel retrieval path | Done |
 | 2 | Conversation writes through the kernel; owner-only by-id writes | Done |
 | 3 | Re-validate `kernel_shared` and `mem0_default` | Done |
+| 4 | Rename `mem0_default` to `kernel_private`; judge prompt v2; re-judge | Done |
 
 ### Subtask 1
 
@@ -46,6 +47,43 @@ shift 0.20); `mem0_default` shows zero assistant-visible memories in all
 synthetic data generation. See `docs/REVALIDATION.md`. Re-runs need a new
 `RUN_PREFIX` for `scripts/run_revalidation.sh`.
 
+### Subtask 4
+
+- `mem0_default` is now `kernel_private`. The old name is a deprecated
+  alias with a warning (Cerebrum `benchmarks/shared_memory/conditions.py`,
+  the only alias table), and `results_path` reads old result directories,
+  which keep their names. Remaining `mem0_default` matches in Cerebrum:
+  the alias table, the notes explaining the rename, historical docs, and
+  `benchmarks/human_rating`, a frozen workshop-era study whose committed
+  ratings key on the old name.
+- Judge prompt v2 (`JUDGE_PROMPT_VERSION = 2`): the system prompt names
+  no mechanism, and the plausible-actions section is gone, because
+  results files never stored the actions and a re-judge could not show
+  them. The rubric and the rest of the user prompt are byte-identical.
+  New results record `judge_prompt_version` and `judge_prompt_sha256`;
+  files without them used v1. New results also store `plausible_actions`.
+- The 900 Subtask 3 responses were re-judged with v2
+  (`benchmarks/shared_memory/rejudge.py`, judge calls only). Comparison:
+  "Judge prompt v2" in `docs/REVALIDATION.md`. The v2 numbers are the
+  paper's baseline. No cell's mean moved more than 0.25 (largest
+  -0.153), but Spearman rho was below the expected 0.8 in 7 of the 8
+  `kernel_shared` cells where it is defined (0.571-0.870): scores sit on
+  4 and 5, so per-trial v1 and v2 scores are not interchangeable.
+- `written_memories` was empty in every trial ever run: the harness
+  patched `cerebrum.memory.apis.create_memory`, but the agents import it
+  by name. The pipeline now patches the agents' modules too, and
+  `memory_counts` is derived from `written_memories`. The 900 stored
+  trials keep their empty values.
+- Mem0 LLM sync on Azure works: the Mem0 Azure client takes the kernel's
+  `AZURE_API_*` variables, and the synced LLM now reaches the per-user
+  clients, which do the writes (before, only the default client got it).
+  `scripts/retrieval_smoke.py --kernel-log <log>` checks a GPT-4o chat.
+- Paper (Subtask 12): §4.1's TODO is now resolvable. The condition is
+  `kernel_private`, the kernel pipeline with sharing off, with
+  `after_visibility` = 0 in all 450 trials, and the "Second" results
+  point can use the v2 numbers. paper_v2 is in neither repo, so the
+  edit itself waits for Subtask 12.
+
 ## Test baselines
 
 These fail on `workshop-postrun` too and are not caused by later work.
@@ -53,7 +91,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
 - AIOS: `tests/modules/memory/test_memory.py` fails at collection, and 14
   tests in `test_mem0_provider.py` / `test_zep_provider.py` error (their
   `manager` argument is collected as a missing fixture).
-- Cerebrum `tests/agents`: 20 failures, 2 errors.
+- Cerebrum `tests/agents`: 19 failures, 2 errors at
+  `neurips-subtask-03` (one flaky test makes it 19 or 20). The names
+  are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
+  failures test a removed local-Mem0 path.
 
 ## Known issues
 
@@ -80,8 +121,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
 8. Qwen's replies changed between the workshop and Subtask 3 (median
    `mem0_default` reply 2,010 to 859 characters). Cause unknown; the
    workshop recorded no Ollama or model version. Record both from here on.
-9. Mem0 LLM sync fails on Azure models for lack of `api_version`. Harmless
-   in kernel mode (`infer=False`); fix before any native-mode Azure run.
+9. `HybridJudge` falls back to the keyword score alone when the LLM
+   judge call fails, without marking the trial. `rejudge.py` retries and
+   fails the trial instead; `run_evaluation.py` still falls back.
 
 ## Fixed
 
@@ -93,3 +135,7 @@ These fail on `workshop-postrun` too and are not caused by later work.
 - `update_memory` and `remove_memory` by id are owner-only.
 - `ConversationExtractor` writes through the manager, inside the barrier.
 - `/tmp/per_user_proof.txt` writes removed.
+- Mem0 LLM sync on Azure (was known issue 9).
+- `written_memories` capture, and `memory_counts` derived from it.
+- `test_summary_props.py` matched rows by prefix, so a generated name
+  such as `ke` took the `kernel_shared` row.
