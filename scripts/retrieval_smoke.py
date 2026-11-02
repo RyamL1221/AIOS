@@ -253,9 +253,15 @@ def main() -> int:
     parser.add_argument("--kernel-log")
     KERNEL_LOG = parser.parse_args().kernel_log
     failed = 0
+    internal_llm = requests.get(
+        f"{BASE_URL}/memory/config", timeout=10
+    ).json()["capabilities"]["internal_llm"]
     for check in CHECKS:
         if check is check_azure_mem0_llm_sync and KERNEL_LOG is None:
             print(f"SKIP {check.__name__}: no --kernel-log")
+            continue
+        if check is check_azure_mem0_llm_sync and not internal_llm:
+            print(f"SKIP {check.__name__}: provider has no internal LLM")
             continue
         try:
             check()
