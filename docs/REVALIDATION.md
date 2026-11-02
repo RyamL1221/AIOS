@@ -60,3 +60,37 @@ the workshop. A failed trial makes that cell invalid; it is re-run whole
 and the re-run is reported.
 
 Provenance: `results/revalidation/PROVENANCE.md` in Cerebrum.
+
+### Amendment, committed before the re-run
+
+Added after the first run, before any re-run trial. The analysis rule,
+margins and baseline do not change.
+
+The first run left both GPT-4o cells invalid: 102 of 150 `kernel_shared`
+and 100 of 150 `mem0_default` trials failed in synthetic data generation.
+Azure gpt-4o wraps about a third of its JSON replies in a Markdown code
+fence (4 of 12 in a direct reproduction), and the generator's
+`json.loads` rejected them. `ProfileAgent` and `TaskAgent` had the same
+bug, so a fenced agent reply lost that memory without failing the trial
+(1 of the 48 completed GPT-4o trials injected no task context). The
+driver counted trials, not failures, and reported success.
+
+Under the rule above, both GPT-4o cells are re-run whole. Changes, none
+in the kernel or the judge:
+
+- Cerebrum: `parse_json_reply` strips the fence at the four generator
+  sites and in both agents. This replaces "`run_evaluation.py` unchanged"
+  to the extent of those parsers. `run_evaluation.py` itself is unchanged.
+- `revalidate.py` skips failed trials in latency and exits non-zero if
+  any trial failed.
+- `run_revalidation.sh` rejects a cell with a failed trial or missing
+  diagnostics, skips the kernel for finished models, and takes a
+  `RUN_PREFIX`. The re-run uses `reval2` so its user ids cannot collide
+  with the invalid run's stored memories.
+
+The Llama and Qwen cells stand. Their code path did not change: all 600
+trials completed, and all 300 `kernel_shared` trials injected a profile
+and a task context, so no fenced reply reached either parser. They keep
+the commits in `PROVENANCE.md`; each results file records the commits it
+ran on. The invalid files are kept in
+`repo-artifacts/Cerebrum/revalidation/invalid_first_run/`.

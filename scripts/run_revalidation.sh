@@ -10,18 +10,13 @@ OUT="results/revalidation"
 LOGS="$CEREBRUM/$OUT/logs"
 TRIALS=150
 JUDGE="gpt-5.4:azure"
+# A re-run needs its own prefix: user ids embed the run id, and a reused
+# id could land a new trial on an invalid run's memories.
+RUN_PREFIX="${RUN_PREFIX:-reval}"
 mkdir -p "$LOGS"
 
 cell_done() {
-    python3 - "$1" "$TRIALS" <<'PY'
-import json, sys
-try:
-    data = json.load(open(sys.argv[1]))
-    done = len(data["conditions"][0]["trials"]) == int(sys.argv[2])
-except (OSError, ValueError, KeyError, IndexError):
-    done = False
-sys.exit(0 if done else 1)
-PY
+    python3 "$AIOS/scripts/revalidation_cell_done.py" "$1" "$TRIALS"
 }
 
 stop_kernel() {
@@ -32,6 +27,11 @@ stop_kernel() {
 for entry in "gpt4o gpt-4o:azure" "llama llama3.1:8b:ollama" \
         "qwen qwen2.5:7b:ollama"; do
     read -r model assistant <<<"$entry"
+    if cell_done "$CEREBRUM/$OUT/${model}_kernel_shared/results_kernel_shared.json" \
+        && cell_done "$CEREBRUM/$OUT/${model}_mem0_default/results_mem0_default.json"; then
+        echo "$(date) skip $model"
+        continue
+    fi
     "$AIOS/.venv/bin/python" -m uvicorn runtime.launch:app \
         --host 127.0.0.1 --port 8000 > "$LOGS/kernel_$model.log" 2>&1 &
     KERNEL=$!
@@ -51,7 +51,7 @@ for entry in "gpt4o gpt-4o:azure" "llama llama3.1:8b:ollama" \
             -m benchmarks.shared_memory.run_evaluation \
             --trials "$TRIALS" --method "$method" \
             --assistant-model "$assistant" --judge-model "$JUDGE" \
-            --run-id "reval-$model-$method" --output "$cell" \
+            --run-id "$RUN_PREFIX-$model-$method" --output "$cell" \
             > "$OUT/logs/${model}_$method.log" 2>&1) || {
             echo "$(date) FAILED $model $method"; exit 1;
         }
