@@ -5,7 +5,7 @@
 # checks the live kernel (--provider). Resumable like run_revalidation.sh.
 # Run from the AIOS repo, detached:  PROVIDER=mem0 bash scripts/run_provider_smoke.sh
 set -u
-: "${PROVIDER:?set PROVIDER to the config's memory.provider}"
+: "${PROVIDER:?set PROVIDER to memory.provider in config.yaml}"
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"
 OUT="results/provider_smoke/$PROVIDER"
@@ -15,7 +15,7 @@ JUDGE="gpt-5.4:azure"
 RUN_PREFIX="${RUN_PREFIX:-ps5-$PROVIDER}"
 mkdir -p "$LOGS"
 
-configured=$("$AIOS/.venv/bin/python" -c "import yaml; print(yaml.safe_load(open('aios/config/config.yaml'))['memory']['provider'])")
+configured=$("$AIOS/.venv/bin/python" -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["memory"]["provider"])' aios/config/config.yaml)
 if [ "$configured" != "$PROVIDER" ]; then
     echo "config.yaml names provider $configured, not $PROVIDER"; exit 1
 fi
