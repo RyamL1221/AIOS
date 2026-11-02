@@ -41,7 +41,9 @@ if _ROOT not in sys.path:
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.note import MemoryNote
-from aios.memory.providers.base import MemoryProvider
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.syscall.memory import MemorySyscall
 
 

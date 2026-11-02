@@ -39,7 +39,9 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
 from aios.memory.note import MemoryNote
-from aios.memory.providers.base import MemoryProvider
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.memory.write_barrier import MemoryWriteBarrier
 
 
@@ -466,10 +468,10 @@ class TestContextInjectorExplicitUserId(unittest.TestCase):
     def test_shared_retrieval_excludes_requesting_agent(
         self,
     ) -> None:
-        """The shared memory retrieval call should pass the
-        requesting agent_name so the provider can exclude the
-        agent's own memories from the shared result set.
-        """
+        """Injection runs an own fetch and a 4x shared fetch, both in
+        the user's scope. The provider never gets the agent's name: the
+        kernel excludes other agents' private memories itself
+        (docs/PROVIDER_CONTRACT.md)."""
         query = _make_llm_query(
             "What am I working on?"
         )
@@ -480,26 +482,16 @@ class TestContextInjectorExplicitUserId(unittest.TestCase):
             user_id="alex_123",
         )
 
-        # Find the shared retrieval call (has sharing_policy)
-        shared_calls = [
-            call for call in self.provider.retrieve_calls
-            if call.get("sharing_policy") == "shared"
-        ]
-
-        self.assertGreater(
-            len(shared_calls), 0,
-            "There should be at least one shared retrieval call",
+        calls = self.provider.retrieve_calls
+        self.assertEqual(len(calls), 2)
+        own, shared = calls
+        self.assertEqual(
+            shared["params"]["top_k"], 4 * own["params"]["top_k"]
         )
-
-        # The shared call should include agent_name for
-        # exclusion filtering
-        for call in shared_calls:
-            self.assertEqual(
-                call["agent_name"],
-                "assistant_agent",
-                "Shared retrieval should pass agent_name for "
-                "exclusion filtering",
-            )
+        for call in calls:
+            self.assertEqual(call["user_id"], "alex_123")
+            self.assertNotIn("agent_name", call["params"])
+            self.assertNotIn("sharing_policy", call["params"])
 
 
 if __name__ == "__main__":

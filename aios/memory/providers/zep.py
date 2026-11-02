@@ -10,16 +10,16 @@ Zep Cloud free tier supports:
   - graph.search (semantic search over graph)
 
 The sessions/memory API requires a paid plan.
+
+Does not conform to the provider contract (docs/PROVIDER_CONTRACT.md):
+Zep stores text only, so the required metadata (owner_agent, user_id,
+memory_type, sharing_policy, created_at) is lost, and the kernel's user
+partition and visibility rule, which fail closed, drop every row it
+returns. ``list`` and ``update`` are not supported.
 """
-from typing import Dict, Any, List, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from cerebrum.memory.apis import MemoryQuery, MemoryResponse
-
-from .base import (
-    MemoryProvider,
-    _apply_sharing_filter,
-    _enrich_metadata,
-)
+from .base import Candidate, MemoryProvider, ProviderError
 
 if TYPE_CHECKING:
     from aios.memory.note import MemoryNote
@@ -76,228 +76,73 @@ class ZepProvider(MemoryProvider):
                 "zep", f"Failed to initialize Zep client: {str(e)}"
             )
 
-    def add_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
-        """Store a memory note via graph.add (free tier compatible)."""
-        from aios.memory.note import MemoryNote
+    def capabilities(self) -> Dict[str, bool]:
+        return {
+            "scored_search": True,
+            "semantic_search": True,
+            "internal_llm": True,
+            "native_sdk": True,
+        }
 
-        if not isinstance(memory_note, MemoryNote):
-            return MemoryResponse(
-                success=False,
-                error=f"Expected MemoryNote, got {type(memory_note).__name__}"
-            )
+    def _scope(self, user_id: Optional[str]) -> str:
+        return str(user_id or self.default_user_id)
 
+    def add(self, memory_note: "MemoryNote") -> str:
+        user_id = self._scope((memory_note.metadata or {}).get("user_id"))
         try:
-            user_id = self.default_user_id
-            if hasattr(memory_note, 'metadata') and memory_note.metadata:
-                user_id = memory_note.metadata.get("user_id", user_id)
-
             result = self.client.graph.add(
-                user_id=user_id,
-                type="text",
-                data=memory_note.content
+                user_id=user_id, type="text", data=memory_note.content
             )
-
-            # Use the episode uuid returned by Zep, fall back to note id
-            memory_id = getattr(result, 'uuid', None) or memory_note.id
-            return MemoryResponse(success=True, memory_id=memory_id)
-
         except Exception as e:
-            return MemoryResponse(success=False, error=f"Zep add_memory failed: {str(e)}")
+            raise ProviderError(f"Zep add failed: {e}") from e
+        return getattr(result, "uuid", None) or memory_note.id
 
-    def remove_memory(self, memory_id: str) -> MemoryResponse:
-        """Remove a graph episode by UUID.
-
-        Note: Zep graph API does not expose a delete endpoint on the free tier.
-        This returns success=True as a no-op to avoid breaking the interface.
-        """
-        try:
-            # Attempt episode delete if available
-            self.client.graph.episode.delete(episode_uuid=memory_id)
-            return MemoryResponse(success=True, memory_id=memory_id)
-        except Exception:
-            # Free tier has no delete — treat as success (soft delete)
-            return MemoryResponse(success=True, memory_id=memory_id)
-
-    def update_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
-        """Update by adding a new graph episode with the updated content."""
-        from aios.memory.note import MemoryNote
-
-        if not isinstance(memory_note, MemoryNote):
-            return MemoryResponse(
-                success=False,
-                error=f"Expected MemoryNote, got {type(memory_note).__name__}"
+    def search(
+        self, query_text: str, user_id: Optional[str], top_k: int
+    ) -> List[Candidate]:
+        scope = self._scope(user_id)
+        results = self.client.graph.search(
+            query=query_text, user_id=scope, limit=top_k, scope="edges"
+        )
+        return [
+            Candidate(
+                memory_id=str(getattr(edge, "uuid_", "")),
+                content=getattr(edge, "fact", "") or "",
+                metadata=dict(getattr(edge, "metadata", None) or {}),
+                score=getattr(edge, "score", None),
             )
-        return self.add_memory(memory_note)
+            for edge in (getattr(results, "edges", []) or [])
+        ]
 
-    def get_memory(self, memory_id: str) -> MemoryResponse:
-        """Retrieve a graph episode by UUID."""
-        if not isinstance(memory_id, str):
-            return MemoryResponse(success=False, error="Memory id must be a string")
+    def list(self, user_id: Optional[str], top_k: int) -> List[Candidate]:
+        raise ProviderError("Zep has no listing")
 
+    def get(
+        self, memory_id: str, user_id: Optional[str]
+    ) -> Optional[Candidate]:
         try:
             result = self.client.graph.episode.get(memory_id)
-            if result is None:
-                return MemoryResponse(success=False, error="Memory not found")
-
-            content = getattr(result, 'content', '') or ''
-            return MemoryResponse(
-                success=True,
-                content=content,
-                metadata={"keywords": [], "tags": [], "category": "Uncategorized", "timestamp": ""}
-            )
-        except Exception as e:
-            return MemoryResponse(success=False, error=f"Zep get_memory failed: {str(e)}")
-
-    def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
-        """Semantic search via graph.search (free tier compatible).
-
-        Results are filtered by cross-agent sharing rules when
-        ``agent_name``, ``user_id``, or ``sharing_policy`` are
-        present in ``query.params``.
-        """
-        try:
-            content = query.params.get("content", "")
-            k = query.params.get("k", 5)
-            agent_name = query.params.get("agent_name")
-            sharing_policy = query.params.get(
-                "sharing_policy"
-            )
-
-            # Use user_id from params when provided;
-            # fall back to the configured default otherwise.
-            user_id = query.params.get("user_id")
-            search_user_id = (
-                user_id
-                if user_id is not None
-                else self.default_user_id
-            )
-
-            results = self.client.graph.search(
-                query=content,
-                user_id=search_user_id,
-                limit=k,
-                scope="edges"
-            )
-
-            edges = getattr(results, 'edges', []) or []
-
-            # Apply cross-agent sharing filter when
-            # agent_name is available (injected by
-            # MemoryManager).
-            if agent_name is not None:
-                edges = _apply_sharing_filter(
-                    edges,
-                    agent_name,
-                    user_id,
-                    sharing_policy,
-                    lambda edge: (
-                        dict(getattr(edge, 'metadata', None)
-                             or {})
-                    ),
-                )
-
-            search_results = []
-            for edge in edges[:k]:
-                fact = getattr(edge, 'fact', '') or ''
-                score = getattr(edge, 'score', None)
-                metadata = _enrich_metadata(
-                    dict(getattr(edge, 'metadata', None)
-                         or {})
-                )
-                search_results.append({
-                    "memory_id": getattr(edge, 'uuid_', None),
-                    "content": fact,
-                    "keywords": [],
-                    "tags": [],
-                    "category": "Uncategorized",
-                    "timestamp": str(
-                        getattr(edge, 'created_at', '')
-                    ),
-                    "score": score,
-                    "metadata": metadata,
-                })
-
-            return MemoryResponse(
-                success=True,
-                search_results=search_results,
-            )
-
-        except Exception as e:
-            return MemoryResponse(
-                success=False,
-                error=(
-                    f"Zep retrieve_memory failed: "
-                    f"{str(e)}"
-                ),
-            )
-
-    def retrieve_memory_raw(self, query: MemoryQuery) -> List['MemoryNote']:
-        """Return graph search results as MemoryNote objects.
-
-        Results are filtered by cross-agent sharing rules when
-        ``agent_name``, ``user_id``, or ``sharing_policy`` are
-        present in ``query.params``.
-        """
-        from aios.memory.note import MemoryNote
-
-        content = query.params.get("content", "")
-        k = query.params.get("k", 5)
-        agent_name = query.params.get("agent_name")
-        sharing_policy = query.params.get("sharing_policy")
-
-        # Use user_id from params when provided;
-        # fall back to the configured default otherwise.
-        user_id = query.params.get("user_id")
-        search_user_id = (
-            user_id
-            if user_id is not None
-            else self.default_user_id
-        )
-
-        try:
-            results = self.client.graph.search(
-                query=content,
-                user_id=search_user_id,
-                limit=k,
-                scope="edges"
-            )
-
-            edges = getattr(results, 'edges', []) or []
-
-            # Apply cross-agent sharing filter when
-            # agent_name is available (injected by
-            # MemoryManager).
-            if agent_name is not None:
-                edges = _apply_sharing_filter(
-                    edges,
-                    agent_name,
-                    user_id,
-                    sharing_policy,
-                    lambda edge: (
-                        dict(getattr(edge, 'metadata', None)
-                             or {})
-                    ),
-                )
-
-            memory_notes = []
-            for edge in edges[:k]:
-                fact = getattr(edge, 'fact', '') or ''
-                if fact:
-                    metadata = _enrich_metadata(
-                        dict(getattr(edge, 'metadata', None)
-                             or {})
-                    )
-                    memory_notes.append(MemoryNote(
-                        content=fact,
-                        id=getattr(edge, 'uuid_', None),
-                        context="General",
-                        category="Uncategorized",
-                        metadata=metadata,
-                    ))
-            return memory_notes
-
         except Exception:
-            return []
+            return None
+        if result is None:
+            return None
+        return Candidate(memory_id, getattr(result, "content", "") or "")
+
+    def update(
+        self,
+        memory_id: str,
+        user_id: Optional[str],
+        content: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> bool:
+        raise ProviderError("Zep cannot update an episode in place")
+
+    def delete(self, memory_id: str, user_id: Optional[str]) -> bool:
+        try:
+            self.client.graph.episode.delete(episode_uuid=memory_id)
+        except Exception:
+            return False
+        return True
 
     def close(self) -> None:
         self.client = None

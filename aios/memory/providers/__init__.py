@@ -2,11 +2,14 @@
 Memory Provider Module
 
 This module provides a pluggable memory provider architecture for AIOS,
-enabling users to choose between different memory backends (in-house, Mem0, Zep).
+enabling users to choose between different memory backends (in-house Chroma, Mem0, Zep; in-memory for tests).
 """
 
 __all__ = [
     "MemoryProvider",
+    "Candidate",
+    "ProviderError",
+    "ChromaInHouseProvider",
     "InHouseProvider",
     "Mem0Provider",
     "ZepProvider",
@@ -37,7 +40,8 @@ class ProviderNotFoundError(Exception):
         )
 
 
-from .base import MemoryProvider
+from .base import Candidate, MemoryProvider, ProviderError
+from .chroma_inhouse import ChromaInHouseProvider
 from .in_house import InHouseProvider
 from .mem0 import Mem0Provider
 from .zep import ZepProvider

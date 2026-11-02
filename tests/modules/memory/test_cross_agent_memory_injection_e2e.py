@@ -38,7 +38,9 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
 from aios.memory.note import MemoryNote
-from aios.memory.providers.base import MemoryProvider
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.memory.write_barrier import MemoryWriteBarrier
 from aios.syscall.syscall import SyscallExecutor
 
@@ -425,8 +427,7 @@ class TestCrossAgentMemoryInjectionE2E(unittest.TestCase):
     def test_shared_retrieval_requests_shared_policy(
         self,
     ) -> None:
-        """The cross-agent retrieval should explicitly request
-        sharing_policy="shared" to filter results."""
+        """Injection with a user runs a separate, larger shared fetch."""
         query = LLMQuery(
             messages=[
                 {"role": "user", "content": "What do I do?"}
@@ -444,16 +445,15 @@ class TestCrossAgentMemoryInjectionE2E(unittest.TestCase):
             "assistant_agent", query
         )
 
-        # Find shared retrieval calls
-        shared_calls = [
-            c for c in self.provider.retrieve_calls
-            if c.get("sharing_policy") == "shared"
-        ]
-        self.assertGreater(
-            len(shared_calls), 0,
-            "At least one retrieval should request "
-            "sharing_policy='shared'",
+        # The second fetch is the shared one: 4x the own top_k, in
+        # the user's scope. The kernel, not the provider, keeps only
+        # shared memories of other agents.
+        calls = self.provider.retrieve_calls
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[1]["params"]["top_k"], 4 * calls[0]["params"]["top_k"]
         )
+        self.assertEqual(calls[1]["user_id"], "alex_123")
 
     # ----------------------------------------------------------
     # Verify own-memory retrieval is separate
@@ -462,8 +462,7 @@ class TestCrossAgentMemoryInjectionE2E(unittest.TestCase):
     def test_own_memory_retrieval_scoped_by_agent_name(
         self,
     ) -> None:
-        """The own-memory retrieval pass should include
-        agent_name for ownership scoping."""
+        """The own-memory fetch is scoped to the user."""
         query = LLMQuery(
             messages=[
                 {"role": "user", "content": "What did we chat?"}
@@ -481,20 +480,11 @@ class TestCrossAgentMemoryInjectionE2E(unittest.TestCase):
             "assistant_agent", query
         )
 
-        # Find own-memory calls (agent_name set, no
-        # sharing_policy)
-        own_calls = [
-            c for c in self.provider.retrieve_calls
-            if (
-                c.get("agent_name") == "assistant_agent"
-                and c.get("sharing_policy") is None
-            )
-        ]
-        self.assertGreater(
-            len(own_calls), 0,
-            "Should have an own-memory retrieval call with "
-            "agent_name='assistant_agent'",
-        )
+        # The first fetch is the own one, in the user's scope. The
+        # provider never gets the agent's name.
+        own = self.provider.retrieve_calls[0]
+        self.assertEqual(own["user_id"], "alex_123")
+        self.assertNotIn("agent_name", own["params"])
 
     # ----------------------------------------------------------
     # Verify no injection when user_id is absent

@@ -3,7 +3,9 @@
 `MemoryManager.retrieve_for_agent` decides which memories an agent sees.
 `ContextInjector.inject` and the `retrieve_memory` branch of
 `MemoryManager.address_request` both call it, directly and never through
-the syscall queue.
+the syscall queue. It calls providers only through the provider contract
+(`docs/PROVIDER_CONTRACT.md`): `search(query_text, user_id, top_k)`, with
+no visibility filtering in the provider.
 
 ## Steps, in order
 
@@ -12,13 +14,16 @@ the syscall queue.
 2. One barrier wait for that user. SDK search waits on the snapshot
    stamped at syscall acceptance; injection takes one at retrieval time.
 3. Own fetch (`top_k = k`), then shared fetch (`top_k = 4k`) when
-   `include_shared` and there is a resolved user.
+   `include_shared` and there is a resolved user. Both search the user's
+   scope; without a resolved user, the agent's own scope, where a write
+   that names no user is filed.
 4. User partition, failing closed on a missing `user_id`.
-5. Visibility: `_apply_sharing_filter`, always, even if the provider
-   filtered. `sharing_policy="shared"` only selects the shared fetch; any
+5. Visibility: `apply_sharing_filter` (`aios/memory/visibility.py`), the
+   only place it runs; providers never filter. `sharing_policy="shared"` only selects the shared fetch; any
    other value also narrows the rule (`"private"`: own private only).
 6. Exact-content dedupe of shared rows against earlier rows, own first.
-7. Relevance threshold, only on rows with a score.
+7. Relevance threshold, only on rows with a score. Default 0.0: rank,
+   drop nothing.
 8. Sort by score when any row has one; otherwise keep provider order.
 9. Count cap at `k`.
 
@@ -29,7 +34,8 @@ The injector then formats and applies `max_memory_tokens`. It reports
 
 Returned by `retrieve_for_agent`: `resolved_user_id`, `own_fetched`,
 `shared_fetched`, `after_partition`, `after_visibility`, `after_dedupe`,
-`scores_present`, `after_threshold`, `after_cap`, `top_k_used`,
+`scores_present`, `threshold_used`, `after_threshold`, `after_cap`,
+`top_k_used`,
 `barrier_waits`. Own and shared counts are summed before dedupe.
 
 They reach the harness as `injection_diagnostics`, a sibling of
@@ -40,12 +46,21 @@ kernel only logged them and the agent had no field to forward, so all
 the trial's `injection_status` is `confirmed`, including when nothing was
 injected; the audit query is only a fallback.
 
-## Mem0 has no scores here
+## Scores
 
-`Mem0Provider.retrieve_memory` uses `get_all`, which removes `score` and
-does not rank. So `scores_present` is `false`, `relevance_threshold` does
-nothing, and the rows are the first `top_k` in storage order whatever the
-query. This is unchanged, and now recorded instead of hidden.
+Until Subtask 5, `Mem0Provider.retrieve_memory` used `get_all`, which
+returns no score and does not rank: `scores_present` was `false` in every
+trial, `relevance_threshold` did nothing, and the rows were the first
+`top_k` in storage order whatever the query.
+
+Since Subtask 5, every conforming provider's `search` is scored and
+ranked: Mem0 by the cosine similarity of the pinned embedding (computed
+from the raw Chroma distance, not Mem0's own `search()` score, which is
+inverted; see `docs/PROVIDER_CONTRACT.md`), the in-house Chroma provider
+by cosine similarity. `scores_present` is `true`, and `threshold_used`
+reports the threshold applied. At the default of 0.0 nothing is dropped;
+the sort and cap now act on similarity instead of storage order, which
+changes nothing while a user has fewer memories than the cap.
 
 ## Behavior changes
 
@@ -87,9 +102,8 @@ be injected twice when both rows are own-list rows.
 
 `get_memory` applies the same owner-or-shared rule in `address_request`
 (`_can_read`), failing closed on a missing owner. `retrieve_memory_raw`
-is reachable only inside `add_agentic_memory`, and its provider-level
-filter still depends on the caller's `sharing_policy`, and still has
-Mem0's 20-row limit.
+now runs `retrieve_for_agent` and returns its rows as notes (until
+Subtask 5 it had its own provider-level filter and Mem0's 20-row limit).
 
 ## Writes
 
@@ -108,6 +122,10 @@ returns. A retrieval accepted after the chat response therefore always
 finds the write pending and waits for it. `address_request` releases it
 in a `finally`; the extractor releases it if the thread cannot start.
 The wait is bounded by `write_barrier.timeout_ms`, as for any write.
+
+**Updates are stamped too.** Since Subtask 5 `update_memory` acquires
+the barrier at acceptance and releases it in a `finally`, like a write,
+so a retrieval accepted after an update reads the new content.
 
 **By-id writes are owner-only.** `update_memory` and `remove_memory`
 first fetch the memory; anyone but its owner gets "Memory not found",

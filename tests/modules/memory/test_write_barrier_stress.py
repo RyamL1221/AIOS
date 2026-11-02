@@ -943,49 +943,17 @@ class _StubInHouseProvider(InHouseProvider):
     the test."""
 
     def __init__(self) -> None:  # noqa: D401 - test double
-        # Skip ``InHouseProvider.__init__`` so we don't allocate
-        # real vector-DB clients.
-        self.retriever = None
-        self.memories = {}
+        super().__init__()
         self.add_calls: int = 0
         self.retrieve_calls: int = 0
 
-    def initialize(self, config: Dict[str, Any]) -> None:
-        return None
-
-    def add_memory(self, memory_note) -> MemoryResponse:
+    def add(self, memory_note) -> str:
         self.add_calls += 1
-        self.memories[memory_note.id] = memory_note
-        return MemoryResponse(success=True, memory_id=memory_note.id)
+        return super().add(memory_note)
 
-    def remove_memory(self, memory_id: str) -> MemoryResponse:
-        self.memories.pop(memory_id, None)
-        return MemoryResponse(success=True, memory_id=memory_id)
-
-    def update_memory(self, memory_note) -> MemoryResponse:
-        self.memories[memory_note.id] = memory_note
-        return MemoryResponse(success=True, memory_id=memory_note.id)
-
-    def get_memory(self, memory_id: str) -> MemoryResponse:
-        note = self.memories.get(memory_id)
-        if note is None:
-            return MemoryResponse(success=False, error="not found")
-        return MemoryResponse(
-            success=True,
-            content=note.content,
-            metadata=dict(note.metadata or {}),
-        )
-
-    def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
+    def search(self, query_text, user_id, top_k) -> List:
         self.retrieve_calls += 1
-        return MemoryResponse(success=True, search_results=[])
-
-    def retrieve_memory_raw(self, query: MemoryQuery) -> List:
-        self.retrieve_calls += 1
-        return []
-
-    def close(self) -> None:
-        return None
+        return super().search(query_text, user_id, top_k)
 
 
 class Scenario5MixedProviderTests(unittest.TestCase):

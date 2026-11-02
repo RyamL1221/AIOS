@@ -76,7 +76,7 @@ sys.modules.setdefault("cerebrum", _cerebrum_stub)
 sys.modules.setdefault("cerebrum.memory", _memory_stub)
 sys.modules.setdefault("cerebrum.memory.apis", _apis_stub)
 
-# We only need _apply_sharing_filter from base.py and
+# We only need apply_sharing_filter from visibility.py and
 # _extract_filter_metadata from mem0.py.  Import them
 # directly to avoid pulling in InHouseProvider, retrievers,
 # sentence_transformers, etc via __init__.py.
@@ -114,7 +114,12 @@ _mem0_mod = _import_module_directly(
     ),
 )
 
-_apply_sharing_filter = _base_mod._apply_sharing_filter
+_visibility_mod = _import_module_directly(
+    "aios.memory.visibility",
+    os.path.join(_project_root, "aios", "memory", "visibility.py"),
+)
+
+_apply_sharing_filter = _visibility_mod.apply_sharing_filter
 _extract_filter_metadata = _mem0_mod.Mem0Provider._extract_filter_metadata
 
 

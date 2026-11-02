@@ -30,9 +30,9 @@ from tests.modules.memory._doubles.kernel_retrieval import (
     KernelRetrievalDouble,
 )
 from aios.memory.conversation_extractor import ConversationExtractor
-from aios.memory.providers.base import (
-    MemoryProvider,
-    _apply_sharing_filter,
+from aios.memory.visibility import apply_sharing_filter as _apply_sharing_filter
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
     _enrich_metadata,
 )
 from aios.memory.write_barrier import MemoryWriteBarrier

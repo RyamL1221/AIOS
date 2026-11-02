@@ -13,6 +13,7 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
+from aios.memory.providers.base import Candidate, ProviderError
 from aios.memory.write_barrier import MemoryWriteBarrier, WaitOutcome
 from aios.syscall.memory import MemorySyscall
 
@@ -36,13 +37,22 @@ def row(content, owner=AGENT, policy="private", user=USER, score=None):
     }
 
 
+def candidates(rows):
+    """Provider search results for ``rows``."""
+    return [
+        Candidate(
+            r["memory_id"], r["content"],
+            {"timestamp": r["timestamp"], **r["metadata"]}, r["score"],
+        )
+        for r in rows
+    ]
+
+
 def make_manager(rows, threshold=0.3):
     """Build a manager whose provider returns ``rows`` for any query."""
     manager = MemoryManager.__new__(MemoryManager)
     manager.provider = MagicMock()
-    manager.provider.retrieve_memory.return_value = MemoryResponse(
-        success=True, search_results=rows
-    )
+    manager.provider.search.return_value = candidates(rows)
     manager.barrier = MemoryWriteBarrier(config={})
     manager.relevance_threshold = threshold
     return manager
@@ -138,12 +148,10 @@ def test_sdk_private_policy_still_excludes_shared_rows():
 
 def test_provider_failure_reaches_the_sdk_caller():
     manager = make_manager([])
-    manager.provider.retrieve_memory.return_value = MemoryResponse(
-        success=False, error="boom"
-    )
+    manager.provider.search.side_effect = ProviderError("boom")
     response = sdk_retrieve(manager, AGENT, user_id=USER)
     assert not response.success
-    assert response.error == "boom"
+    assert "boom" in response.error
 
 
 def test_threshold_drops_low_scores_when_scores_present():
@@ -188,9 +196,8 @@ def test_k_caps_after_dedupe():
         row(f"shared{i}", owner="profile_agent", policy="shared")
         for i in range(3)
     ]
-    manager.provider.retrieve_memory.side_effect = [
-        MemoryResponse(success=True, search_results=own),
-        MemoryResponse(success=True, search_results=shared),
+    manager.provider.search.side_effect = [
+        candidates(own), candidates(shared),
     ]
     results, diagnostics = manager.retrieve_for_agent(
         AGENT, USER, "q", k=4, include_shared=True
@@ -208,8 +215,8 @@ def test_explicit_top_k_reaches_the_provider():
     _, diagnostics = manager.retrieve_for_agent(
         AGENT, USER, "q", k=7, include_shared=True
     )
-    calls = manager.provider.retrieve_memory.call_args_list
-    assert [c.args[0].params["top_k"] for c in calls] == [7, 28]
+    calls = manager.provider.search.call_args_list
+    assert [c.args[2] for c in calls] == [7, 28]
     assert diagnostics["top_k_used"] == {"own": 7, "shared": 28}
 
 
@@ -229,7 +236,7 @@ def test_no_identity_skips_shared_retrieval():
     results, diagnostics = manager.retrieve_for_agent(
         AGENT, None, "q", k=5, include_shared=True
     )
-    assert manager.provider.retrieve_memory.call_count == 1
+    assert manager.provider.search.call_count == 1
     assert diagnostics["resolved_user_id"] is None
     assert [r["content"] for r in results] == ["mine"]
 
@@ -270,14 +277,12 @@ def test_sdk_search_waits_on_the_acceptance_snapshot():
 def test_add_memory_stamps_owner_agent():
     manager = make_manager([])
     manager._known_user_ids = {}
-    manager.provider.add_memory.return_value = MemoryResponse(
-        success=True, memory_id="m"
-    )
+    manager.provider.add.return_value = "m"
     query = MemoryQuery(
         operation_type="add_memory", params={"content": "c"}
     )
     manager.address_request(MemorySyscall(AGENT, query))
-    note = manager.provider.add_memory.call_args.args[0]
+    note = manager.provider.add.call_args.args[0]
     assert note.metadata["owner_agent"] == AGENT
 
 
@@ -327,24 +332,20 @@ def test_sdk_search_applies_threshold_on_a_scored_provider():
 def test_add_memory_keeps_an_explicit_owner():
     manager = make_manager([])
     manager._known_user_ids = {}
-    manager.provider.add_memory.return_value = MemoryResponse(
-        success=True, memory_id="m"
-    )
+    manager.provider.add.return_value = "m"
     query = MemoryQuery(
         operation_type="add_memory",
         params={"content": "c", "metadata": {"owner_agent": "other"}},
     )
     manager.address_request(MemorySyscall(AGENT, query))
-    note = manager.provider.add_memory.call_args.args[0]
+    note = manager.provider.add.call_args.args[0]
     assert note.metadata["owner_agent"] == "other"
 
 
 def stored_memory(owner, policy):
-    """Build a provider get_memory response."""
-    return MemoryResponse(
-        success=True,
-        content="body",
-        metadata={"owner_agent": owner, "sharing_policy": policy},
+    """Build a provider get result."""
+    return Candidate(
+        "m", "body", {"owner_agent": owner, "sharing_policy": policy}
     )
 
 
@@ -358,7 +359,7 @@ def sdk_get(manager, agent):
 
 def test_get_memory_hides_another_agents_private_memory():
     manager = make_manager([])
-    manager.provider.get_memory_for_user.return_value = stored_memory(
+    manager.provider.get.return_value = stored_memory(
         "agent_a", "private"
     )
     response = sdk_get(manager, "agent_b")
@@ -369,11 +370,11 @@ def test_get_memory_hides_another_agents_private_memory():
 
 def test_get_memory_allows_owner_and_shared():
     manager = make_manager([])
-    manager.provider.get_memory_for_user.return_value = stored_memory(
+    manager.provider.get.return_value = stored_memory(
         "agent_a", "private"
     )
     assert sdk_get(manager, "agent_a").content == "body"
-    manager.provider.get_memory_for_user.return_value = stored_memory(
+    manager.provider.get.return_value = stored_memory(
         "agent_a", "shared"
     )
     assert sdk_get(manager, "agent_b").content == "body"
@@ -381,7 +382,5 @@ def test_get_memory_allows_owner_and_shared():
 
 def test_get_memory_fails_closed_without_an_owner():
     manager = make_manager([])
-    manager.provider.get_memory_for_user.return_value = MemoryResponse(
-        success=True, content="body", metadata={}
-    )
+    manager.provider.get.return_value = Candidate("m", "body", {})
     assert not sdk_get(manager, "agent_b").success

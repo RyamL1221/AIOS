@@ -38,7 +38,9 @@ from aios.memory.context_injector import ContextInjector
 from tests.modules.memory._doubles.kernel_retrieval import (
     KernelRetrievalDouble,
 )
-from aios.memory.providers.base import MemoryProvider
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.memory.write_barrier import MemoryWriteBarrier
 
 

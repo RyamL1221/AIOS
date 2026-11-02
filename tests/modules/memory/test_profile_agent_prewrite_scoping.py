@@ -44,7 +44,9 @@ from hypothesis import HealthCheck
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.manager import MemoryManager
-from aios.memory.providers.base import MemoryProvider
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.syscall.memory import MemorySyscall
 
 
@@ -277,13 +279,13 @@ class ProfileAgentPreWriteScopingExplorationTests(
             ),
         )
 
-        # Verify the provider received a query without user_id
-        # scoping (empty results are the safe outcome)
+        # The provider is scoped to the agent's own memories, never
+        # to the latest user from global state.
         self.assertEqual(len(provider.retrieve_calls), 1)
         provider_query = provider.retrieve_calls[0]
-        self.assertNotIn(
-            "user_id",
-            provider_query.params,
+        self.assertEqual(
+            provider_query.params["user_id"],
+            "ProfileAgent",
             "Provider should not receive user_id from global state",
         )
 

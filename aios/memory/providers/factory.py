@@ -8,6 +8,7 @@ extensibility through runtime registration of new provider types.
 from typing import Dict, Any, Type
 
 from .base import MemoryProvider
+from .chroma_inhouse import ChromaInHouseProvider
 from .in_house import InHouseProvider
 from .mem0 import Mem0Provider
 from .zep import ZepProvider
@@ -20,7 +21,8 @@ class ProviderFactory:
     ensuring consistent creation of memory providers across the system.
     
     The factory supports:
-    - Creating providers by type name ("in-house", "mem0", "zep")
+    - Creating providers by type name ("in-house", "in-memory", "mem0",
+      "zep")
     - Passing provider-specific configuration to the created provider
     - Runtime registration of new provider types for extensibility
     
@@ -29,7 +31,8 @@ class ProviderFactory:
     """
     
     PROVIDERS: Dict[str, Type[MemoryProvider]] = {
-        "in-house": InHouseProvider,
+        "in-house": ChromaInHouseProvider,
+        "in-memory": InHouseProvider,
         "mem0": Mem0Provider,
         "zep": ZepProvider
     }
@@ -101,6 +104,6 @@ class ProviderFactory:
         
         Example:
             >>> ProviderFactory.get_available_providers()
-            ['in-house', 'mem0', 'zep']
+            ['in-house', 'in-memory', 'mem0', 'zep']
         """
         return list(cls.PROVIDERS.keys())

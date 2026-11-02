@@ -233,14 +233,11 @@ class StubInHouseProvider(InHouseProvider):
             metadata=dict(note.metadata or {}),
         )
 
-    def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
+    def search(self, query_text, user_id, top_k) -> List:
         self.retrieve_calls += 1
-        self.last_query_params = dict(query.params)
-        return MemoryResponse(success=True, search_results=[])
-
-    def retrieve_memory_raw(self, query: MemoryQuery) -> List:
-        self.retrieve_calls += 1
-        self.last_query_params = dict(query.params)
+        self.last_query_params = {
+            "content": query_text, "user_id": user_id, "top_k": top_k,
+        }
         return []
 
     def close(self) -> None:
@@ -275,14 +272,11 @@ class StubZepProvider(ZepProvider):
     def get_memory(self, memory_id: str) -> MemoryResponse:
         return MemoryResponse(success=False, error="not found")
 
-    def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
+    def search(self, query_text, user_id, top_k) -> List:
         self.retrieve_calls += 1
-        self.last_query_params = dict(query.params)
-        return MemoryResponse(success=True, search_results=[])
-
-    def retrieve_memory_raw(self, query: MemoryQuery) -> List:
-        self.retrieve_calls += 1
-        self.last_query_params = dict(query.params)
+        self.last_query_params = {
+            "content": query_text, "user_id": user_id, "top_k": top_k,
+        }
         return []
 
     def close(self) -> None:
@@ -604,12 +598,9 @@ class InHouseProviderPreservationTests(unittest.TestCase):
         self.assertTrue(response.success, msg=str(response))
         self.assertEqual(provider.retrieve_calls, 1)
         self.assertEqual(provider.add_calls, 0)
-        # agent_name is propagated through MemoryManager so
-        # ``_apply_sharing_filter`` works inside the provider.
-        self.assertEqual(
-            provider.last_query_params.get("agent_name"),
-            "ReaderAgent",
-        )
+        # Providers get the user scope, never the agent: the kernel
+        # applies visibility (docs/PROVIDER_CONTRACT.md).
+        self.assertEqual(provider.last_query_params.get("user_id"), "alex")
         self.assertLessEqual(elapsed, FAST_PATH_BUDGET_S)
 
 
@@ -640,10 +631,7 @@ class ZepProviderPreservationTests(unittest.TestCase):
         self.assertTrue(response.success, msg=str(response))
         self.assertEqual(provider.retrieve_calls, 1)
         self.assertEqual(provider.add_calls, 0)
-        self.assertEqual(
-            provider.last_query_params.get("agent_name"),
-            "ReaderAgent",
-        )
+        self.assertEqual(provider.last_query_params.get("user_id"), "alex")
         self.assertLessEqual(elapsed, FAST_PATH_BUDGET_S)
 
 

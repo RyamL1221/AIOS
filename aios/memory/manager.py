@@ -8,15 +8,18 @@ to enable different storage backends (in-house, Mem0, Zep).
 import logging
 import time
 from collections import OrderedDict
-from typing import Optional, Dict, Any, Set
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, Set, Tuple
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.config.config_manager import config as global_config
+from .embedding import EmbeddingConfig
 from .providers import ProviderFactory, MemoryProvider
-from .providers.base import _apply_sharing_filter
+from .providers.base import Candidate, ProviderError
 from .providers.in_house import InHouseProvider
 from .providers.zep import ZepProvider
+from .visibility import apply_sharing_filter
 from .write_barrier import MemoryWriteBarrier, WaitOutcome
 
 logger = logging.getLogger(__name__)
@@ -24,6 +27,10 @@ logger = logging.getLogger(__name__)
 # Shared retrieval over-fetches because a provider applies k before the
 # kernel's visibility filter removes other agents' private memories.
 SHARED_FETCH_FACTOR = 4
+
+# An update may not move a memory to another owner or user, or rewrite
+# when it was created.
+UPDATE_PROTECTED_METADATA = ("owner_agent", "user_id", "created_at")
 
 
 class MemoryManager:
@@ -80,6 +87,11 @@ class MemoryManager:
         # Get configuration
         memory_config = global_config.get_memory_config() or {}
         storage_config = global_config.get_storage_config() or {}
+        # The one embedding model every backend uses.
+        self.embedding = EmbeddingConfig.from_memory_config(memory_config)
+        self.provider_type = (
+            provider or memory_config.get("provider", "in-house")
+        )
         
         # Determine provider type: explicit parameter > config > default
         provider_type = provider or memory_config.get("provider", "in-house")
@@ -100,9 +112,10 @@ class MemoryManager:
         barrier_config = memory_config.get("write_barrier", {}) or {}
         self.barrier = MemoryWriteBarrier(config=barrier_config)
 
-        # Selection settings for retrieve_for_agent.
+        # Selection settings for retrieve_for_agent. A threshold of 0.0
+        # ranks scored candidates without dropping any.
         self.relevance_threshold = memory_config.get(
-            "relevance_threshold", 0.5
+            "relevance_threshold", 0.0
         )
         self.max_injected_memories = memory_config.get(
             "max_injected_memories", 5
@@ -142,17 +155,33 @@ class MemoryManager:
         Extracts the appropriate configuration section based on the provider type.
         
         Args:
-            provider_type: The type of provider ("in-house", "mem0", "zep")
+            provider_type: The type of provider ("in-house", "in-memory",
+                "mem0", "zep")
             memory_config: The memory configuration section from config
             storage_config: The storage configuration section from config
         
         Returns:
             Dictionary containing provider-specific configuration
         """
+        embedding = EmbeddingConfig.from_memory_config(memory_config)
         if provider_type == "in-house":
-            return storage_config
+            return {
+                **(memory_config.get("chroma_inhouse") or {}),
+                "embedding": embedding.as_dict(),
+            }
+        elif provider_type == "in-memory":
+            return dict(memory_config.get("in_memory") or {})
         elif provider_type == "mem0":
-            return memory_config.get("mem0", {})
+            mem0_config = dict(memory_config.get("mem0") or {})
+            pinned = embedding.mem0_embedder()
+            configured = mem0_config.get("embedder")
+            if configured and configured != pinned:
+                logger.warning(
+                    "memory.mem0.embedder is ignored; Mem0 embeds with "
+                    "memory.embedding (%s)", embedding.model,
+                )
+            mem0_config["embedder"] = pinned
+            return mem0_config
         elif provider_type == "zep":
             return memory_config.get("zep", {})
         return {}
@@ -247,12 +276,18 @@ class MemoryManager:
         enqueued, so any retrieval accepted later sees it pending; a
         retrieval records the high-water mark at acceptance, so later
         writes never delay it. ``add_agentic_memory`` is included
-        because this can run before ``execute_request`` rewrites it.
+        because this can run before ``execute_request`` rewrites it. An
+        update is stamped like a write, so a retrieval accepted after it
+        reads the new content.
         """
         query = memory_syscall.query
         operation = query.operation_type
         if operation in ("add_memory", "add_agentic_memory"):
             user_id = query.params.get("metadata", {}).get("user_id")
+            if user_id:
+                memory_syscall.barrier_seq = self.barrier.acquire(user_id)
+        elif operation == "update_memory":
+            user_id = self._update_user_id(query)
             if user_id:
                 memory_syscall.barrier_seq = self.barrier.acquire(user_id)
         elif operation in ("retrieve_memory", "retrieve_memory_raw"):
@@ -263,6 +298,15 @@ class MemoryManager:
                 )
 
     @staticmethod
+    def _update_user_id(query: MemoryQuery) -> Optional[str]:
+        """The user an update is stamped under: the caller's user_id."""
+        params = query.params
+        return (
+            params.get("user_id")
+            or (params.get("metadata") or {}).get("user_id")
+        )
+
+    @staticmethod
     def _can_write(agent_name: str, metadata: Optional[dict]) -> bool:
         """Only the owner may update or delete a memory, shared or not.
         Fails closed: a memory with no owner is not writable."""
@@ -270,12 +314,12 @@ class MemoryManager:
 
     def _locate_memory(
         self, query: MemoryQuery, agent_name: str
-    ) -> MemoryResponse:
+    ) -> Optional[Candidate]:
         """Fetch a memory named by id, wherever it is stored.
 
-        Mem0 keeps one collection per user, so an id alone cannot find
-        a row. Uses the caller's user_id when given; otherwise tries the
-        agent's own scope, then the provider's default.
+        Providers keep one collection per user, so an id alone cannot
+        find a row. Uses the caller's user_id when given; otherwise tries
+        the agent's own scope, then the provider's default.
         """
         params = query.params
         user_id = (
@@ -283,14 +327,11 @@ class MemoryManager:
             or (params.get("metadata") or {}).get("user_id")
         )
         scopes = [user_id] if user_id else [agent_name, None]
-        response = MemoryResponse(success=False, error="Memory not found")
         for scope in scopes:
-            response = self.provider.get_memory_for_user(
-                params["memory_id"], scope
-            )
-            if response.success:
-                break
-        return response
+            found = self.provider.get(params["memory_id"], scope)
+            if found is not None:
+                return found
+        return None
 
     @staticmethod
     def _can_read(agent_name: str, metadata: Optional[dict]) -> bool:
@@ -303,27 +344,15 @@ class MemoryManager:
         )
 
     def _fetch_candidates(
-        self,
-        agent_name: str,
-        provider_user_id: Optional[str],
-        query_text: str,
-        top_k: int,
-        sharing_policy: Optional[str] = None,
-    ) -> MemoryResponse:
-        """Issue one provider retrieval with an explicit ``top_k``."""
-        params: Dict[str, Any] = {
-            "content": query_text,
-            "k": top_k,
-            "top_k": top_k,
-            "agent_name": agent_name,
-        }
-        if provider_user_id is not None:
-            params["user_id"] = provider_user_id
-        if sharing_policy is not None:
-            params["sharing_policy"] = sharing_policy
-        return self.provider.retrieve_memory(
-            MemoryQuery(operation_type="retrieve_memory", params=params)
-        )
+        self, scope_user_id: str, query_text: str, top_k: int
+    ) -> Tuple[list, Optional[str]]:
+        """One provider search with an explicit ``top_k``, as kernel
+        rows. Returns ``(rows, error)``."""
+        try:
+            found = self.provider.search(query_text, scope_user_id, top_k)
+        except Exception as e:
+            return [], f"{type(e).__name__}: {e}"
+        return [candidate.to_row() for candidate in found], None
 
     @staticmethod
     def _merge_and_deduplicate(own: list, shared: list) -> list:
@@ -400,6 +429,7 @@ class MemoryManager:
             "after_visibility": 0,
             "after_dedupe": 0,
             "scores_present": False,
+            "threshold_used": None,
             "after_threshold": 0,
             "after_cap": 0,
             "top_k_used": top_k_used,
@@ -416,35 +446,22 @@ class MemoryManager:
                 "outcome": outcome.name,
             })
 
-        # With no user_id at all, the provider applies its own default
-        # scope; the kernel never invents one (see _resolve_user_id).
-        response = self._fetch_candidates(
-            agent_name,
-            resolved_user_id or user_id,
-            query_text,
-            top_k_used["own"],
+        # Without a resolved user, own memories live in the agent's
+        # scope, where add_memory files a write that names no user.
+        own, diagnostics["error"] = self._fetch_candidates(
+            scope_user_id, query_text, top_k_used["own"]
         )
-        if not response.success:
-            diagnostics["error"] = response.error
-        own = list(response.search_results or [])
 
         shared: list = []
         if fetch_shared:
-            try:
-                response = self._fetch_candidates(
-                    agent_name,
-                    scope_user_id,
-                    query_text,
-                    top_k_used["shared"],
-                    sharing_policy="shared",
-                )
-                if response.success:
-                    shared = list(response.search_results or [])
-            except Exception:
+            shared, error = self._fetch_candidates(
+                scope_user_id, query_text, top_k_used["shared"]
+            )
+            if error:
                 logger.debug(
-                    "Shared memory retrieval failed for user_id=%s",
+                    "Shared memory retrieval failed for user_id=%s: %s",
                     scope_user_id,
-                    exc_info=True,
+                    error,
                 )
         diagnostics["own_fetched"] = len(own)
         diagnostics["shared_fetched"] = len(shared)
@@ -460,12 +477,12 @@ class MemoryManager:
         shared = [mem for mem in shared if in_partition(mem)]
         diagnostics["after_partition"] = len(own) + len(shared)
 
-        # Applied here even when the provider already filtered, so a
-        # provider or caller cannot weaken it.
+        # The only place visibility is enforced: providers return every
+        # row in the scope (docs/PROVIDER_CONTRACT.md).
         policy = None if sharing_policy == "shared" else sharing_policy
 
         def visible(rows: list) -> list:
-            return _apply_sharing_filter(
+            return apply_sharing_filter(
                 rows,
                 agent_name,
                 scope_user_id,
@@ -482,14 +499,15 @@ class MemoryManager:
         )
         diagnostics["after_dedupe"] = len(results)
 
-        # Mem0's get_all path returns no scores: the threshold cannot
-        # apply there and scores_present records that.
+        # A provider without scored search returns no scores: the
+        # threshold cannot apply and scores_present records that.
         scores_present = any(
             mem.get("score") is not None for mem in results
         )
         diagnostics["scores_present"] = scores_present
         if scores_present:
-            threshold = getattr(self, "relevance_threshold", 0.5)
+            threshold = getattr(self, "relevance_threshold", 0.0)
+            diagnostics["threshold_used"] = threshold
             results = [
                 mem for mem in results
                 if mem.get("score") is None
@@ -608,6 +626,13 @@ class MemoryManager:
                 memory_note.metadata["owner_agent"] = (
                     memory_syscall.agent_name
                 )
+            # The rest of the required metadata (PROVIDER_CONTRACT.md).
+            memory_note.metadata.setdefault("memory_type", "")
+            if not memory_note.metadata.get("sharing_policy"):
+                memory_note.metadata["sharing_policy"] = "private"
+            memory_note.metadata.setdefault(
+                "created_at", datetime.now(timezone.utc).isoformat()
+            )
             # Track user_id for cross-agent discovery.
             uid = (memory_note.metadata or {}).get("user_id")
             logger.info(
@@ -639,7 +664,13 @@ class MemoryManager:
             barrier_user_id = memory_note.metadata.get("user_id")
             resp = None
             try:
-                resp = self.provider.add_memory(memory_note)
+                try:
+                    resp = MemoryResponse(
+                        success=True,
+                        memory_id=self.provider.add(memory_note),
+                    )
+                except ProviderError as e:
+                    resp = MemoryResponse(success=False, error=str(e))
                 logger.info(
                     "[MEM0_DEBUG] add_memory result: "
                     "user_id=%s, success=%s, memory_id=%s, "
@@ -664,45 +695,44 @@ class MemoryManager:
         
         elif operation_type == "remove_memory":
             found = self._locate_memory(query, memory_syscall.agent_name)
-            if not found.success or not self._can_write(
+            if found is None or not self._can_write(
                 memory_syscall.agent_name, found.metadata
             ):
                 return MemoryResponse(
                     success=False, error="Memory not found"
                 )
-            return self.provider.remove_memory_for_user(
-                query.params["memory_id"],
-                found.metadata.get("user_id") or None,
-            )
+            memory_id = query.params["memory_id"]
+            try:
+                deleted = self.provider.delete(
+                    memory_id, found.metadata.get("user_id") or None
+                )
+            except ProviderError as e:
+                return MemoryResponse(success=False, error=str(e))
+            if not deleted:
+                return MemoryResponse(
+                    success=False, error="Memory not found"
+                )
+            return MemoryResponse(success=True, memory_id=memory_id)
         
         elif operation_type == "update_memory":
-            found = self._locate_memory(query, memory_syscall.agent_name)
-            if not found.success or not self._can_write(
-                memory_syscall.agent_name, found.metadata
-            ):
-                return MemoryResponse(
-                    success=False, error="Memory not found"
-                )
-            memory_note = self._analyze_query_to_memory(query)
-            # Route to the collection the memory was found in.
-            stored_user_id = found.metadata.get("user_id")
-            if stored_user_id:
-                if memory_note.metadata is None:
-                    memory_note.metadata = {}
-                memory_note.metadata["user_id"] = stored_user_id
-            return self.provider.update_memory(memory_note)
+            return self._update_memory(memory_syscall)
         
         elif operation_type == "get_memory":
-            resp = self._locate_memory(query, memory_syscall.agent_name)
-            if resp.success and not self._can_read(
-                memory_syscall.agent_name, resp.metadata
+            found = self._locate_memory(query, memory_syscall.agent_name)
+            if found is None or not self._can_read(
+                memory_syscall.agent_name, found.metadata
             ):
                 # Same answer as a missing id, so a read by id does
                 # not reveal that a private memory exists.
                 return MemoryResponse(
                     success=False, error="Memory not found"
                 )
-            return resp
+            return MemoryResponse(
+                success=True,
+                memory_id=found.memory_id,
+                content=found.content,
+                metadata=found.metadata,
+            )
         
         elif operation_type == "retrieve_memory":
             query.params["agent_name"] = memory_syscall.agent_name
@@ -744,34 +774,83 @@ class MemoryManager:
             )
 
         elif operation_type == "retrieve_memory_raw":
-            query.params["agent_name"] = memory_syscall.agent_name
-            if not query.params.get("user_id"):
-                logger.warning(
-                    "retrieve_memory_raw called without request-scoped "
-                    "user_id; skipping latest_user_id fallback to "
-                    "avoid cross-user contamination (agent=%s)",
-                    memory_syscall.agent_name,
-                )
-            # See ``retrieve_memory`` above -- same barrier wait
-            # contract for the raw-retrieval path, including the
-            # provider-type guard from task 5.5.
-            barrier_snapshot = getattr(
-                memory_syscall, "barrier_snapshot", 0
+            # The same selection as retrieve_memory, returned as notes.
+            from .note import MemoryNote
+
+            sharing_policy = query.params.get("sharing_policy")
+            candidates, _ = self.retrieve_for_agent(
+                memory_syscall.agent_name,
+                query.params.get("user_id"),
+                query.params.get("content", ""),
+                k=query.params.get("k", 5),
+                include_shared=sharing_policy == "shared",
+                sharing_policy=sharing_policy,
+                barrier_snapshot=getattr(
+                    memory_syscall, "barrier_snapshot", 0
+                ),
             )
-            barrier_user_id = query.params.get("user_id")
-            if (
-                barrier_snapshot
-                and barrier_user_id
-                and self._provider_supports_barrier()
-            ):
-                self.barrier.wait_until_drained(
-                    barrier_user_id, barrier_snapshot
+            return [
+                MemoryNote(
+                    content=row["content"],
+                    id=row["memory_id"],
+                    keywords=row["keywords"],
+                    tags=row["tags"],
+                    category=row["category"],
+                    context=row["metadata"].get("context", "General"),
+                    timestamp=row["timestamp"] or None,
+                    metadata=row["metadata"],
                 )
-            return self.provider.retrieve_memory_raw(query)
-        
+                for row in candidates
+            ]
+
         else:
             raise ValueError(f"Invalid operation: {operation_type}")
     
+    def _update_memory(self, memory_syscall) -> MemoryResponse:
+        """Owner-only update, stamped against the write barrier like a
+        write: a retrieval accepted after the update waits for it, so it
+        reads the new content. The barrier is released on every path."""
+        query = memory_syscall.query
+        params = query.params
+        barrier_user_id = self._update_user_id(query)
+        barrier_seq = getattr(memory_syscall, "barrier_seq", 0)
+        success = False
+        try:
+            found = self._locate_memory(query, memory_syscall.agent_name)
+            if found is None or not self._can_write(
+                memory_syscall.agent_name, found.metadata
+            ):
+                return MemoryResponse(
+                    success=False, error="Memory not found"
+                )
+            metadata = {
+                key: value
+                for key, value in (params.get("metadata") or {}).items()
+                if key not in UPDATE_PROTECTED_METADATA
+            }
+            try:
+                updated = self.provider.update(
+                    params["memory_id"],
+                    found.metadata.get("user_id") or None,
+                    params.get("content"),
+                    metadata,
+                )
+            except ProviderError as e:
+                return MemoryResponse(success=False, error=str(e))
+            if not updated:
+                return MemoryResponse(
+                    success=False, error="Memory not found"
+                )
+            success = True
+            return MemoryResponse(
+                success=True, memory_id=params["memory_id"]
+            )
+        finally:
+            if barrier_user_id:
+                self.barrier.release(
+                    barrier_user_id, barrier_seq, success=success
+                )
+
     def close(self) -> None:
         """
         Clean up resources.

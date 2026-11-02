@@ -53,11 +53,13 @@ def write(user, agent, content, policy="private", mtype="profile"):
     return result["response"]["memory_id"]
 
 
-def search(agent, user=None, k=5, **params):
+def search(agent, user=None, k=5, content="q", **params):
     """Run an SDK-shaped search and return its result rows."""
     if user:
         params["user_id"] = user
-    result = memory(agent, "retrieve_memory", content="q", k=k, **params)
+    result = memory(
+        agent, "retrieve_memory", content=content, k=k, **params
+    )
     return result["response"]["search_results"]
 
 
@@ -75,11 +77,18 @@ def chat(user, model=MODEL):
 def check_config():
     response = requests.get(f"{BASE_URL}/memory/config", timeout=10)
     response.raise_for_status()
-    assert set(response.json()) == {
+    body = response.json()
+    assert set(body) == {
         "relevance_threshold",
         "max_injected_memories",
         "max_memory_tokens",
-    }
+        "provider",
+        "capabilities",
+        "embedding",
+    }, body
+    assert set(body["embedding"]) == {
+        "provider", "model", "dimension", "ollama_base_url",
+    }, body
 
 
 def check_privacy_gap():
@@ -91,6 +100,22 @@ def check_privacy_gap():
     assert contents == {"open note", "my note"}, contents
     diagnostics = chat(user)
     assert diagnostics["injected_count"] == 2, diagnostics
+
+
+def check_scored_retrieval():
+    user = f"smoke_{RUN}_scored"
+    write(user, "profile_agent", "prefers Python and VS Code", "shared")
+    write(user, "profile_agent", "lasagna needs ricotta", "shared")
+    rows = search("assistant_agent", user, content="Python editor")
+    assert rows[0]["content"] == "prefers Python and VS Code", rows
+    assert all(isinstance(r["score"], float) for r in rows), rows
+    assert rows[0]["score"] > rows[1]["score"], rows
+    config = requests.get(f"{BASE_URL}/memory/config", timeout=10).json()
+    diagnostics = chat(user)
+    assert diagnostics["scores_present"] is True, diagnostics
+    assert diagnostics["threshold_used"] == config[
+        "relevance_threshold"
+    ], diagnostics
 
 
 def check_own_roundtrip_without_metadata():
@@ -193,7 +218,6 @@ def check_cap_and_top_k():
     assert diagnostics["after_dedupe"] > limit, diagnostics
     assert diagnostics["after_cap"] == limit, diagnostics
     assert diagnostics["injected_count"] <= limit, diagnostics
-    assert diagnostics["scores_present"] is False, diagnostics
 
 
 def check_azure_mem0_llm_sync():
@@ -211,6 +235,7 @@ def check_azure_mem0_llm_sync():
 CHECKS = [
     check_config,
     check_privacy_gap,
+    check_scored_retrieval,
     check_own_roundtrip_without_metadata,
     check_get_memory_visibility,
     check_update_delete_owner_only,

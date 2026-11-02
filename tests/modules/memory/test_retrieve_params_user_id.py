@@ -38,7 +38,9 @@ if _ROOT not in sys.path:
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.manager import MemoryManager
-from aios.memory.providers.base import MemoryProvider
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.syscall.memory import MemorySyscall
 
 
@@ -301,7 +303,9 @@ class TestRetrieveMemoryTopLevelUserId(unittest.TestCase):
         self.assertEqual(len(provider.retrieve_calls), 1)
         received_query = provider.retrieve_calls[0]
 
-        self.assertNotIn("user_id", received_query.params)
+        # The kernel scopes to the agent's own memories, never to the
+        # nested user.
+        self.assertEqual(received_query.params["user_id"], TEST_AGENT)
 
 
 class TestRetrieveMemoryUserIdEndToEnd(unittest.TestCase):
@@ -337,11 +341,8 @@ class TestRetrieveMemoryUserIdEndToEnd(unittest.TestCase):
             received.params["user_id"],
             TEST_USER_ID,
         )
-        # agent_name should also have been injected
-        self.assertEqual(
-            received.params["agent_name"],
-            TEST_AGENT,
-        )
+        # Providers never get the agent's name.
+        self.assertNotIn("agent_name", received.params)
 
     def test_retrieve_memory_raw_preserves_top_level_user_id(self):
         """Same as above but for retrieve_memory_raw operation."""

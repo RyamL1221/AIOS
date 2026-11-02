@@ -19,6 +19,11 @@ class KernelRetrievalDouble:
     _await_pending_writes = MemoryManager._await_pending_writes
     _fetch_candidates = MemoryManager._fetch_candidates
     _provider_supports_barrier = MemoryManager._provider_supports_barrier
+    _locate_memory = MemoryManager._locate_memory
+    _update_memory = MemoryManager._update_memory
+    _update_user_id = staticmethod(MemoryManager._update_user_id)
+    _can_read = staticmethod(MemoryManager._can_read)
+    _can_write = staticmethod(MemoryManager._can_write)
     _merge_and_deduplicate = staticmethod(
         MemoryManager._merge_and_deduplicate
     )

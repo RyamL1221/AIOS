@@ -24,6 +24,9 @@ from aios.config.config_manager import config
 from aios.memory.context_injector import ContextInjector
 from aios.memory.conversation_extractor import ConversationExtractor
 
+# Providers that get the context injector and conversation extractor.
+PERSONALIZATION_PROVIDERS = ("mem0", "in-house")
+
 from cerebrum.llm.apis import LLMQuery, LLMResponse
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
@@ -323,9 +326,13 @@ def initialize_components() -> dict:
         components["memory"] = initialize_memory_manager(memory_config, components["storage"])
         print("memory manager: ", components["memory"])
 
-        # Wire up personalization components for mem0 provider
+        # Wire up personalization for the providers that conform to
+        # the provider contract (docs/PROVIDER_CONTRACT.md).
         provider_type = memory_config.get("provider", "in-house")
-        if provider_type == "mem0" and components["memory"]:
+        if (
+            provider_type in PERSONALIZATION_PROVIDERS
+            and components["memory"]
+        ):
             try:
                 syscall_executor.context_injector = (
                     ContextInjector(
@@ -508,6 +515,9 @@ async def get_memory_config():
         "relevance_threshold": manager.relevance_threshold,
         "max_injected_memories": manager.max_injected_memories,
         "max_memory_tokens": manager.max_memory_tokens,
+        "provider": manager.provider_type,
+        "capabilities": manager.provider.capabilities(),
+        "embedding": manager.embedding.as_dict(),
     }
 
 

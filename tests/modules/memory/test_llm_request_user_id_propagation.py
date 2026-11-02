@@ -34,7 +34,9 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
-from aios.memory.providers.base import MemoryProvider
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.memory.write_barrier import MemoryWriteBarrier
 from aios.syscall.syscall import SyscallExecutor
 

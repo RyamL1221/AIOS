@@ -63,16 +63,36 @@ llms:
 
 memory:
   log_mode: "console" # choose from [console, file]
-  provider: "in-house"  # Options: in-house, mem0, zep
+  provider: "in-house"  # Options: in-house (Chroma), mem0, zep, in-memory (tests)
 
   # Personalization settings (all opt-in, disabled by default)
   # auto_extract: saves conversation turns as memories after each chat LLM call
   # auto_inject: retrieves relevant memories and prepends them before each chat LLM call
   auto_extract: false
   auto_inject: false
-  relevance_threshold: 0.5     # Minimum similarity score for memory injection
+  # 0.0 ranks scored candidates and drops none, so kernel_shared selects
+  # as before scored search; the Subtask 19 ablation varies it.
+  relevance_threshold: 0.0     # Minimum similarity score for memory injection
   max_injected_memories: 5     # Max memories to inject per LLM call
   max_memory_tokens: 1500      # Token budget for injected memory block
+
+
+  # The one embedding model every memory backend uses
+  # (docs/PROVIDER_CONTRACT.md). Mem0's embedder and the in-house Chroma
+  # provider both read it; mem0.embedder is ignored. Recorded in every
+  # results file through /memory/config. Changing it needs fresh stores.
+  embedding:
+    provider: "ollama"
+    model: "nomic-embed-text"
+    dimension: 768
+    ollama_base_url: "http://localhost:11434"
+
+  # In-house provider (provider: "in-house"): verbatim memories in one
+  # Chroma collection per user, cosine similarity as the score.
+  chroma_inhouse:
+    path: ".aios_state/chroma_inhouse"
+    collection_prefix: "aios_mem"
+    default_user_id: "default"
 
   # Memory write barrier — holds user_id-scoped retrievals until in-flight
   # create_memory operations for the same user_id commit. Defaults are coded
@@ -94,11 +114,7 @@ memory:
     #   config:
     #     model: "qwen2.5:7b"
     #     ollama_base_url: "http://localhost:11434"
-    embedder:
-      provider: "ollama"
-      config:
-        model: "nomic-embed-text"
-        ollama_base_url: "http://localhost:11434"
+    # embedder: set by memory.embedding
     vector_store:
       provider: "chroma"
       config:

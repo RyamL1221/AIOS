@@ -1,296 +1,189 @@
 """
-Abstract base class for memory providers.
+The provider contract: what every memory backend implements.
 
-This module defines the MemoryProvider interface that all memory provider
-implementations must follow. The interface enables pluggable memory backends
-while maintaining a consistent API across different storage solutions.
+A provider stores and finds memories. The kernel decides which ones an
+agent sees: visibility, the user partition, dedupe, the relevance
+threshold and the count cap all live in
+``MemoryManager.retrieve_for_agent``, never here. A provider returns
+everything in the user's scope that matches, scored where it can.
+See docs/PROVIDER_CONTRACT.md.
 """
+import hashlib
+import re
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
-
-from cerebrum.memory.apis import MemoryQuery, MemoryResponse
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from aios.memory.note import MemoryNote
 
+# Every stored item carries these; the kernel fills them before ``add``.
+REQUIRED_METADATA = (
+    "owner_agent",
+    "user_id",
+    "memory_type",
+    "sharing_policy",
+    "created_at",
+)
 
-def _apply_sharing_filter(
-    candidates: list,
-    agent_name: str,
-    user_id: str | None,
-    sharing_policy: str | None,
-    get_metadata: callable,
-) -> list:
-    """Filter candidate memories by ownership and sharing rules.
+CAPABILITIES = (
+    "scored_search",
+    "semantic_search",
+    "internal_llm",
+    "native_sdk",
+)
 
-    Implements the decision matrix for cross-agent memory retrieval.
-    Each candidate is kept or dropped based on the combination of
-    ``user_id`` and ``sharing_policy`` supplied by the caller, plus
-    the metadata stored on the memory itself.
 
-    Safe defaults:
-    - Missing ``sharing_policy`` in metadata → treated as ``"private"``
-    - Missing ``owner_agent`` in metadata → never matches any agent
+class ProviderError(Exception):
+    """A backend operation failed (not the same as "not found")."""
 
-    Privacy invariant: a memory whose ``owner_agent`` differs from
-    *agent_name* is **never** returned unless its metadata
-    ``sharing_policy`` is exactly ``"shared"``.
 
-    Args:
-        candidates: Raw results from the provider's search.
-        agent_name: The requesting agent's name.
-        user_id: Optional user_id filter from query.params.
-        sharing_policy: Optional sharing_policy filter from
-            query.params.
-        get_metadata: Callable that extracts a metadata dict from
-            a single candidate item.  Must return a dict with keys:
-            ``owner_agent``, ``user_id``, ``sharing_policy``.
+@dataclass
+class Candidate:
+    """One stored memory as a provider returns it.
 
-    Returns:
-        Filtered list of candidates that pass the sharing rules.
+    ``score`` is a similarity, higher is closer, or ``None`` when the
+    backend did not score this row (``list``, or a backend without
+    scored search).
     """
-    result = []
-    for candidate in candidates:
-        meta = get_metadata(candidate)
-        mem_owner = meta.get("owner_agent", "")
-        mem_user = meta.get("user_id", "")
-        mem_policy = meta.get("sharing_policy", "") or "private"
 
-        is_own = mem_owner == agent_name
+    memory_id: str
+    content: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    score: Optional[float] = None
 
-        # --- privacy invariant ---
-        if not is_own and mem_policy != "shared":
-            continue
-
-        if user_id is None and sharing_policy is None:
-            # Default: agent-scoped only
-            if is_own:
-                result.append(candidate)
-
-        elif user_id is None and sharing_policy is not None:
-            # Policy filter within agent scope
-            if is_own and mem_policy == sharing_policy:
-                result.append(candidate)
-
-        elif user_id is not None and sharing_policy is None:
-            # User-scoped with implicit privacy
-            if mem_user == user_id and (
-                is_own or mem_policy == "shared"
-            ):
-                result.append(candidate)
-
-        elif (
-            user_id is not None
-            and sharing_policy == "shared"
-        ):
-            # Cross-agent shared
-            if (
-                mem_user == user_id
-                and mem_policy == "shared"
-            ):
-                result.append(candidate)
-
-        elif (
-            user_id is not None
-            and sharing_policy == "private"
-        ):
-            # Own private only
-            if (
-                is_own
-                and mem_user == user_id
-                and mem_policy == "private"
-            ):
-                result.append(candidate)
-
-        else:
-            # Any other sharing_policy value with user_id
-            if (
-                mem_user == user_id
-                and mem_policy == sharing_policy
-            ):
-                if is_own or mem_policy == "shared":
-                    result.append(candidate)
-
-    return result
+    def to_row(self) -> Dict[str, Any]:
+        """The kernel's row shape, which SDK search returns. The note
+        fields are repeated at the top level as before the contract."""
+        meta = self.metadata
+        return {
+            "memory_id": self.memory_id,
+            "content": self.content,
+            "metadata": meta,
+            "score": self.score,
+            "keywords": meta.get("keywords", []),
+            "tags": meta.get("tags", []),
+            "category": meta.get("category", "Uncategorized"),
+            "timestamp": meta.get("timestamp", ""),
+        }
 
 
-def _enrich_metadata(metadata: dict) -> dict:
-    """Ensure owner_agent, user_id, sharing_policy, memory_type
-    are present with empty-string defaults."""
-    for key in (
-        "owner_agent",
-        "user_id",
-        "sharing_policy",
-        "memory_type",
-    ):
-        metadata.setdefault(key, "")
-    return metadata
+def note_metadata(memory_note: "MemoryNote") -> Dict[str, Any]:
+    """The metadata a provider stores for a note: the note's own fields
+    plus everything the caller put in ``note.metadata``. Drops values a
+    vector store cannot hold (``None``, empty lists, nested dicts)."""
+    metadata: Dict[str, Any] = {
+        "keywords": memory_note.keywords,
+        "tags": memory_note.tags,
+        "category": memory_note.category,
+        "context": memory_note.context,
+        "timestamp": memory_note.timestamp,
+        "memory_note_id": memory_note.id,
+    }
+    metadata.update(getattr(memory_note, "metadata", None) or {})
+    return {
+        key: value for key, value in metadata.items()
+        if value is not None
+        and not isinstance(value, dict)
+        and not (isinstance(value, list) and not value)
+    }
+
+
+def similarity_from_distance(distance: float, space: str) -> float:
+    """Convert a Chroma distance to a similarity, higher is closer.
+
+    ``cosine`` and ``ip`` distances are ``1 - similarity``. Chroma's
+    ``l2`` is the squared Euclidean distance, which for unit vectors is
+    ``2 - 2 cos``; the pinned embedding model returns unit vectors, so
+    this gives the cosine similarity.
+    """
+    if space in ("cosine", "ip"):
+        return 1.0 - distance
+    if space == "l2":
+        return 1.0 - distance / 2.0
+    raise ValueError(f"unknown Chroma distance space {space!r}")
+
+
+def user_collection_name(prefix: str, user_id: str) -> str:
+    """A valid Chroma collection name for one user's memories: the
+    prefix, a readable part of the user id and a hash of the whole id,
+    so long or similar ids never share a collection."""
+    readable = re.sub(r"[^a-zA-Z0-9_-]", "_", str(user_id))
+    readable = re.sub(r"_+", "_", readable).strip("_-")[:30] or "user"
+    digest = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}_{readable}_{digest}"
 
 
 class MemoryProvider(ABC):
-    """Abstract base class for memory providers.
-    
-    All memory provider implementations (InHouseProvider, Mem0Provider, 
-    ZepProvider) must inherit from this class and implement all abstract methods.
-    
-    The provider abstraction enables:
-    - Pluggable memory backends without changing application code
-    - Consistent API across different storage solutions
-    - Easy addition of new memory providers
+    """The interface every memory backend implements.
+
+    Every method takes the user scope explicitly. ``None`` means the
+    provider's default scope. No method filters by visibility: an agent's
+    private memory is returned to anyone who asks, and the kernel removes
+    it. See docs/PROVIDER_CONTRACT.md for the full contract.
     """
-    
+
     @abstractmethod
     def initialize(self, config: Dict[str, Any]) -> None:
-        """Initialize the provider with configuration.
-        
-        This method is called after provider instantiation to configure
-        the provider with backend-specific settings.
-        
-        Args:
-            config: Provider-specific configuration dictionary.
-                   For InHouseProvider: vector_db_backend, etc.
-                   For Mem0Provider: api_key, user_id, llm, embedder, etc.
-                   For ZepProvider: api_key, base_url, session_id, etc.
-        
-        Raises:
-            ProviderInitializationError: If initialization fails due to
-                invalid configuration or connection issues.
-        """
-        pass
-    
-    @abstractmethod
-    def add_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
-        """Add a memory note to storage.
-        
-        Args:
-            memory_note: The memory note to store, containing content
-                        and associated metadata (keywords, tags, category, etc.)
-        
-        Returns:
-            MemoryResponse with success=True and memory_id on success,
-            or success=False with error message on failure.
-        """
-        pass
-    
-    @abstractmethod
-    def remove_memory(self, memory_id: str) -> MemoryResponse:
-        """Remove a memory by ID.
-        
-        Args:
-            memory_id: Unique identifier of the memory to remove.
-        
-        Returns:
-            MemoryResponse with success=True on successful removal,
-            or success=False with error message if memory not found.
-        """
-        pass
-    
-    @abstractmethod
-    def update_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
-        """Update an existing memory.
-        
-        Args:
-            memory_note: The memory note with updated content/metadata.
-                        The memory_note.id identifies which memory to update.
-        
-        Returns:
-            MemoryResponse with success=True and memory_id on success,
-            or success=False with error message if memory not found.
-        """
-        pass
-    
-    @abstractmethod
-    def get_memory(self, memory_id: str) -> MemoryResponse:
-        """Retrieve a memory by ID.
-        
-        Args:
-            memory_id: Unique identifier of the memory to retrieve.
-        
-        Returns:
-            MemoryResponse with success=True, content, and metadata on success,
-            or success=False with error message if memory not found.
-        """
-        pass
-    
-    @abstractmethod
-    def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
-        """Search for memories matching the query.
-        
-        Performs semantic search to find memories similar to the query content.
-        
-        Args:
-            query: MemoryQuery containing search parameters:
-                  - params["content"]: The search query text
-                  - params["k"]: Maximum number of results to return
-        
-        Returns:
-            MemoryResponse with success=True and search_results containing
-            a list of matching memories with their content and metadata.
-        """
-        pass
-    
-    @abstractmethod
-    def retrieve_memory_raw(self, query: MemoryQuery) -> List['MemoryNote']:
-        """Retrieve raw memory objects for internal processing.
-        
-        Similar to retrieve_memory but returns raw MemoryNote objects
-        instead of a formatted MemoryResponse. Used for internal operations
-        that need direct access to memory objects.
-        
-        Args:
-            query: MemoryQuery containing search parameters:
-                  - params["content"]: The search query text
-                  - params["k"]: Maximum number of results to return (default: 5)
-        
-        Returns:
-            List of MemoryNote objects matching the query.
-        """
-        pass
-    
-    def get_memory_for_user(
-        self, memory_id: str, user_id: Optional[str] = None
-    ) -> MemoryResponse:
-        """Retrieve a memory by ID from ``user_id``'s storage.
+        """Configure the backend. Raises ProviderInitializationError."""
 
-        Override in a provider that partitions storage by user, where
-        an id alone cannot find a memory. ``None`` is the default scope.
-        """
-        return self.get_memory(memory_id)
+    @abstractmethod
+    def capabilities(self) -> Dict[str, bool]:
+        """What the backend can do, one bool per key in CAPABILITIES:
 
-    def remove_memory_for_user(
-        self, memory_id: str, user_id: Optional[str] = None
-    ) -> MemoryResponse:
-        """Remove a memory by ID from ``user_id``'s storage. See
-        ``get_memory_for_user``."""
-        return self.remove_memory(memory_id)
+        - ``scored_search``: ``search`` returns a score on every row.
+        - ``semantic_search``: ``search`` ranks by meaning, not words.
+        - ``internal_llm``: the backend has its own LLM (fact extraction
+          or similar), whether or not the kernel uses it.
+        - ``native_sdk``: the backend is a third-party memory SDK.
+        """
+
+    @abstractmethod
+    def add(self, memory_note: "MemoryNote") -> str:
+        """Store a note verbatim with ``note_metadata(note)``; return its
+        id. Raises ProviderError on failure. The note's metadata carries
+        every key in REQUIRED_METADATA, and ``user_id`` names the scope.
+        """
+
+    @abstractmethod
+    def search(
+        self, query_text: str, user_id: Optional[str], top_k: int
+    ) -> List[Candidate]:
+        """Up to ``top_k`` of the user's memories, closest first, scored
+        if ``scored_search``. No visibility filtering and no threshold.
+        """
+
+    @abstractmethod
+    def list(self, user_id: Optional[str], top_k: int) -> List[Candidate]:
+        """Up to ``top_k`` of the user's memories in storage order,
+        unscored."""
+
+    @abstractmethod
+    def get(
+        self, memory_id: str, user_id: Optional[str]
+    ) -> Optional[Candidate]:
+        """One memory by id in the user's scope, or ``None``."""
+
+    @abstractmethod
+    def update(
+        self,
+        memory_id: str,
+        user_id: Optional[str],
+        content: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> bool:
+        """Replace the content (when not ``None``) and merge ``metadata``
+        over the stored metadata; required keys are never removed.
+        Returns False if the memory does not exist. Raises ProviderError
+        on failure."""
+
+    @abstractmethod
+    def delete(self, memory_id: str, user_id: Optional[str]) -> bool:
+        """Delete one memory; False if it does not exist."""
 
     def close(self) -> None:
-        """Clean up resources.
-        
-        Override this method if the provider needs to release resources,
-        close connections, or perform cleanup operations when shutting down.
-        
-        For providers with external connections (Mem0, Zep), this should
-        properly disconnect from external services.
-        
-        The default implementation is a no-op for backward compatibility.
-        """
-        pass
+        """Release resources. Override if needed."""
 
-    def sync_llm_from_query(
-        self,
-        llms: "list[dict] | None",
-    ) -> None:
-        """Synchronize the provider's internal LLM with the agent's
-        runtime model selection.
-
-        Override in providers that use an LLM internally (e.g., Mem0
-        uses an LLM for fact extraction). The default implementation
-        is a no-op for providers that don't need LLM synchronization.
-
-        Args:
-            llms: The ``LLMQuery.llms`` field — a list of dicts
-                each containing ``name`` and optionally ``backend``.
-                ``None`` or empty list is a no-op.
-        """
-        pass
+    def sync_llm_from_query(self, llms: "list[dict] | None") -> None:
+        """Point a provider's internal LLM at the agent's model. No-op for
+        providers without one."""

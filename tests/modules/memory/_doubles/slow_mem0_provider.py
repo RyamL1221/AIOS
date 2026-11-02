@@ -30,9 +30,9 @@ from typing import Any, Dict, List, TYPE_CHECKING
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
-from aios.memory.providers.base import (
-    MemoryProvider,
-    _apply_sharing_filter,
+from aios.memory.visibility import apply_sharing_filter as _apply_sharing_filter
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
     _enrich_metadata,
 )
 

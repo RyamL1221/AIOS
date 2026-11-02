@@ -1,9 +1,12 @@
 """
 Mem0Provider - Memory provider using Mem0 for AI-native memory management.
 
-This provider integrates with the Mem0 library to provide AI-native memory
-management capabilities including automatic memory extraction, semantic search,
-and intelligent memory organization.
+Kernel mode stores content verbatim (``infer=False``) in one Mem0 store
+per user. ``search`` scores through Mem0's own vector store: Mem0's
+``search()`` cannot be used for that, because its Chroma adapter returns
+the raw L2 distance as ``score`` and ``score_and_rank`` treats it as a
+similarity, so results come back least similar first, clamped at 1.0
+(docs/PROVIDER_CONTRACT.md, "Mem0").
 """
 import copy
 import logging
@@ -13,12 +16,12 @@ import threading
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
-from cerebrum.memory.apis import MemoryQuery, MemoryResponse
-
 from .base import (
+    Candidate,
     MemoryProvider,
-    _apply_sharing_filter,
-    _enrich_metadata,
+    ProviderError,
+    note_metadata,
+    similarity_from_distance,
 )
 
 if TYPE_CHECKING:
@@ -500,22 +503,15 @@ class Mem0Provider(MemoryProvider):
 
     @staticmethod
     def _extract_filter_metadata(item: dict) -> dict:
-        """Build a unified metadata dict for _apply_sharing_filter.
+        """Build one metadata dict from a Mem0 result item.
 
-        Mem0's ``_search_vector_store`` promotes certain payload keys
-        (``user_id``, ``agent_id``, ``run_id``, ``actor_id``, ``role``)
-        to top-level fields in the returned dict, EXCLUDING them from
-        the nested ``item["metadata"]`` dict.  The sharing filter needs
-        ``user_id`` alongside ``owner_agent`` and ``sharing_policy`` in
-        a single dict.
-
-        This helper merges top-level promoted keys back into the nested
-        metadata so ``_apply_sharing_filter`` can read all cross-agent
-        fields from one place.
+        Mem0 promotes some payload keys (``user_id``, ``agent_id``, ...)
+        and ``created_at`` to the item's top level and leaves them out of
+        ``item["metadata"]``; the kernel reads them from the metadata, so
+        they are merged back in.
         """
         meta = dict(item.get("metadata") or {})
-        # Merge promoted keys that _apply_sharing_filter needs.
-        for key in ("user_id", "agent_id"):
+        for key in ("user_id", "agent_id", "created_at"):
             if key not in meta and key in item:
                 meta[key] = item[key]
         return meta
@@ -721,684 +717,161 @@ class Mem0Provider(MemoryProvider):
 
         return None
 
-    def _await_searchable(
-        self,
-        memory_id: str,
-        user_id: str,
-        max_wait: float = 10.0,
-        interval: float = 0.5,
-        client=None,
-    ) -> bool:
-        """Poll Mem0 until a newly written memory is visible
-        through get_all().
+    # ------------------------------------------------------------------
+    # The provider contract
+    # ------------------------------------------------------------------
 
-        Args:
-            memory_id: ID of the memory to wait for.
-            user_id: User scope for the get_all filter.
-            max_wait: Maximum seconds to wait.
-            interval: Polling interval in seconds.
-            client: Per-user Mem0 client to poll. Falls back
-                to self.client if not provided.
+    # Payload keys that are Mem0's own bookkeeping, not memory metadata.
+    _PAYLOAD_INTERNAL = {"data", "hash", "text_lemmatized", "updated_at"}
 
-        Returns True if the memory becomes visible before timeout.
-        Returns False if the timeout is reached.
-        """
-        target_client = client or self.client
+    def capabilities(self) -> Dict[str, bool]:
+        return {
+            "scored_search": True,
+            "semantic_search": True,
+            "internal_llm": True,
+            "native_sdk": True,
+        }
+
+    def _scope(self, user_id: Optional[str]) -> str:
+        return self._resolve_op_user_id(params={"user_id": user_id})
+
+    def _candidate(self, item: dict) -> Candidate:
+        """A Candidate from a Mem0 result item (``get`` / ``get_all``)."""
+        return Candidate(
+            memory_id=str(item.get("id")),
+            content=item.get("memory", "") or "",
+            metadata=self._extract_filter_metadata(item),
+        )
+
+    def _await_stored(self, client, memory_id: str,
+                      max_wait: float = 10.0,
+                      interval: float = 0.1) -> None:
+        """Wait until a new memory can be read back by id, so a
+        retrieval released by the write barrier sees it."""
         waited = 0.0
-
         while waited < max_wait:
-            try:
-                all_memories = target_client.get_all(
-                    filters={"user_id": user_id}
-                )
-            except Exception:
-                logger.exception(
-                    "add_memory: failed while checking "
-                    "searchability for memory %s user_id=%s",
-                    memory_id,
-                    user_id,
-                )
-                time.sleep(interval)
-                waited += interval
-                continue
-
-            memories = self._normalize_get_all_result(
-                all_memories
-            )
-
-            found = any(
-                memory.get("id") == memory_id
-                or memory.get("memory_id") == memory_id
-                for memory in memories
-                if isinstance(memory, dict)
-            )
-
-            if found:
-                return True
-
+            if client.vector_store.get(vector_id=memory_id) is not None:
+                return
             time.sleep(interval)
             waited += interval
-
         logger.warning(
-            "add_memory: memory %s not searchable after "
-            "%.1fs user_id=%s",
-            memory_id,
-            max_wait,
-            user_id,
+            "add: memory %s not readable after %.1fs", memory_id, max_wait
         )
 
-        return False
-
-    # ------------------------------------------------------------------
-    # CRUD operations
-    # ------------------------------------------------------------------
-
-    def add_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
-        """Add a memory note to Mem0 storage.
-        
-        Maps MemoryNote fields to Mem0's memory format and stores the memory
-        with associated metadata. Extracts user_id and agent_id from the
-        memory_note metadata, falling back to config defaults.
-        
-        Args:
-            memory_note: The memory note to store
-        
-        Returns:
-            MemoryResponse with success=True and memory_id on success,
-            or success=False with error message on failure.
-        """
-        from aios.memory.note import MemoryNote
-        
-        if not isinstance(memory_note, MemoryNote):
-            return MemoryResponse(
-                success=False,
-                error=f"Expected MemoryNote, got {type(memory_note).__name__}"
-            )
-        
-        try:
-            # Extract user_id and agent_id from metadata or use defaults
-            user_id = self.default_user_id
-            agent_id = self.default_agent_id
-            
-            # Check if memory_note has metadata attribute with provider-specific params
-            if hasattr(memory_note, 'metadata') and memory_note.metadata:
-                user_id = memory_note.metadata.get("user_id", user_id)
-                agent_id = memory_note.metadata.get("agent_id", agent_id)
-            
-            # Build metadata for Mem0
-            metadata = {
-                "keywords": memory_note.keywords,
-                "tags": memory_note.tags,
-                "category": memory_note.category,
-                "context": memory_note.context,
-                "timestamp": memory_note.timestamp,
-                "memory_note_id": memory_note.id
-            }
-
-            # ChromaDB rejects empty lists in metadata.
-            # Remove any keys with empty list values.
-            metadata = {
-                k: v for k, v in metadata.items()
-                if not (isinstance(v, list) and len(v) == 0)
-            }
-
-            # Preserve cross-agent metadata fields so
-            # that _apply_sharing_filter can read them
-            # on retrieval.
-            if hasattr(memory_note, 'metadata') and memory_note.metadata:
-                for key in (
-                    "owner_agent",
-                    "sharing_policy",
-                    "memory_type",
-                    "user_id",
-                ):
-                    val = memory_note.metadata.get(key)
-                    if val is not None:
-                        metadata[key] = val
-            
-            # Build add parameters
-            add_kwargs = {
-                "user_id": user_id,
-                "metadata": metadata,
-                # Bypass mem0's LLM fact extraction pipeline.
-                # With infer=True (default), mem0 uses an LLM
-                # to extract "facts" and deduplicates by hash.
-                # This causes write-side loss: semantically
-                # similar content across trials gets deduped,
-                # resulting in 0 new records stored in ChromaDB
-                # even though add() reports success. With
-                # infer=False, the raw content is stored
-                # directly as an embedding — guaranteeing each
-                # add() persists exactly one record.
-                "infer": False,
-            }
-
-            if agent_id:
-                add_kwargs["agent_id"] = agent_id
-
-            # Route to per-user collection.
-            client = self._get_client_for_user(user_id)
-            import sys
-            print(
-                f"[PER_USER] add_memory routed to "
-                f"user_id={user_id}, "
-                f"client_id={id(client)}",
-                flush=True,
-            )
-            sys.stderr.write(
-                f"[PER_USER] add_memory routed to "
-                f"user_id={user_id}\n"
-            )
-            sys.stderr.flush()
-            logger.debug(
-                "Routing add_memory to user_id=%s", user_id
-            )
-
-            # Add memory to per-user Mem0 collection.
-            result = client.add(memory_note.content, **add_kwargs)
-            
-            # Extract memory ID from result
-            memory_id = self._extract_memory_id(result)
-
-            # Fall back to original memory_note ID if Mem0
-            # doesn't return one
-            memory_id = memory_id or memory_note.id
-
-            # --- Diagnostic: verify memory was stored ---
-            try:
-                all_for_user = client.get_all(
-                    filters={"user_id": user_id},
-                    top_k=100,
-                )
-                stored_count = len(
-                    self._normalize_get_all_result(
-                        all_for_user
-                    )
-                )
-            except Exception as diag_err:
-                stored_count = f"<error: {diag_err}>"
-            logger.info(
-                "[MEM0_DEBUG] add: user_id=%s, "
-                "content='%s', memory_id=%s, "
-                "add_result_type=%s, "
-                "total_stored_for_user=%s",
-                user_id,
-                (memory_note.content or "")[:80],
-                memory_id,
-                type(result).__name__,
-                stored_count,
-            )
-            # Also print to ensure capture in kernel.log
-            print(
-                f"[MEM0_DEBUG] add: user_id={user_id}, "
-                f"content='{(memory_note.content or '')[:80]}', "
-                f"memory_id={memory_id}, "
-                f"add_result_type={type(result).__name__}, "
-                f"total_stored_for_user={stored_count}",
-                flush=True,
-            )
-
-            # Wait until the memory is visible through get_all()
-            # so downstream retrievals (and the write barrier)
-            # observe the committed state.
-            if memory_id:
-                self._await_searchable(
-                    memory_id, user_id, client=client
-                )
-            else:
-                logger.warning(
-                    "add_memory: Mem0 write succeeded but no "
-                    "memory_id was returned user_id=%s",
-                    user_id,
-                )
-            
-            return MemoryResponse(success=True, memory_id=memory_id)
-            
-        except Exception as e:
-            return MemoryResponse(
-                success=False,
-                error=f"Mem0 add_memory failed: {str(e)}"
-            )
-    
-    def remove_memory(self, memory_id: str) -> MemoryResponse:
-        """Remove a memory from Mem0 by ID.
-        
-        Args:
-            memory_id: Unique identifier of the memory to remove
-        
-        Returns:
-            MemoryResponse with success=True on successful removal,
-            or success=False with error message on failure.
-        """
-        return self.remove_memory_for_user(memory_id)
-
-    def remove_memory_for_user(
-        self, memory_id: str, user_id: Optional[str] = None
-    ) -> MemoryResponse:
-        """Remove a memory from ``user_id``'s collection, or the
-        default user's when ``None``."""
-        try:
-            user_id = self._resolve_op_user_id(
-                params={"user_id": user_id}
-            )
-            client = self._get_client_for_user(user_id)
-            logger.debug(
-                "Routing remove_memory to user_id=%s",
-                user_id,
-            )
-            client.delete(memory_id)
-            return MemoryResponse(success=True, memory_id=memory_id)
-        except Exception as e:
-            return MemoryResponse(
-                success=False,
-                error=f"Mem0 remove_memory failed: {str(e)}"
-            )
-    
-    def update_memory(self, memory_note: 'MemoryNote') -> MemoryResponse:
-        """Update an existing memory in Mem0.
-        
-        Args:
-            memory_note: The memory note with updated content/metadata
-        
-        Returns:
-            MemoryResponse with success=True and memory_id on success,
-            or success=False with error message on failure.
-        """
-        from aios.memory.note import MemoryNote
-        
-        if not isinstance(memory_note, MemoryNote):
-            return MemoryResponse(
-                success=False,
-                error=f"Expected MemoryNote, got {type(memory_note).__name__}"
-            )
-        
-        try:
-            # Resolve user_id from the memory note's metadata.
-            user_id = self._resolve_op_user_id(
-                metadata=(
-                    memory_note.metadata
-                    if hasattr(memory_note, "metadata")
-                    else None
-                ),
-            )
-            client = self._get_client_for_user(user_id)
-            logger.debug(
-                "Routing update_memory to user_id=%s",
-                user_id,
-            )
-            # Mem0 update takes memory_id and new data
-            client.update(memory_note.id, memory_note.content)
-            return MemoryResponse(success=True, memory_id=memory_note.id)
-        except Exception as e:
-            return MemoryResponse(
-                success=False,
-                error=f"Mem0 update_memory failed: {str(e)}"
-            )
-    
-    def get_memory(self, memory_id: str) -> MemoryResponse:
-        """Retrieve a memory from Mem0 by ID.
-        
-        Args:
-            memory_id: Unique identifier of the memory to retrieve
-        
-        Returns:
-            MemoryResponse with success=True, content, and metadata on success,
-            or success=False with error message if memory not found.
-        """
-        return self.get_memory_for_user(memory_id)
-
-    def get_memory_for_user(
-        self, memory_id: str, user_id: Optional[str] = None
-    ) -> MemoryResponse:
-        """Retrieve a memory from ``user_id``'s collection, or the
-        default user's when ``None``."""
-        if not isinstance(memory_id, str):
-            return MemoryResponse(
-                success=False,
-                error="Memory id must be a string"
-            )
-        
-        try:
-            user_id = self._resolve_op_user_id(
-                params={"user_id": user_id}
-            )
-            client = self._get_client_for_user(user_id)
-            logger.debug(
-                "Routing get_memory to user_id=%s",
-                user_id,
-            )
-            result = client.get(memory_id)
-            
-            if result is None:
-                return MemoryResponse(success=False, error="Memory not found")
-            
-            # Extract content and metadata from Mem0 result
-            content = result.get("memory", "") if isinstance(result, dict) else str(result)
-            metadata = (
-                _enrich_metadata(self._extract_filter_metadata(result))
-                if isinstance(result, dict) else _enrich_metadata({})
-            )
-            
-            return MemoryResponse(
-                success=True,
-                content=content,
-                metadata={
-                    "keywords": metadata.get("keywords", []),
-                    "tags": metadata.get("tags", []),
-                    "category": metadata.get("category", "Uncategorized"),
-                    "timestamp": metadata.get("timestamp", ""),
-                    "owner_agent": metadata["owner_agent"],
-                    "user_id": metadata["user_id"],
-                    "sharing_policy": metadata["sharing_policy"],
-                    "memory_type": metadata["memory_type"],
-                }
-            )
-        except Exception as e:
-            return MemoryResponse(
-                success=False,
-                error=f"Mem0 get_memory failed: {str(e)}"
-            )
-    
-    def retrieve_memory(self, query: MemoryQuery) -> MemoryResponse:
-        """Search for memories in Mem0 matching the query.
-        
-        Performs semantic search using Mem0's search functionality to
-        find memories similar to the query content.  Results are
-        filtered by cross-agent sharing rules when ``agent_name``,
-        ``user_id``, or ``sharing_policy`` are present in
-        ``query.params``.
-        
-        Args:
-            query: MemoryQuery containing:
-                  - params["content"]: The search query text
-                  - params["k"]: Maximum number of results to return
-                  - params["agent_name"]: (optional) requesting agent
-                  - params["user_id"]: (optional) user-scope filter
-                  - params["sharing_policy"]: (optional) policy filter
-                  - params["agent_id"]: Optional agent ID for search
-        
-        Returns:
-            MemoryResponse with success=True and search_results on
-            success.
-        """
-        try:
-            content = query.params.get("content", "")
-            k = query.params.get("k", 5)
-            agent_name = query.params.get("agent_name")
-            sharing_policy = query.params.get(
-                "sharing_policy"
-            )
-
-            # Use user_id from params when provided;
-            # fall back to agent_name (which scopes to the
-            # memories stored by ConversationExtractor for
-            # this agent), then to the configured default.
-            user_id = query.params.get("user_id")
-            search_user_id = (
-                user_id
-                if user_id is not None
-                else (agent_name or self.default_user_id)
-            )
-
-            agent_id = query.params.get(
-                "agent_id", self.default_agent_id
-            )
-
-            # Route to per-user collection.
-            client = self._get_client_for_user(search_user_id)
-            logger.debug(
-                "Routing retrieve_memory to user_id=%s",
-                search_user_id,
-            )
-
-            # Per-user collections are small (only one user's
-            # memories), so the top_k=1000 workaround for
-            # interleaved insertion order is no longer needed.
-            get_all_filters: dict = {
-                "user_id": search_user_id,
-            }
-            if agent_id:
-                get_all_filters["agent_id"] = agent_id
-
-            # get_all returns only 20 rows unless told otherwise.
-            top_k = query.params.get("top_k")
-            get_all_kwargs = {} if top_k is None else {"top_k": top_k}
-            raw_result = client.get_all(
-                filters=get_all_filters,
-                **get_all_kwargs,
-            )
-
-            # Normalise get_all response into a flat list.
-            items = self._normalize_get_all_result(raw_result)
-
-            # --- Diagnostic ---
-            logger.info(
-                "[MEM0_DEBUG] retrieve(get_all): "
-                "user_id=%s, top_k=%d, result_count=%d",
-                search_user_id,
-                k,
-                len(items),
-            )
-            print(
-                f"[MEM0_DEBUG] retrieve(get_all): "
-                f"user_id={search_user_id}, "
-                f"top_k={k}, result_count={len(items)}",
-                flush=True,
-            )
-
-            # Per-user collections provide physical user isolation;
-            # the sharing filter still enforces agent-level
-            # visibility within the user's collection.
-            # Apply cross-agent sharing filter ONLY when the
-            # query is explicitly cross-agent (sharing_policy
-            # is set in params). For basic user-scoped
-            # retrieval, get_all() with the user_id filter
-            # already provides correct scoping. Running the
-            # sharing filter on basic calls drops memories
-            # that lack owner_agent metadata (i.e., all
-            # memories written without cross-agent fields).
-            if agent_name is not None and sharing_policy is not None:
-                pre_filter_count = len(items)
-                items = _apply_sharing_filter(
-                    items,
-                    agent_name,
-                    user_id,
-                    sharing_policy,
-                    self._extract_filter_metadata,
-                )
-                logger.debug(
-                    "retrieve_memory sharing filter: "
-                    "retained %d/%d for agent=%s "
-                    "user_id=%s policy=%s",
-                    len(items),
-                    pre_filter_count,
-                    agent_name,
-                    user_id,
-                    sharing_policy,
-                )
-
-            # Map filtered items to standard format,
-            # respecting k on the filtered set.
-            search_results = []
-            for item in items[:k]:
-                if not isinstance(item, dict):
-                    continue
-                metadata = _enrich_metadata(
-                    self._extract_filter_metadata(item)
-                )
-                search_results.append({
-                    "memory_id": item.get("id"),
-                    "content": item.get("memory", ""),
-                    "keywords": metadata.get(
-                        "keywords", []
-                    ),
-                    "tags": metadata.get("tags", []),
-                    "category": metadata.get(
-                        "category", "Uncategorized"
-                    ),
-                    "timestamp": metadata.get(
-                        "timestamp", ""
-                    ),
-                    "score": item.get("score"),
-                    "metadata": metadata,
-                })
-            
-            return MemoryResponse(
-                success=True,
-                search_results=search_results,
-            )
-            
-        except Exception as e:
-            return MemoryResponse(
-                success=False,
-                error=(
-                    f"Mem0 retrieve_memory failed: "
-                    f"{str(e)}"
-                ),
-            )
-    
-    def retrieve_memory_raw(self, query: MemoryQuery) -> List['MemoryNote']:
-        """Retrieve raw memory objects from Mem0 for internal processing.
-        
-        Similar to retrieve_memory but returns raw MemoryNote objects
-        instead of a formatted MemoryResponse.  Results are filtered
-        by cross-agent sharing rules when ``agent_name``,
-        ``user_id``, or ``sharing_policy`` are present in
-        ``query.params``.
-        
-        Args:
-            query: MemoryQuery containing:
-                  - params["content"]: The search query text
-                  - params["k"]: Maximum number of results (default: 5)
-                  - params["agent_name"]: (optional) requesting agent
-                  - params["user_id"]: (optional) user-scope filter
-                  - params["sharing_policy"]: (optional) policy filter
-                  - params["agent_id"]: Optional agent ID for search
-        
-        Returns:
-            List of MemoryNote objects matching the query.
-        """
-        from aios.memory.note import MemoryNote
-        
-        content = query.params.get("content", "")
-        k = query.params.get("k", 5)
-        agent_name = query.params.get("agent_name")
-        sharing_policy = query.params.get("sharing_policy")
-
-        # Use user_id from params when provided;
-        # fall back to agent_name (which scopes to the
-        # memories stored by ConversationExtractor for
-        # this agent), then to the configured default.
-        user_id = query.params.get("user_id")
-        search_user_id = (
-            user_id
-            if user_id is not None
-            else (agent_name or self.default_user_id)
-        )
-
-        agent_id = query.params.get(
-            "agent_id", self.default_agent_id
-        )
-
-        # Route to per-user collection.
-        client = self._get_client_for_user(search_user_id)
-        logger.debug(
-            "Routing retrieve_memory_raw to user_id=%s",
-            search_user_id,
-        )
-
-        # Per-user collections are small — no top_k=1000
-        # workaround needed.
-        get_all_filters: dict = {
-            "user_id": search_user_id,
+    def add(self, memory_note: "MemoryNote") -> str:
+        metadata = note_metadata(memory_note)
+        user_id = self._scope(metadata.get("user_id"))
+        kwargs: Dict[str, Any] = {
+            "user_id": user_id,
+            "metadata": metadata,
+            # Store the content verbatim. With infer=True Mem0's LLM
+            # extracts facts and dedupes by hash, and in June 2026 that
+            # stored nothing while add() reported success.
+            "infer": False,
         }
-        if agent_id:
-            get_all_filters["agent_id"] = agent_id
-
+        if self.default_agent_id:
+            kwargs["agent_id"] = self.default_agent_id
+        client = self._get_client_for_user(user_id)
         try:
-            raw_result = client.get_all(
-                filters=get_all_filters,
-            )
-        except Exception:
+            result = client.add(memory_note.content, **kwargs)
+        except Exception as e:
+            raise ProviderError(f"Mem0 add failed: {e}") from e
+        memory_id = self._extract_memory_id(result)
+        if not memory_id:
+            raise ProviderError("Mem0 add returned no memory id")
+        self._await_stored(client, memory_id)
+        return memory_id
+
+    def search(
+        self, query_text: str, user_id: Optional[str], top_k: int
+    ) -> List[Candidate]:
+        """Nearest memories by the pinned embedding, scored with the
+        similarity from the raw Chroma distance (not Mem0's ``search()``
+        score; see the module docstring)."""
+        user_id = self._scope(user_id)
+        client = self._get_client_for_user(user_id)
+        store = client.vector_store
+        count = store.collection.count()
+        if count == 0 or top_k <= 0:
             return []
-
-        items = self._normalize_get_all_result(raw_result)
-
-        # --- Diagnostic ---
-        logger.info(
-            "[MEM0_DEBUG] retrieve_raw(get_all): "
-            "user_id=%s, top_k=%d, result_count=%d",
-            search_user_id,
-            k,
-            len(items),
+        space = (store.collection.metadata or {}).get("hnsw:space", "l2")
+        vector = client.embedding_model.embed(query_text, "search")
+        hits = store.search(
+            query=query_text,
+            vectors=vector,
+            top_k=min(top_k, count),
+            filters={"user_id": user_id},
         )
-        print(
-            f"[MEM0_DEBUG] retrieve_raw(get_all): "
-            f"user_id={search_user_id}, "
-            f"top_k={k}, result_count={len(items)}",
-            flush=True,
-        )
-
-        # Per-user collections provide physical user isolation;
-        # the sharing filter still enforces agent-level
-        # visibility within the user's collection.
-        # Apply cross-agent sharing filter ONLY when the
-        # query is explicitly cross-agent (sharing_policy
-        # is set in params). See retrieve_memory() for
-        # rationale.
-        if agent_name is not None and sharing_policy is not None:
-            pre_filter_count = len(items)
-            items = _apply_sharing_filter(
-                items,
-                agent_name,
-                user_id,
-                sharing_policy,
-                self._extract_filter_metadata,
-            )
-            logger.debug(
-                "retrieve_memory_raw sharing filter: "
-                "retained %d/%d for agent=%s "
-                "user_id=%s policy=%s",
-                len(items),
-                pre_filter_count,
-                agent_name,
-                user_id,
-                sharing_policy,
-            )
-
-        # Convert filtered items to MemoryNote objects,
-        # respecting k on the filtered set.
-        memory_notes = []
-        for item in items[:k]:
-            if not isinstance(item, dict):
-                continue
-            metadata = _enrich_metadata(
-                self._extract_filter_metadata(item)
-            )
-            memory_note = MemoryNote(
-                content=item.get("memory", ""),
-                id=(
-                    item.get("id")
-                    or metadata.get("memory_note_id")
-                ),
-                keywords=metadata.get("keywords", []),
-                tags=metadata.get("tags", []),
-                category=metadata.get(
-                    "category", "Uncategorized"
-                ),
-                context=metadata.get("context", "General"),
-                timestamp=metadata.get("timestamp"),
+        rows = []
+        for hit in hits:
+            payload = dict(hit.payload or {})
+            content = payload.get("data", "")
+            metadata = {
+                key: value for key, value in payload.items()
+                if key not in self._PAYLOAD_INTERNAL
+            }
+            rows.append(Candidate(
+                memory_id=str(hit.id),
+                content=content,
                 metadata=metadata,
+                score=similarity_from_distance(hit.score, space),
+            ))
+        return rows
+
+    def list(self, user_id: Optional[str], top_k: int) -> List[Candidate]:
+        user_id = self._scope(user_id)
+        if top_k <= 0:
+            return []
+        result = self._get_client_for_user(user_id).get_all(
+            filters={"user_id": user_id}, top_k=top_k
+        )
+        return [
+            self._candidate(item)
+            for item in self._normalize_get_all_result(result)
+            if isinstance(item, dict)
+        ]
+
+    def get(
+        self, memory_id: str, user_id: Optional[str]
+    ) -> Optional[Candidate]:
+        client = self._get_client_for_user(self._scope(user_id))
+        try:
+            item = client.get(memory_id)
+        except Exception:
+            return None
+        return self._candidate(item) if isinstance(item, dict) else None
+
+    def update(
+        self,
+        memory_id: str,
+        user_id: Optional[str],
+        content: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> bool:
+        current = self.get(memory_id, user_id)
+        if current is None:
+            return False
+        merged = {**current.metadata, **(metadata or {})}
+        merged.pop("created_at", None)  # Mem0 keeps the original
+        client = self._get_client_for_user(self._scope(user_id))
+        try:
+            client.update(
+                memory_id,
+                current.content if content is None else content,
+                metadata=merged,
             )
-            memory_notes.append(memory_note)
-        
-        return memory_notes
-    
+        except Exception as e:
+            raise ProviderError(f"Mem0 update failed: {e}") from e
+        return True
+
+    def delete(self, memory_id: str, user_id: Optional[str]) -> bool:
+        if self.get(memory_id, user_id) is None:
+            return False
+        try:
+            self._get_client_for_user(self._scope(user_id)).delete(memory_id)
+        except Exception as e:
+            raise ProviderError(f"Mem0 delete failed: {e}") from e
+        return True
+
     def close(self) -> None:
-        """Clean up Mem0 resources.
-        
-        Properly disconnects from Mem0 services and releases resources.
-        """
-        # Mem0 client doesn't require explicit cleanup
-        # but we reset the client reference
         self.client = None

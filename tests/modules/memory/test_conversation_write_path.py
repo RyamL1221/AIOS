@@ -15,7 +15,10 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 from aios.memory.context_injector import ContextInjector
 from aios.memory.conversation_extractor import ConversationExtractor
 from aios.memory.manager import MemoryManager
-from aios.memory.providers.base import MemoryProvider
+from aios.memory.providers.base import Candidate
+from tests.modules.memory._doubles.legacy import (
+    LegacyProviderAdapter as MemoryProvider,
+)
 from aios.memory.write_barrier import MemoryWriteBarrier
 from aios.syscall.memory import MemorySyscall
 
@@ -328,13 +331,8 @@ def test_missing_memory_gets_the_same_refusal():
 def test_lookup_without_user_id_tries_agent_scope_then_default():
     manager = make_manager()
     manager.provider = MagicMock()
-    manager.provider.get_memory_for_user.side_effect = [
-        MemoryResponse(success=False, error="Memory not found"),
-        MemoryResponse(
-            success=True,
-            content="c",
-            metadata={"owner_agent": AGENT},
-        ),
+    manager.provider.get.side_effect = [
+        None, Candidate("m", "c", {"owner_agent": AGENT}),
     ]
     query = MemoryQuery(
         operation_type="get_memory", params={"memory_id": "m"}
@@ -343,7 +341,7 @@ def test_lookup_without_user_id_tries_agent_scope_then_default():
     assert response.content == "c"
     scopes = [
         call.args[1]
-        for call in manager.provider.get_memory_for_user.call_args_list
+        for call in manager.provider.get.call_args_list
     ]
     assert scopes == [AGENT, None]
 
@@ -351,15 +349,13 @@ def test_lookup_without_user_id_tries_agent_scope_then_default():
 def test_update_routes_to_the_collection_the_memory_was_found_in():
     manager = make_manager()
     manager.provider = MagicMock()
-    manager.provider.get_memory_for_user.return_value = MemoryResponse(
-        success=True,
-        content="c",
-        metadata={"owner_agent": AGENT, "user_id": USER},
+    manager.provider.get.return_value = Candidate(
+        "m", "c", {"owner_agent": AGENT, "user_id": USER}
     )
     query = MemoryQuery(
         operation_type="update_memory",
         params={"memory_id": "m", "content": "new"},
     )
     manager.address_request(MemorySyscall(AGENT, query))
-    note = manager.provider.update_memory.call_args.args[0]
-    assert note.metadata["user_id"] == USER
+    memory_id, user_id, content, _ = manager.provider.update.call_args.args
+    assert (memory_id, user_id, content) == ("m", USER, "new")
