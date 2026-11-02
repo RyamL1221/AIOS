@@ -94,3 +94,97 @@ and a task context, so no fenced reply reached either parser. They keep
 the commits in `PROVENANCE.md`; each results file records the commits it
 ran on. The invalid files are kept in
 `repo-artifacts/Cerebrum/revalidation/invalid_first_run/`.
+
+## Result
+
+900 trials on the amended run: 0 failed, `injection_diagnostics` on all
+900, every injection confirmed in the kernel log. GPT-4o ran on Cerebrum
+`76dc9f1` / AIOS `672665e`; Llama and Qwen on Cerebrum `99933e4` / AIOS
+`19c3ea9`. The two AIOS commits have the same kernel code. Judge
+`gpt-5.4:azure`. Per-cell numbers: `results/revalidation/summary.csv` in
+Cerebrum.
+
+**`kernel_shared` reproduces: 8 of 9 cells pass, largest shift 0.20.**
+
+**`mem0_default` behaves as specified: the assistant saw no memories in
+all 450 trials (`after_visibility` = 0).** Its scores stay near the floor,
+8 of 9 cells match the workshop, and its largest shift is 0.30.
+
+### `kernel_shared`
+
+| Model | Dimension | New | Workshop | Diff | Welch p | TOST p | Result |
+|---|---|---:|---:|---:|---:|---:|---|
+| GPT-4o | Profile | 4.587 ± 0.546 | 4.693 ± 0.504 | -0.107 | 0.0798 | 0.0094 | pass |
+| GPT-4o | Task | 4.993 ± 0.082 | 4.993 ± 0.082 | 0.000 | 1.0000 | <0.0001 | pass |
+| GPT-4o | Integration | 4.560 ± 0.524 | 4.613 ± 0.515 | -0.053 | 0.3750 | 0.0006 | pass |
+| Llama-3.1:8B | Profile | 3.927 ± 0.778 | 3.873 ± 0.830 | +0.053 | 0.5662 | 0.0175 | pass |
+| Llama-3.1:8B | Task | 4.320 ± 0.885 | 4.327 ± 0.746 | -0.007 | 0.9438 | 0.0053 | pass |
+| Llama-3.1:8B | Integration | 3.667 ± 0.841 | 3.633 ± 0.798 | +0.033 | 0.7249 | 0.0114 | pass |
+| Qwen-2.5:7B | Profile | 3.707 ± 1.190 | 3.633 ± 1.089 | +0.073 | 0.5782 | 0.0905 | pass |
+| Qwen-2.5:7B | Task | 4.600 ± 0.492 | 4.400 ± 0.492 | +0.200 | 0.0005 | 0.1895 | **fail** |
+| Qwen-2.5:7B | Integration | 3.547 ± 1.001 | 3.580 ± 0.936 | -0.033 | 0.7659 | 0.0269 | pass |
+
+### `mem0_default`
+
+Reported the same way; the pass rule does not apply to it.
+
+| Model | Dimension | New | Workshop | Diff | Welch p | TOST p | Result |
+|---|---|---:|---:|---:|---:|---:|---|
+| GPT-4o | Profile | 1.067 ± 0.250 | 1.047 ± 0.212 | +0.020 | 0.4555 | <0.0001 | match |
+| GPT-4o | Task | 1.020 ± 0.140 | 1.027 ± 0.162 | -0.007 | 0.7033 | <0.0001 | match |
+| GPT-4o | Integration | 1.007 ± 0.082 | 1.000 ± 0.000 | +0.007 | 0.3189 | <0.0001 | match |
+| Llama-3.1:8B | Profile | 1.100 ± 0.301 | 1.067 ± 0.250 | +0.033 | 0.2979 | <0.0001 | match |
+| Llama-3.1:8B | Task | 1.273 ± 0.447 | 1.313 ± 0.465 | -0.040 | 0.4484 | <0.0001 | match |
+| Llama-3.1:8B | Integration | 1.020 ± 0.140 | 1.040 ± 0.197 | -0.020 | 0.3116 | <0.0001 | match |
+| Qwen-2.5:7B | Profile | 1.167 ± 0.374 | 1.240 ± 0.429 | -0.073 | 0.1154 | 0.0001 | match |
+| Qwen-2.5:7B | Task | 1.300 ± 0.460 | 1.600 ± 0.505 | -0.300 | <0.0001 | 0.8147 | **differs** |
+| Qwen-2.5:7B | Integration | 1.087 ± 0.282 | 1.187 ± 0.391 | -0.100 | 0.0116 | 0.0001 | match |
+
+### The Qwen task cell
+
+No listed behavior change explains it. They need many memories per user,
+and each `kernel_shared` user had 2 after dedupe, so neither the top-k
+change nor the cap fired. The cell's scores are all 4 or 5, and the share
+of 5s rose from 40% to 60%.
+
+The most likely cause is a Qwen-specific difference between the runs,
+not retrieval. Qwen's task score also moved in `mem0_default`, in the
+opposite direction, where nothing is injected, and its median reply there
+fell from 2,010 to 859 characters. Llama's did not move (656 to 674),
+which argues against a harness-wide change. The workshop recorded no
+Ollama or model version, so this cannot be confirmed.
+
+### Truncation and scores
+
+- **Paper TODO.** The cap and the token budget bound in 0 of 450
+  `kernel_shared` trials. `after_cap` and `after_budget` were 2 in all
+  450, about 150-175 estimated tokens at the median. This shows only that
+  a one-interaction trial cannot reach them, not that they never matter.
+- **`scores_present`** was false in all 900 trials, as expected.
+  `relevance_threshold` filtered nothing.
+- **Injected set.** Every `kernel_shared` trial injected one profile and
+  one task context.
+
+### Latency
+
+Mean assistant latency in seconds, new against workshop.
+
+| Model | `kernel_shared` | `mem0_default` |
+|---|---:|---:|
+| GPT-4o | 6.28 / 7.51 | 3.05 / 3.94 |
+| Llama-3.1:8B | 24.81 / 21.73 | 11.51 / 10.47 |
+| Qwen-2.5:7B | 22.75 / 26.31 | 17.39 / 26.88 |
+
+### Notes
+
+- `revalidate.py` now exits non-zero on any failed trial; it exited 0
+  on this result.
+- `memory_counts` is 0 in every trial, new and workshop, so that field
+  was never a usable measure. Use `injection_diagnostics`.
+- The harness's `shared_memory_count` is 2 here and 4 in the workshop.
+  The workshop recorded no diagnostics, so whether it injected the two
+  duplicates cannot be determined from its files.
+- The kernel logged "Failed to sync Mem0 LLM to azure_openai/gpt-4o" on
+  each GPT-4o chat (no `api_version`). Kernel mode stores with
+  `infer=False`, so Mem0's LLM is not called and scores are unaffected.
+  It would matter in native mode.

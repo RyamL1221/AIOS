@@ -23,6 +23,7 @@ do not describe this branch.
 |---|---------|--------|
 | 1 | Single kernel retrieval path | Done |
 | 2 | Conversation writes through the kernel; owner-only by-id writes | Done |
+| 3 | Re-validate `kernel_shared` and `mem0_default` | Done |
 
 ### Subtask 1
 
@@ -36,6 +37,14 @@ running kernel.
 Every write reaches the store through `address_request`. The extractor
 stamps its write on the request thread, and by-id update and delete are
 owner-only. See "Writes" in `docs/RETRIEVAL_PATH.md`.
+
+### Subtask 3
+
+900 trials, 0 failed. `kernel_shared` reproduces (8 of 9 cells, largest
+shift 0.20); `mem0_default` shows zero assistant-visible memories in all
+450 trials. Both GPT-4o cells were re-run after fenced JSON replies broke
+synthetic data generation. See `docs/REVALIDATION.md`. Re-runs need a new
+`RUN_PREFIX` for `scripts/run_revalidation.sh`.
 
 ## Test baselines
 
@@ -64,6 +73,15 @@ These fail on `workshop-postrun` too and are not caused by later work.
    it compares sub-millisecond medians. It failed 5 of 8 runs at
    `workshop-postrun`, 3 of 8 at `neurips-subtask-01`, 6 of 8 at
    Subtask 2. Treat a failure of it alone as noise.
+
+7. Azure gpt-4o does not honor the requested JSON response format: about
+   a third of replies arrive fenced. Harness parsers now tolerate it
+   (`parse_json_reply`); other agents' `json.loads` calls do not.
+8. Qwen's replies changed between the workshop and Subtask 3 (median
+   `mem0_default` reply 2,010 to 859 characters). Cause unknown; the
+   workshop recorded no Ollama or model version. Record both from here on.
+9. Mem0 LLM sync fails on Azure models for lack of `api_version`. Harmless
+   in kernel mode (`infer=False`); fix before any native-mode Azure run.
 
 ## Fixed
 
