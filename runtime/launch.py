@@ -518,6 +518,9 @@ async def get_memory_config():
         "provider": manager.provider_type,
         "capabilities": manager.provider.capabilities(),
         "embedding": manager.embedding.as_dict(),
+        "auto_inject": manager.auto_inject,
+        "auto_extract": manager.auto_extract,
+        "backend_llm": manager.backend_llm,
     }
 
 

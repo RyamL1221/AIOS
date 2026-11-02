@@ -123,6 +123,13 @@ class MemoryManager:
         self.max_memory_tokens = memory_config.get(
             "max_memory_tokens", 1500
         )
+        # Whether the kernel injects and extracts memories: off for the
+        # agent-managed (native) conditions (docs/NATIVE_USAGE.md).
+        self.auto_inject = bool(memory_config.get("auto_inject", False))
+        self.auto_extract = bool(memory_config.get("auto_extract", False))
+        # The internal LLM pinned for agent-managed backends (Mem0's
+        # extraction in native_mem0); reported, not used by the kernel.
+        self.backend_llm = dict(memory_config.get("backend_llm") or {})
 
     @property
     def known_user_ids(self) -> Set[str]:

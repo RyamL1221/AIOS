@@ -85,6 +85,9 @@ def check_config():
         "provider",
         "capabilities",
         "embedding",
+        "auto_inject",
+        "auto_extract",
+        "backend_llm",
     }, body
     assert set(body["embedding"]) == {
         "provider", "model", "dimension", "ollama_base_url",

@@ -87,6 +87,15 @@ memory:
     dimension: 768
     ollama_base_url: "http://localhost:11434"
 
+  # Internal LLM for agent-managed backends: Mem0's fact extraction in
+  # the native_mem0 condition (docs/NATIVE_USAGE.md), pinned separately
+  # from the assistant model. The kernel only reports it (/memory/config);
+  # the agents read their credentials from AZURE_API_* in the environment.
+  backend_llm:
+    provider: "azure_openai"
+    model: "gpt-4o"
+    temperature: 0.1
+
   # In-house provider (provider: "in-house"): verbatim memories in one
   # Chroma collection per user, cosine similarity as the score.
   chroma_inhouse:
