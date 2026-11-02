@@ -13,12 +13,12 @@ LOGS="$CEREBRUM/$OUT/logs"
 TRIALS="${TRIALS:-30}"
 JUDGE="gpt-5.4:azure"
 RUN_PREFIX="${RUN_PREFIX:-ps5-$PROVIDER}"
-mkdir -p "$LOGS"
 
 configured=$("$AIOS/.venv/bin/python" -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["memory"]["provider"])' aios/config/config.yaml)
 if [ "$configured" != "$PROVIDER" ]; then
     echo "config.yaml names provider $configured, not $PROVIDER"; exit 1
 fi
+mkdir -p "$LOGS"
 
 cell_done() {
     python3 "$AIOS/scripts/revalidation_cell_done.py" "$1" "$TRIALS"

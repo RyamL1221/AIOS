@@ -25,6 +25,7 @@ do not describe this branch.
 | 2 | Conversation writes through the kernel; owner-only by-id writes | Done |
 | 3 | Re-validate `kernel_shared` and `mem0_default` | Done |
 | 4 | Rename `mem0_default` to `kernel_private`; judge prompt v2; re-judge | Done |
+| 5 | Provider contract; Chroma in-house provider; update stamping | Done |
 
 ### Subtask 1
 
@@ -84,6 +85,78 @@ synthetic data generation. See `docs/REVALIDATION.md`. Re-runs need a new
   point can use the v2 numbers. paper_v2 is in neither repo, so the
   edit itself waits for Subtask 12.
 
+### Subtask 5
+
+- Provider contract: `docs/PROVIDER_CONTRACT.md`, `MemoryProvider` in
+  `aios/memory/providers/base.py` (`add` / `search` / `list` / `get` /
+  `update` / `delete` / `capabilities`, `Candidate` rows, five required
+  metadata keys stamped by the kernel). The old `MemoryResponse` provider
+  methods are gone. Visibility moved to `aios/memory/visibility.py`; no
+  provider filters by it, and `retrieve_memory_raw` now goes through
+  `retrieve_for_agent`. Contract suite:
+  `tests/modules/memory/test_provider_contract.py` over `chroma_inhouse`,
+  `mem0` (both real stores, local Ollama) and `in_house` (29 tests).
+- `provider: "in-house"` is `ChromaInHouseProvider`: persistent Chroma,
+  one cosine collection per user, verbatim, no LLM. The old dict
+  provider is `in-memory`, for tests. The injector and extractor are
+  wired for `mem0` and `in-house` (`PERSONALIZATION_PROVIDERS`).
+- Mem0 `search` is scored, but not with Mem0's `search()`: its Chroma
+  adapter returns the raw L2 distance as `score` and ranks least similar
+  first, clamped at 1.0 (verified on a real store). The provider queries
+  Mem0's own vector store and converts the distance to cosine. Why the
+  kernel used `get_all` since June, and why `threshold=0.0` was never the
+  fix: "Mem0" in `docs/PROVIDER_CONTRACT.md`.
+- `memory.embedding` pins `ollama` / `nomic-embed-text` / 768 for both
+  backends; `/memory/config` reports it with the provider and its
+  capabilities, so every results file records them.
+- `relevance_threshold` defaults to 0.0 (config and code); diagnostics add
+  `threshold_used`. The Subtask 19 ablation varies the threshold.
+- `update_memory` is stamped against the write barrier
+  (`test_update_stamping.py`); known issue 5 is fixed.
+- Harness: `run_evaluation.py --provider <name>` refuses to run against a
+  kernel serving another provider; `InjectionDiagnostics.threshold_used`.
+- Tests retired, replaced by `test_mem0_contract_unit.py` (fake Mem0
+  client, no Ollama) and the contract suite: `test_mem0_provider_user_filter`,
+  `test_mem0_cross_user_retrieval`, `test_mem0_cross_agent_retrieval`, and
+  the `get_all` / polling classes of `test_mem0_cross_user_isolation` and
+  `test_mem0_provider_searchability`. They tested the removed `get_all`
+  retrieval path. Doubles written against the old methods subclass the
+  test-only shim `tests/modules/memory/_doubles/legacy.py`.
+
+**Behavior check** (Cerebrum `results/provider_smoke/`, 30
+`kernel_shared` trials per cell, judge v2; a smoke, not a verdict). All
+180 trials completed with diagnostics; `scores_present` true and
+`threshold_used` 0.0 in every trial; every trial injected one profile and
+one task context, as in Subtask 3. Means (v2 revalidation cell in
+brackets):
+
+| Backend | Model | Profile | Task | Integration |
+|---|---|---:|---:|---:|
+| Mem0 | GPT-4o | 4.70 (4.63) | 5.00 (5.00) | 4.67 (4.57) |
+| Mem0 | Llama-3.1:8B | 3.57 (3.77) | 4.43 (4.46) | **3.27 (3.57)** |
+| Mem0 | Qwen-2.5:7B | 3.87 (3.69) | 4.73 (4.74) | 3.77 (3.55) |
+| In-house | GPT-4o | 4.70 (4.63) | 5.00 (5.00) | 4.67 (4.57) |
+| In-house | Llama-3.1:8B | 3.83 (3.77) | 4.57 (4.46) | 3.53 (3.57) |
+| In-house | Qwen-2.5:7B | **4.27 (3.69)** | 4.60 (4.74) | **3.97 (3.55)** |
+
+Flagged (off by more than 0.25): Mem0 Llama integration -0.31, in-house
+Qwen profile +0.57 and integration +0.41. Qwen also moved most on Mem0,
+and was the cell that changed between the workshop and Subtask 3 (known
+issue 8).
+
+One prompt change: the injected set is the same, but its order is not.
+Rows are now sorted by similarity, and the task context outscores the
+profile, so it comes first in 177 of 180 trials; in every Subtask 3
+trial the profile came first (storage order). Open decision 1.
+
+## Open decisions
+
+1. Injected-block order. With scored search the block is in similarity
+   order (task context first), not the storage order the v2 baseline was
+   produced with (profile first). Either keep it and re-run the
+   `kernel_shared` baseline under it before comparing new conditions to
+   it, or rank for the cap but print the block in a fixed order.
+
 ## Test baselines
 
 These fail on `workshop-postrun` too and are not caused by later work.
@@ -98,18 +171,18 @@ These fail on `workshop-postrun` too and are not caused by later work.
 
 ## Known issues
 
-1. `relevance_threshold` is inert on Mem0: `get_all` returns no scores,
-   and it also does not rank, so query text does not affect selection.
+1. Fixed in Subtask 5: Mem0 and in-house search are scored, so
+   `relevance_threshold` applies (default 0.0).
 2. Workshop provenance: the 1,800 trials span several code states and
    recorded no commit, config or injected sets. See the `mem0_default`
    note: gpt-4o ran before Cerebrum `6255bee`, llama and qwen after.
-3. `config.yaml` (0.3 / 10 / 2000) and `config.yaml.example`
-   (0.5 / 5 / 1500) still differ.
+3. `config.yaml` (10 / 2000) and `config.yaml.example` (5 / 1500) still
+   differ on `max_injected_memories` / `max_memory_tokens`; both set
+   `relevance_threshold` 0.0 since Subtask 5.
 4. `get_memory`, `update_memory` and `remove_memory` on Zep always
    answer "not found": Zep episodes carry no owner, so the rules fail
    closed. The same goes for any row stored without an `owner_agent`.
-5. `update_memory` is not stamped against the write barrier, so a
-   retrieval right after an update can read the old content.
+5. Fixed in Subtask 5: `update_memory` is stamped against the barrier.
 6. `test_write_barrier_stress.py::Scenario2DisjointUsersTests` is flaky:
    it compares sub-millisecond medians. It failed 5 of 8 runs at
    `workshop-postrun`, 3 of 8 at `neurips-subtask-01`, 6 of 8 at
@@ -124,6 +197,15 @@ These fail on `workshop-postrun` too and are not caused by later work.
 9. `HybridJudge` falls back to the keyword score alone when the LLM
    judge call fails, without marking the trial. `rejudge.py` retries and
    fails the trial instead; `run_evaluation.py` still falls back.
+10. The harness's post-ProfileAgent diagnostic (`pipeline.py`) searches
+    without a `user_id`, so it looks in the agent's own scope and warns
+    "0 results" on every trial (also in all of Subtask 3). Noise only.
+11. Zep does not conform to the provider contract (no metadata, no
+    `list` / `update`); see `docs/PROVIDER_CONTRACT.md`.
+12. Mem0's collections use Chroma's default squared-L2 space; the cosine
+    conversion assumes unit vectors, which the pinned model returns. A
+    model that does not would need its collections created in cosine
+    space.
 
 ## Fixed
 
