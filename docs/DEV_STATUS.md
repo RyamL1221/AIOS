@@ -27,6 +27,7 @@ do not describe this branch.
 | 4 | Rename `mem0_default` to `kernel_private`; judge prompt v2; re-judge | Done |
 | 5 | Provider contract; Chroma in-house provider; update stamping | Done |
 | 6 | Native agent-managed conditions (Mem0, in-house) | Done |
+| 7 | Cost instrumentation | Done |
 
 ### Subtask 1
 
@@ -79,6 +80,7 @@ synthetic data generation. See `docs/REVALIDATION.md`. Re-runs need a new
 - Mem0 LLM sync on Azure works: the Mem0 Azure client takes the kernel's
   `AZURE_API_*` variables, and the synced LLM now reaches the per-user
   clients, which do the writes (before, only the default client got it).
+  Since Subtask 7 the synced LLM is Mem0's `litellm` provider instead.
   `scripts/retrieval_smoke.py --kernel-log <log>` checks a GPT-4o chat.
 - Paper (Subtask 12): §4.1's TODO is now resolvable. The condition is
   `kernel_private`, the kernel pipeline with sharing off, with
@@ -208,6 +210,131 @@ injected no task context. `native_inhouse` injects the same two memories
 as the kernel, ordered by cosine similarity (profile first in 27 of 90
 trials).
 
+### Subtask 7
+
+Every `TrialResult` now records `token_usage` (the assistant's call),
+`writer_tokens` (the two writers' extraction calls), `backend_llm_tokens`
+and `embedding_tokens` (the memory backend's own calls), each
+`{calls, prompt_tokens, completion_tokens, total_tokens, models}`, and a
+`latency_breakdown`. This holds for kernel and native conditions alike.
+Nothing here changes what is stored, retrieved or sent to a model.
+
+- **Assistant tokens.** The kernel captures `response.usage` at the
+  LiteLLM call site (`adapter.py`), ported by hand from
+  `feature/self-improving-memory`. It returns `token_usage` and
+  `llm_timing` (`llm_ms`, the model call; `schedule_wait_ms`, the
+  scheduler's wait before it) as siblings of `response`, the same shape
+  as `injection_diagnostics`. The writers return the usage of their
+  extraction call. The four `PipelineResult` sites fill the fields
+  through `pipeline.cost_fields`.
+- **Backend tokens.** Cerebrum `cerebrum/utils/usage.py`, shared by the
+  kernel and the harness:
+  - Backend calls are tagged with the trial's user id (`tagged`; each
+    trial has a unique user).
+  - A LiteLLM success callback records each tagged call (purpose
+    `backend_extraction`). A pre-call hook marks the call in flight, so
+    a read waits for callbacks still running on LiteLLM's thread.
+  - A wrapper on the Ollama `embed` client records each tagged call
+    (purpose `embedding`, Ollama's `prompt_eval_count`). Mem0 has no
+    LiteLLM embedder.
+  - Untagged calls are ignored; these include the kernel's own
+    assistant calls.
+
+  The kernel tags in `address_request` and `retrieve_for_agent`, and
+  `GET /memory/cost?user_id=` returns and clears the trial's records.
+  The harness reads it after judging, so the background conversation
+  write has finished. The native agents tag their own backend calls,
+  and the AssistantAgent reads the accumulator in-process.
+
+  Mem0's LLM is now Mem0's `litellm` provider in both places:
+  - native: `azure/gpt-4o`, previously Mem0's `azure_openai` provider
+    for the same deployment;
+  - kernel sync: `<backend>/<model>`.
+
+  The Cerebrum venv needs `litellm==1.83.0`, the kernel's version,
+  added to `requirements.txt`.
+- **Latency.** The harness records these keys in `latency_breakdown`:
+  - `barrier_wait_ms`, `search_ms` (the provider calls) and `select_ms`
+    (partition through cap), timed in `retrieve_for_agent`;
+  - `format_ms` (formatting, budget and block), timed in the injector;
+  - `schedule_wait_ms` and `llm_ms`, from the syscall path.
+
+  The kernel adds them to the chat `injection_diagnostics`, and the
+  native AssistantAgent records the same keys itself (its
+  `barrier_wait_ms` is 0).
+
+  `kernel_overhead_ms` is the four memory stages **plus
+  `schedule_wait_ms`**. This departs from the spec, which named only the
+  four stages. The FIFO scheduler sleeps `batch_interval` (1.0 s)
+  before collecting LLM requests, so the assistant's request waited
+  975 ms on average. That is 14% of latency, against 40 ms for all
+  four memory stages. Without the wait, the four stages plus `llm_ms`
+  fall 1-30% short of measured latency (7-24% in `kernel_shared`).
+  With it, the sum reconciles within 0.1% in every trial. The wait is
+  time the kernel adds, so it belongs in the overhead. The wait and the
+  four stages are each also recorded on their own.
+- **Cost model.** Cerebrum `benchmarks/shared_memory/cost.py` prices
+  trials from `prices.yaml` (dated 2026-11-03; gpt-4o 2.50 / 10.00 USD
+  per 1M input / output tokens from price aggregators, since
+  Microsoft's page was not checked directly; local models 0). It splits
+  the cost into assistant, writers, backend and embedding.
+  `python -m benchmarks.shared_memory.cost <dir> --csv ...` writes one
+  row per cell: means of every token and latency field, the cost split,
+  and `tokens_per_quality` (mean total tokens divided by the mean of
+  the three judge scores).
+- **Tests.**
+  - AIOS `tests/modules/syscall/test_cost_instrumentation.py`:
+    - adapter usage capture with a mocked LiteLLM response;
+    - partial usage;
+    - the scheduler wait;
+    - that the latency fields sum;
+    - the retrieval stage timers;
+    - backend attribution under two interleaved users, through real
+      LiteLLM callbacks (`mock_response`), with the untagged call
+      ignored;
+    - the wait for in-flight callbacks;
+    - embedding attribution.
+  - Cerebrum `tests/agents/test_cost_instrumentation.py`:
+    - the price table loads and prices a known usage;
+    - the summary columns;
+    - `cost_fields`;
+    - native trials record every field, with 3 backend calls attributed
+      to the trial's user;
+    - the `/memory/cost` read.
+
+  `test_mem0_llm_sync.py` now tests the LiteLLM route.
+
+**10-trial check** (Cerebrum `results/cost_check/`, GPT-4o, judge v2;
+`scripts/cost_check.py`: 0 problems in either cell). Every trial has
+non-zero assistant, writer and embedding tokens. `kernel_shared` made 0
+backend LLM calls in every trial (writes use `infer=False`);
+`native_mem0` made 3 per trial (profile, task, conversation).
+`kernel_overhead_ms + llm_ms` matches `latency_seconds × 1000` within
+0.1% in all 20 trials. Means per trial:
+
+| | kernel_shared | native_mem0 |
+|---|---:|---:|
+| Assistant tokens (in / out) | 866 (322 / 544) | 724 (314 / 410) |
+| Writer tokens (2 calls) | 495 | 488 |
+| Backend LLM tokens (calls) | 0 (0) | 24,271 (3) |
+| Embedding tokens (calls) | 912 (6) | 1,102 (16.3) |
+| Total tokens | 2,273 | 26,586 |
+| Estimated USD (backend share) | 0.0090 (0%) | 0.0735 (90%) |
+| Latency, ms | 6,944 | 5,045 |
+| = memory stages + scheduler wait + `llm_ms` | 40 + 975 + 5,925 | 14 + 501 + 4,526 |
+| Scores (profile / task / integration) | 4.5 / 5.0 / 4.5 | 4.6 / 5.0 / 4.6 |
+| `tokens_per_quality` | 487 | 5,617 |
+
+At similar scores on 10 trials, native Mem0 spends about 11× the tokens
+and 8× the money per trial; Mem0's extraction prompt (about 7,900
+prompt tokens per call) is 90% of the cost. Embeddings are local, so
+they cost nothing in money, only time. The kernel's memory stages are
+under 1% of latency; the scheduler's wait is most of the kernel's
+overhead. In `native_mem0` that wait is shorter and varies (111-1,063
+ms), because the writers' Mem0 calls run outside the kernel, so the
+assistant's request arrives at a random point in the scheduler's 1 s
+cycle.
+
 ## Open decisions
 
 1. Injected-block order. With scored search the block is in similarity
@@ -224,7 +351,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
   tests in `test_mem0_provider.py` / `test_zep_provider.py` error (their
   `manager` argument is collected as a missing fixture).
 - Cerebrum `tests/agents`: 19 failures, 2 errors at
-  `neurips-subtask-03` (one flaky test makes it 19 or 20). The names
+  `neurips-subtask-03` (one flaky test makes it 19 or 20); unchanged at
+  `neurips-subtask-07` (AIOS 310 passed, Cerebrum 303 passed). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -270,8 +398,19 @@ These fail on `workshop-postrun` too and are not caused by later work.
     renderings (and, for Mem0, gpt-4o-extracted facts) rather than the
     writers' JSON with the kernel's formatter at injection. Compare them
     with that in mind.
-14. Native Mem0 extraction (gpt-4o) runs on every write: two per trial
-    plus the conversation, with no cost recorded yet (Subtask 7).
+14. Fixed in Subtask 7: native Mem0's extraction cost is recorded
+    (`backend_llm_tokens`), about 24,000 tokens and 0.066 USD per GPT-4o
+    trial.
+15. The FIFO scheduler waits up to `batch_interval` (1.0 s, set in
+    `useFIFOScheduler`) before running an LLM request; sequential
+    requests wait about the full second. That is 14% of `kernel_shared`
+    latency on GPT-4o and more on fast models. It is in
+    `kernel_overhead_ms`; whether to shorten it is a question for the
+    latency claims (Subtask 19 or later), not changed here.
+16. The harness's user-less post-ProfileAgent diagnostic search (known
+    issue 10) is tagged with the agent name, not the trial's user, so
+    its embedding call is not counted in the trial. It is harness
+    instrumentation, not part of any condition.
 
 ## Fixed
 
