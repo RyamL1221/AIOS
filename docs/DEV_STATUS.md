@@ -26,6 +26,7 @@ do not describe this branch.
 | 3 | Re-validate `kernel_shared` and `mem0_default` | Done |
 | 4 | Rename `mem0_default` to `kernel_private`; judge prompt v2; re-judge | Done |
 | 5 | Provider contract; Chroma in-house provider; update stamping | Done |
+| 6 | Native agent-managed conditions (Mem0, in-house) | Done |
 
 ### Subtask 1
 
@@ -149,6 +150,64 @@ Rows are now sorted by similarity, and the task context outscores the
 profile, so it comes first in 177 of 180 trials; in every Subtask 3
 trial the profile came first (storage order). Open decision 1.
 
+### Subtask 6
+
+- Spec first: `docs/NATIVE_USAGE.md` (committed `e29e9da`, before the
+  agents), citing the Mem0 and Chroma documentation pages it follows,
+  with the Mem0 extraction check. Evidence: Cerebrum
+  `results/native_extraction_check/`.
+- Extraction check: 20 real writer outputs under gpt-4o, qwen2.5:7b and
+  llama3.1:8b, as JSON and as natural language. None stored nothing or
+  mangled the JSON; only gpt-4o kept every fact (the local models lost
+  some, qwen with JSON usually the user's name) and it was 7-10x faster.
+  Choices: `memory.backend_llm` = Azure gpt-4o, writers send natural
+  language (Mem0's documented input; 4 of the 20 real outputs used other
+  keys than the schema, so `native/render.py` maps aliases). 5-user
+  writer-to-consumer check: a `user_id`-only search returns both writers'
+  memories, and the sharing convention removed the private note each
+  time.
+- Code: Cerebrum `cerebrum/example/agents/native/` (agents, the shared
+  sharing filter, backend setup, renderer); conditions `native_mem0`,
+  `native_inhouse` (`conditions.NATIVE_CONDITIONS`, not part of
+  `--method all`). The kernel serves the LLM calls only. The
+  AssistantAgent records kernel-shaped `injection_diagnostics`
+  (`injection_status` = `agent_reported`).
+- Pre-flight (`run_evaluation.check_kernel_mode`): a native condition
+  needs `auto_inject` and `auto_extract` false, `kernel_shared` /
+  `kernel_private` need `auto_inject` true; `/memory/config` now reports
+  both and `backend_llm`.
+- Latency for native trials is the assistant's retrieval plus its LLM
+  call; its conversation write after the response is excluded.
+- The Cerebrum venv needs `azure-identity` (Mem0's Azure LLM); added to
+  `requirements.txt`. The driver exports the Azure variables from
+  `AIOS/.env` to the harness only.
+
+**30-trial smoke** (Cerebrum `results/native_smoke/`, judge v2, Mem0's
+internal LLM gpt-4o for every cell). 180 trials, 0 failed, 0 memory
+operations in every kernel log. Means, with v2 `kernel_shared` and
+`kernel_private` in brackets:
+
+| Condition | Model | Profile | Task | Integration | Injected (median) |
+|---|---|---:|---:|---:|---:|
+| native_mem0 | GPT-4o | 4.70 (4.63 / 1.07) | 5.00 (5.00 / 1.02) | 4.53 (4.57 / 1.01) | 7.5 |
+| native_mem0 | Llama-3.1:8B | 3.90 (3.77 / 1.09) | 4.73 (4.46 / 1.27) | 3.80 (3.57 / 1.02) | 7 |
+| native_mem0 | Qwen-2.5:7B | 4.03 (3.69 / 1.18) | 4.87 (4.74 / 1.30) | 3.90 (3.55 / 1.09) | 7 |
+| native_inhouse | GPT-4o | 4.73 (4.63 / 1.07) | 5.00 (5.00 / 1.02) | 4.73 (4.57 / 1.01) | 2 |
+| native_inhouse | Llama-3.1:8B | 3.90 (3.77 / 1.09) | 4.60 (4.46 / 1.27) | 3.67 (3.57 / 1.02) | 2 |
+| native_inhouse | Qwen-2.5:7B | 3.40 (3.69 / 1.18) | 4.87 (4.74 / 1.30) | 3.43 (3.55 / 1.09) | 2 |
+
+As the design expects, both native conditions sit at `kernel_shared`
+level on this single-interaction benchmark, far above
+`kernel_private`. `native_mem0` is higher than `kernel_shared` for the
+small models (+0.13 to +0.35); its block is about 7 short facts that
+gpt-4o extracted, against the kernel's two formatted records, so the
+block's content differs, not only who manages it. Mem0's scores were its
+inverted ones: 83-87% of injected memories scored exactly 1.0, and its
+order carries no similarity information. One Llama `native_mem0` trial
+injected no task context. `native_inhouse` injects the same two memories
+as the kernel, ordered by cosine similarity (profile first in 27 of 90
+trials).
+
 ## Open decisions
 
 1. Injected-block order. With scored search the block is in similarity
@@ -206,6 +265,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
     conversion assumes unit vectors, which the pinned model returns. A
     model that does not would need its collections created in cosine
     space.
+13. The two native conditions differ from the kernel conditions in
+    what they store, not only in who stores it: natural-language
+    renderings (and, for Mem0, gpt-4o-extracted facts) rather than the
+    writers' JSON with the kernel's formatter at injection. Compare them
+    with that in mind.
+14. Native Mem0 extraction (gpt-4o) runs on every write: two per trial
+    plus the conversation, with no cost recorded yet (Subtask 7).
 
 ## Fixed
 
