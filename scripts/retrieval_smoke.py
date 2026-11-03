@@ -232,7 +232,7 @@ def check_azure_mem0_llm_sync():
         time.sleep(1)
         new = handle.read()
     assert "Failed to sync Mem0 LLM" not in new, new[-2000:]
-    assert "Mem0 LLM synced to azure_openai/gpt-4o" in new, new[-2000:]
+    assert "Mem0 LLM synced to litellm/azure/gpt-4o" in new, new[-2000:]
 
 
 CHECKS = [

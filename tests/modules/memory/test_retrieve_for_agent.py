@@ -318,7 +318,11 @@ def test_diagnostics_reach_the_llm_response():
         return_value={"response": "ok"}
     )
     result = executor.execute_request(AGENT, query)
-    assert result["injection_diagnostics"] == {"injected_count": 1}
+    diagnostics = result["injection_diagnostics"]
+    assert diagnostics["injected_count"] == 1
+    # The latency breakdown is added to them (Subtask 7).
+    assert diagnostics["kernel_overhead_ms"] == 0.0
+    assert diagnostics["llm_ms"] is None
 
 
 def test_sdk_search_applies_threshold_on_a_scored_provider():

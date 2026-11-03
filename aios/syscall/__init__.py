@@ -55,6 +55,13 @@ class Syscall(Thread):
         self.start_time: Optional[float] = None  # When call started execution
         self.end_time: Optional[float] = None  # When call finished execution
         
+        # Token usage metrics (prompt/completion/total). None until set via
+        # set_token_usage(); only populated for LLM syscalls whose backend
+        # surfaces usage (e.g. LiteLLM).
+        self.token_usage: Optional[dict] = None
+        # Milliseconds spent in the model call itself (LLM syscalls).
+        self.llm_ms: Optional[float] = None
+        
         # Routing information
         self.source: Optional[str] = None  # Source of the call
         self.target: Optional[str] = None  # Target of the call
@@ -267,6 +274,42 @@ class Syscall(Thread):
             ```
         """
         self.response = response
+
+    def get_token_usage(self) -> Optional[dict]:
+        """
+        Get the token usage recorded for the system call.
+        
+        Returns:
+            Dict with prompt_tokens, completion_tokens, total_tokens,
+            or None if not set.
+        """
+        return self.token_usage
+
+    def set_token_usage(self, usage: Any) -> None:
+        """
+        Set the token usage for the system call from a usage object.
+        
+        Accepts a usage object exposing prompt_tokens / completion_tokens /
+        total_tokens attributes (e.g. a LiteLLM Usage) and stores them as a
+        plain dict.
+        
+        Graceful handling of missing/partial data:
+        - usage=None: no-op, the field stays None (call it unconditionally).
+        - Partial object: each missing attribute is stored as None, not
+          coerced to 0, so consumers can tell "unknown" from "zero tokens".
+        
+        Example:
+            ```python
+            syscall.set_token_usage(response.usage)
+            ```
+        """
+        if usage is None:
+            return
+        self.token_usage = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        }
 
     def get_time_limit(self) -> Optional[float]:
         """

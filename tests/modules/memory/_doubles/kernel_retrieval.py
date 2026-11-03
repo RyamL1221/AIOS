@@ -13,6 +13,8 @@ class KernelRetrievalDouble:
     relevance_threshold = 0.0
     retrieve_for_agent = MemoryManager.retrieve_for_agent
     address_request = MemoryManager.address_request
+    _address_request = MemoryManager._address_request
+    _usage_tag = staticmethod(MemoryManager._usage_tag)
     _analyze_query_to_memory = MemoryManager._analyze_query_to_memory
     stamp_syscall = MemoryManager.stamp_syscall
     _resolve_user_id = MemoryManager._resolve_user_id

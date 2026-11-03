@@ -107,6 +107,16 @@ fetch), `after_partition` (rows whose `user_id` matches),
 `injected_count`, `tokens_estimated` and `injected_memories`
 (`owner_agent`, `memory_type`, `match_score`).
 
+**Cost parity (Subtask 7).** The AssistantAgent also records the
+kernel's latency keys: `barrier_wait_ms` (0: no barrier), `search_ms`
+(the backend call), `select_ms` (partition, sharing filter, `k`),
+`format_ms` (the block), the kernel scheduler's `schedule_wait_ms` and
+the model call's `llm_ms` (both from the kernel's `llm_chat` reply), and
+`kernel_overhead_ms`, their sum without `llm_ms`. The backend's own LLM
+and embedding calls are tagged with the trial's user id
+(`cerebrum.utils.usage.tagged`) and counted in the harness process; the
+AssistantAgent reads the trial's records after its conversation write.
+
 ## native_mem0
 
 Follows the Mem0 open-source documentation for `mem0ai` 2.0
@@ -117,6 +127,12 @@ Follows the Mem0 open-source documentation for `mem0ai` 2.0
   ([configuration](https://docs.mem0.ai/open-source/configuration),
   [Chroma](https://docs.mem0.ai/components/vectordbs/dbs/chroma),
   [Ollama LLM](https://docs.mem0.ai/components/llms/models/ollama)).
+  Since Subtask 7 the `llm` is Mem0's `litellm` provider with the
+  pinned model as `azure/gpt-4o`
+  ([LiteLLM](https://docs.mem0.ai/components/llms/models/litellm)), so
+  every extraction call reaches LiteLLM's success callback and its
+  tokens are counted per trial. Subtask 6 used Mem0's `azure_openai`
+  provider for the same deployment.
 - Writing: `add(messages, user_id=..., agent_id=..., metadata=...,
   infer=True)`, where `infer=True` "extracts structured memories" with
   the LLM ([add](https://docs.mem0.ai/core-concepts/memory-operations/add)).
@@ -208,9 +224,10 @@ Choices:
 
 - **Internal LLM: gpt-4o** on Azure, pinned as `memory.backend_llm`,
   separate from the assistant model in every cell. The only model that
-  kept every fact. Its cost is reported separately (Subtask 7). The
-  agents read the Azure credentials from the same `AZURE_API_KEY`,
-  `AZURE_API_BASE` and `AZURE_API_VERSION` variables as the kernel.
+  kept every fact. Its cost is reported separately
+  (`backend_llm_tokens`, Subtask 7). LiteLLM reads the Azure
+  credentials from the same `AZURE_API_KEY`, `AZURE_API_BASE` and
+  `AZURE_API_VERSION` variables as the kernel.
 - **Input: natural language.** JSON passed with gpt-4o too, but Mem0's
   documentation shows conversational messages, natural language held up
   better on weaker extractors, and it lets both native conditions store

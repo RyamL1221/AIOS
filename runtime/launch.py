@@ -32,6 +32,7 @@ from cerebrum.llm.apis import LLMQuery, LLMResponse
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from cerebrum.tool.apis import ToolQuery, ToolResponse
+from cerebrum.utils import usage as backend_usage
 
 from cerebrum.storage.apis import StorageQuery, StorageResponse
 
@@ -309,6 +310,9 @@ def initialize_components() -> dict:
     }
     
     try:
+        # Count the memory backend's own LLM calls per trial.
+        backend_usage.install_litellm_logger()
+
         # Load configurations
         llms_config = config.get_llms_config()
         storage_config = config.get_storage_config()
@@ -521,6 +525,27 @@ async def get_memory_config():
         "auto_inject": manager.auto_inject,
         "auto_extract": manager.auto_extract,
         "backend_llm": manager.backend_llm,
+    }
+
+
+@app.get("/memory/cost")
+async def get_memory_cost(user_id: str, wait: float = 5.0):
+    """Remove and return the token usage the memory backend's own LLM
+    and embedding calls recorded for one trial's user
+    (``cerebrum.utils.usage``). Waits up to ``wait`` seconds for calls
+    still being recorded. Reading empties the record."""
+    records = await asyncio.to_thread(
+        backend_usage.ACCUMULATOR.take, user_id, wait
+    )
+    return {
+        "user_id": user_id,
+        "backend_llm_tokens": backend_usage.summarize(
+            records, backend_usage.BACKEND_EXTRACTION
+        ),
+        "embedding_tokens": backend_usage.summarize(
+            records, backend_usage.EMBEDDING
+        ),
+        "records": records,
     }
 
 

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Set, Tuple
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
+from cerebrum.utils.usage import tagged
 
 from aios.config.config_manager import config as global_config
 from .embedding import EmbeddingConfig
@@ -418,7 +419,10 @@ class MemoryManager:
         Returns:
             ``(candidates, diagnostics)``. ``diagnostics["error"]`` is
             the provider's error when own retrieval failed, else None.
+            ``barrier_wait_ms``, ``search_ms`` (the provider calls) and
+            ``select_ms`` (partition through cap) time the stages.
         """
+        started = time.perf_counter()
         resolved_user_id = self._resolve_user_id(
             agent_name, request_user_id or user_id
         )
@@ -452,24 +456,28 @@ class MemoryManager:
                 "user_id": scope_user_id,
                 "outcome": outcome.name,
             })
+        waited = time.perf_counter()
 
-        # Without a resolved user, own memories live in the agent's
-        # scope, where add_memory files a write that names no user.
-        own, diagnostics["error"] = self._fetch_candidates(
-            scope_user_id, query_text, top_k_used["own"]
-        )
-
-        shared: list = []
-        if fetch_shared:
-            shared, error = self._fetch_candidates(
-                scope_user_id, query_text, top_k_used["shared"]
+        # The provider's own LLM and embedding calls count to this user.
+        with tagged(scope_user_id):
+            # Without a resolved user, own memories live in the agent's
+            # scope, where add_memory files a write that names no user.
+            own, diagnostics["error"] = self._fetch_candidates(
+                scope_user_id, query_text, top_k_used["own"]
             )
-            if error:
-                logger.debug(
-                    "Shared memory retrieval failed for user_id=%s: %s",
-                    scope_user_id,
-                    error,
+
+            shared: list = []
+            if fetch_shared:
+                shared, error = self._fetch_candidates(
+                    scope_user_id, query_text, top_k_used["shared"]
                 )
+                if error:
+                    logger.debug(
+                        "Shared memory retrieval failed for user_id=%s: %s",
+                        scope_user_id,
+                        error,
+                    )
+        searched = time.perf_counter()
         diagnostics["own_fetched"] = len(own)
         diagnostics["shared_fetched"] = len(shared)
 
@@ -529,6 +537,10 @@ class MemoryManager:
 
         results = results[:k]
         diagnostics["after_cap"] = len(results)
+        selected = time.perf_counter()
+        diagnostics["barrier_wait_ms"] = (waited - started) * 1000
+        diagnostics["search_ms"] = (searched - waited) * 1000
+        diagnostics["select_ms"] = (selected - searched) * 1000
         return results, diagnostics
 
     def _analyze_query_to_memory(self, query: MemoryQuery) -> 'MemoryNote':
@@ -610,6 +622,21 @@ class MemoryManager:
         if not isinstance(memory_syscall, MemorySyscall):
             raise TypeError(f"Expected MemorySyscall, got {type(memory_syscall)}")
         
+        with tagged(self._usage_tag(memory_syscall)):
+            return self._address_request(memory_syscall)
+
+    @staticmethod
+    def _usage_tag(memory_syscall) -> Optional[str]:
+        """The user a memory syscall works for, which its provider's
+        LLM and embedding calls count to (``cerebrum.utils.usage``)."""
+        params = memory_syscall.query.params or {}
+        return (
+            params.get("user_id")
+            or (params.get("metadata") or {}).get("user_id")
+            or memory_syscall.agent_name
+        )
+
+    def _address_request(self, memory_syscall) -> MemoryResponse:
         query = memory_syscall.query
         operation_type = query.operation_type
         

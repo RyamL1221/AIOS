@@ -71,8 +71,13 @@ class Embedder:
     def __init__(self, config: EmbeddingConfig):
         from ollama import Client
 
+        from cerebrum.utils.usage import count_embeddings
+
         self.config = config
-        self._client = Client(host=config.ollama_base_url)
+        # Each call's tokens count to the current trial.
+        self._client = count_embeddings(
+            Client(host=config.ollama_base_url), config.model
+        )
 
     def embed(self, text: str) -> List[float]:
         """Return one vector; raises if its length is not the pinned

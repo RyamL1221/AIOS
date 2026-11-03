@@ -6,6 +6,7 @@ prepends them as a system message to the LLM query's message list,
 enabling personalized agent responses based on prior interactions.
 """
 import logging
+import time
 from typing import TYPE_CHECKING, Optional
 
 from cerebrum.llm.apis import LLMQuery
@@ -107,6 +108,7 @@ class ContextInjector:
                 "after_budget": 0,
                 "tokens_estimated": 0,
                 "injected_memories": [],
+                "format_ms": 0.0,
             })
 
         diagnostics: dict = {
@@ -122,6 +124,7 @@ class ContextInjector:
             "after_budget": 0,
             "tokens_estimated": 0,
             "injected_memories": [],
+            "format_ms": 0.0,
         }
 
         try:
@@ -178,6 +181,9 @@ class ContextInjector:
                 )
                 return (query, diagnostics)
 
+            # format_ms: formatting, the token budget and the block.
+            format_started = time.perf_counter()
+
             # Format memory content to natural language
             formatted_memories = []
             for mem in filtered:
@@ -202,6 +208,9 @@ class ContextInjector:
             )
 
             if not filtered:
+                diagnostics["format_ms"] = (
+                    time.perf_counter() - format_started
+                ) * 1000
                 diagnostics["prompt_tokens_after"] = (
                     diagnostics["prompt_tokens_before"]
                 )
@@ -248,6 +257,9 @@ class ContextInjector:
                 "content": block,
             }
             query.messages = [system_msg] + query.messages
+            diagnostics["format_ms"] = (
+                time.perf_counter() - format_started
+            ) * 1000
 
             diagnostics["prompt_tokens_after"] = (
                 self._estimate_tokens(

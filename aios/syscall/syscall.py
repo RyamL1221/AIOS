@@ -175,13 +175,30 @@ class SyscallExecutor:
             waiting_times.append(waiting_time)
             turnaround_times.append(turnaround_time)
 
-        return {
+        result = {
             "response": completed_response,
             "start_times": start_times,
             "end_times": end_times,
             "waiting_times": waiting_times,
             "turnaround_times": turnaround_times,
         }
+        if isinstance(syscall, LLMSyscall):
+            # Siblings of ``response`` so they reach the HTTP caller: the
+            # Cerebrum LLMResponse has no field for them.
+            result["token_usage"] = syscall.get_token_usage()
+            result["llm_timing"] = self._llm_timing(syscall)
+        return result
+
+    @staticmethod
+    def _llm_timing(syscall) -> Dict[str, Optional[float]]:
+        """The model call's time and the scheduler's wait before it
+        (from enqueue to the batch's start), in milliseconds."""
+        created = syscall.get_created_time()
+        started = syscall.get_start_time()
+        wait = None
+        if created is not None and started is not None:
+            wait = max(0.0, (started - created) * 1000)
+        return {"llm_ms": syscall.llm_ms, "schedule_wait_ms": wait}
 
     def execute_storage_syscall(self, agent_name: str, query: StorageQuery) -> Dict[str, Any]:
         """
@@ -663,6 +680,31 @@ class SyscallExecutor:
             
         return (query, similar_memories)
 
+    # The kernel's memory stages of a chat request, in milliseconds.
+    KERNEL_STAGES = ("barrier_wait_ms", "search_ms", "select_ms", "format_ms")
+
+    @classmethod
+    def _latency_breakdown(
+        cls, diagnostics: Dict[str, Any], llm_timing: Optional[dict]
+    ) -> Dict[str, Optional[float]]:
+        """The kernel's time next to the model call's ``llm_ms``.
+
+        ``kernel_overhead_ms`` is the memory stages plus
+        ``schedule_wait_ms``, the scheduler's wait before the model call
+        (the FIFO scheduler collects LLM requests every
+        ``batch_interval``): both are time the kernel adds, and together
+        with ``llm_ms`` they account for the call's latency.
+        """
+        llm_timing = llm_timing or {}
+        stages = {key: diagnostics.get(key) or 0.0 for key in cls.KERNEL_STAGES}
+        wait = llm_timing.get("schedule_wait_ms")
+        return {
+            **stages,
+            "schedule_wait_ms": wait,
+            "kernel_overhead_ms": sum(stages.values()) + (wait or 0.0),
+            "llm_ms": llm_timing.get("llm_ms"),
+        }
+
     @staticmethod
     def _get_latest_user_message(messages) -> Optional[str]:
         """Return the content of the last user-role message,
@@ -725,6 +767,11 @@ class SyscallExecutor:
 
                 # Sibling of ``response`` so it reaches the HTTP caller.
                 if injection_diag is not None:
+                    injection_diag.update(
+                        self._latency_breakdown(
+                            injection_diag, llm_response.get("llm_timing")
+                        )
+                    )
                     llm_response["injection_diagnostics"] = injection_diag
 
                 # Conversation extraction (after LLM call, async)

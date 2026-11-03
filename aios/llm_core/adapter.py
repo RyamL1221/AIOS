@@ -740,7 +740,8 @@ class LLMAdapter:
             
             # --- Model Response Generation ---
             try:
-                completed_response, finished = self._get_model_response(
+                model_started = time.perf_counter()
+                completed_response, finished, usage = self._get_model_response(
                     model_name=model_name,
                     model=model_identifier,
                     messages=messages,
@@ -758,6 +759,12 @@ class LLMAdapter:
                 # or a standard one. _handle_completion_error should classify it.
                 logger.warning(f"Model response generation failed for {model_name}: {e}") # Warning level as it's handled
                 return (llm_syscall, self._handle_completion_error(e, model_name))
+            # Time in the model call itself, without the scheduler's wait.
+            llm_syscall.llm_ms = (time.perf_counter() - model_started) * 1000
+            # Token usage from the LiteLLM call, or None. It rides on the
+            # syscall, not on the LLMResponse, whose shape is unchanged;
+            # the setter tolerates None.
+            llm_syscall.set_token_usage(usage)
 
             # --- Response Processing ---
             try:
@@ -807,7 +814,7 @@ class LLMAdapter:
         response_format: Optional[Dict[str, Dict]] = None,
         temperature: float = 1.0,
         max_tokens: int = 1000
-    ) -> tuple[Union[str, List, Dict], bool]: # Return type depends on success/tool use
+    ) -> tuple[Union[str, List, Dict], bool, Optional[object]]: # (response, finished, usage)
         """
         Get response from the specific model backend. Handles API calls and context management.
         Raises exceptions on failure (e.g., API errors, timeouts).
@@ -825,7 +832,10 @@ class LLMAdapter:
             max_tokens: Max tokens parameter.
 
         Returns:
-            Tuple of (model_response, finished_flag). Model response can be str, list (tool calls), or dict (json).
+            Tuple of (model_response, finished_flag, usage). Model response
+            can be str, list (tool calls), or dict (json). usage is the raw
+            token-usage object from the LiteLLM response, or None for paths
+            that do not surface it (context manager, OpenAI, HfLocalBackend).
         
         Raises:
             Various exceptions from API calls (APIError, Timeout, etc.) or context manager.
@@ -857,7 +867,9 @@ class LLMAdapter:
                 # The context manager should return the raw response (str, dict, or tool call list)
                 # It might raise exceptions if interrupted or if the underlying call fails.
                 logger.debug(f"[{model_name}] Context manager returned. Finished: {finished}")
-                return completed_response, finished
+                # Context manager path does not surface token usage; return
+                # None so the (response, finished, usage) tuple shape is uniform.
+                return completed_response, finished, None
 
             # --- Direct Model Call Handling (No Context Manager) ---
             else:
@@ -898,6 +910,9 @@ class LLMAdapter:
                     logger.debug(f"[{model_name}] LiteLLM response received.")
                     
                     logger.info(f"Model usage: {response.usage}")
+                    # Only this LiteLLM branch surfaces usage; the context
+                    # manager, OpenAI and HfLocalBackend paths return None.
+                    usage = getattr(response, "usage", None)
                     # Extract content or tool calls from LiteLLM response
                     message = response.choices[0].message
                     if tools:
@@ -906,10 +921,10 @@ class LLMAdapter:
                         # Let's return the raw tool calls for _process_response
                         # logger.debug(f"[{model_name}] LiteLLM returned tool calls: {message.tool_calls}")
                         # decoded_calls = decode_litellm_tool_calls(response) # Assuming this returns the desired list format
-                        return response, True # Return raw tool calls
+                        return response, True, usage # Return raw tool calls
                     else:
                         # logger.debug(f"[{model_name}] LiteLLM returned content: {message.content[:100]}...")
-                        return message.content, True
+                        return message.content, True, usage
 
                 elif isinstance(model, OpenAI):
                     # Use OpenAI client (for vLLM, SGLang, or direct OpenAI)
@@ -924,10 +939,10 @@ class LLMAdapter:
                     message = response.choices[0].message
                     if message.tool_calls:
                         # logger.debug(f"[{model_name}] OpenAI client returned tool calls: {message.tool_calls}")
-                        return message.tool_calls, True # Return raw tool calls
+                        return message.tool_calls, True, None # Return raw tool calls
                     else:
                         # logger.debug(f"[{model_name}] OpenAI client returned content: {message.content[:100]}...")
-                        return message.content, True
+                        return message.content, True, None
 
                 elif isinstance(model, HfLocalBackend):
                     # Use Hugging Face local backend
@@ -950,7 +965,7 @@ class LLMAdapter:
                     generated_text = model.generate(**completion_kwargs)
                     # logger.debug(f"[{model_name}] HfLocalBackend generated: {generated_text[:100]}...")
                     # HfLocalBackend returns a single string. Tool/JSON decoding happens in _process_response.
-                    return generated_text, True
+                    return generated_text, True, None
 
 
         except (APIError, APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError, BadRequestError) as api_err:

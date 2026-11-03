@@ -16,6 +16,8 @@ import threading
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
+from cerebrum.utils.usage import count_embeddings
+
 from .base import (
     Candidate,
     MemoryProvider,
@@ -196,6 +198,7 @@ class Mem0Provider(MemoryProvider):
             else:
                 # Use default configuration
                 self.client = Memory()
+            self._count_embeddings(self.client)
                 
         except Exception as e:
             from . import ProviderInitializationError
@@ -204,6 +207,15 @@ class Mem0Provider(MemoryProvider):
                 f"Failed to initialize Mem0 client: {str(e)}"
             )
     
+    @staticmethod
+    def _count_embeddings(client) -> None:
+        """Count the tokens of the client's Ollama embedding calls per
+        trial (``cerebrum.utils.usage``)."""
+        embedder = getattr(client, "embedding_model", None)
+        ollama = getattr(embedder, "client", None)
+        if ollama is not None and hasattr(ollama, "embed"):
+            count_embeddings(ollama, embedder.config.model)
+
     def _resolve_provider_api_keys(
         self, mem0_config: Dict[str, Any]
     ) -> None:
@@ -476,6 +488,7 @@ class Mem0Provider(MemoryProvider):
 
             # Create the per-user Memory instance.
             client = Memory.from_config(user_config)
+            self._count_embeddings(client)
             if self._synced_llm is not None:
                 client.llm = self._synced_llm
 
@@ -516,35 +529,12 @@ class Mem0Provider(MemoryProvider):
                 meta[key] = item[key]
         return meta
 
-    # Mapping from AIOS kernel backend names to Mem0 LLM provider names.
-    _BACKEND_TO_MEM0_PROVIDER: Dict[str, str] = {
-        "openai": "openai",
-        "azure": "azure_openai",
-        "azure_openai": "azure_openai",
-        "anthropic": "anthropic",
-        "gemini": "gemini",
-        "ollama": "ollama",
-        "groq": "groq",
-        "deepseek": "deepseek",
-        "vllm": "vllm",
-        "litellm": "litellm",
-    }
-
-    @staticmethod
-    def _azure_kwargs(deployment: str) -> Dict[str, Any]:
-        """Return Mem0's Azure client settings from the variables the
-        kernel's LiteLLM calls use (``AZURE_API_KEY``,
-        ``AZURE_API_BASE``, ``AZURE_API_VERSION``). The deployment is the
-        model name, as in LiteLLM's ``azure/<deployment>``. Unset
-        variables are left out, so Mem0 falls back to its own
-        ``LLM_AZURE_*`` variables."""
-        settings = {
-            "api_key": os.environ.get("AZURE_API_KEY"),
-            "azure_endpoint": os.environ.get("AZURE_API_BASE"),
-            "api_version": os.environ.get("AZURE_API_VERSION"),
-            "azure_deployment": deployment,
-        }
-        return {k: v for k, v in settings.items() if v}
+    # Kernel backends LiteLLM serves under the same ``<backend>/<model>``
+    # name the kernel's own adapter uses.
+    _LITELLM_BACKENDS = frozenset({
+        "openai", "azure", "anthropic", "gemini", "ollama", "groq",
+        "deepseek",
+    })
 
     def sync_llm_from_query(
         self,
@@ -553,15 +543,16 @@ class Mem0Provider(MemoryProvider):
         """Synchronize the Mem0 client's LLM with the agent's
         runtime model selection.
 
-        This allows the kernel to propagate the agent's chosen
-        LLM (specified in ``LLMQuery.llms``) to the Mem0
-        provider so that Mem0's internal fact extraction uses the
-        same model as the assistant agent — without requiring a
-        static ``mem0.llm`` entry in ``config.yaml``.
+        Mem0's LLM is its ``litellm`` provider with the model the kernel
+        itself calls (``<backend>/<model>``), so its calls reach LiteLLM's
+        callbacks and their tokens are counted per trial
+        (``cerebrum.utils.usage``). LiteLLM reads the provider's
+        credentials (``AZURE_API_*`` and so on) from the environment, as
+        it does for the kernel's calls. In kernel mode Mem0 writes with
+        ``infer=False`` and never calls this LLM.
 
-        The method is idempotent: if the requested model is
-        already active, it short-circuits without reconstructing
-        the LLM object.
+        Idempotent: if the requested model is already active, it returns
+        without rebuilding the LLM.
 
         Args:
             llms: The ``LLMQuery.llms`` field — a list of dicts
@@ -579,66 +570,28 @@ class Mem0Provider(MemoryProvider):
 
         if not model_name:
             return
-
-        # Map AIOS backend → Mem0 provider name.
-        mem0_provider = self._BACKEND_TO_MEM0_PROVIDER.get(
-            backend, ""
-        )
-        if not mem0_provider:
-            # Unknown backend — cannot map, leave Mem0 LLM as-is.
+        if backend not in self._LITELLM_BACKENDS:
             logger.debug(
-                "Cannot map AIOS backend '%s' to a Mem0 LLM "
-                "provider; skipping sync.",
+                "No LiteLLM route for AIOS backend '%s'; skipping "
+                "Mem0 LLM sync.",
                 backend,
             )
             return
+        litellm_model = f"{backend}/{model_name}"
 
         # Idempotency check: skip if already using this model.
         current_llm = getattr(self.client, "llm", None)
-        if current_llm is not None:
-            current_model = getattr(
-                current_llm, "model", None
-            ) or getattr(
-                getattr(current_llm, "config", None),
-                "model",
-                None,
-            )
-            if current_model == model_name:
-                return
+        current_model = getattr(
+            getattr(current_llm, "config", None), "model", None
+        )
+        if current_model == litellm_model:
+            return
 
-        # Build new Mem0 LLM config and create the instance.
         try:
             from mem0.utils.factory import LlmFactory
 
-            llm_config: Dict[str, Any] = {"model": model_name}
-
-            if mem0_provider == "azure_openai":
-                llm_config["azure_kwargs"] = self._azure_kwargs(
-                    model_name
-                )
-            else:
-                api_key = self._get_api_key(mem0_provider)
-                if api_key:
-                    llm_config["api_key"] = api_key
-
-            # For Ollama, include the hostname from kernel config.
-            if mem0_provider == "ollama":
-                from aios.config.config_manager import (
-                    config as global_config,
-                )
-                llms_cfg = global_config.get_llms_config() or {}
-                for m in llms_cfg.get("models", []):
-                    if (
-                        m.get("backend") == "ollama"
-                        and m.get("hostname")
-                    ):
-                        llm_config[
-                            "ollama_base_url"
-                        ] = m["hostname"]
-                        break
-
             new_llm = LlmFactory.create(
-                mem0_provider, llm_config
+                "litellm", {"model": litellm_model}
             )
             # Writes go through the per-user clients, so they take the
             # synced LLM too, and so does every client created later.
@@ -647,16 +600,11 @@ class Mem0Provider(MemoryProvider):
                 self.client.llm = new_llm
                 for client in self._user_clients.values():
                     client.llm = new_llm
-            logger.info(
-                "Mem0 LLM synced to %s/%s",
-                mem0_provider,
-                model_name,
-            )
+            logger.info("Mem0 LLM synced to litellm/%s", litellm_model)
         except Exception as e:
             logger.warning(
-                "Failed to sync Mem0 LLM to %s/%s: %s",
-                mem0_provider,
-                model_name,
+                "Failed to sync Mem0 LLM to litellm/%s: %s",
+                litellm_model,
                 e,
             )
     
