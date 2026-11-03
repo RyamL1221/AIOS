@@ -8,7 +8,7 @@ set -u
 : "${PROVIDER:?set PROVIDER to memory.provider in config.yaml}"
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"
-OUT="results/provider_smoke/$PROVIDER"
+OUT="${OUT:-results/provider_smoke/$PROVIDER}"
 LOGS="$CEREBRUM/$OUT/logs"
 TRIALS="${TRIALS:-30}"
 JUDGE="gpt-5.4:azure"

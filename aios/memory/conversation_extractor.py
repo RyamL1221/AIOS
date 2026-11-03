@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 from cerebrum.memory.apis import MemoryQuery
 
+from aios.memory.pipeline import conversation_request
+
 if TYPE_CHECKING:
     from aios.memory.manager import MemoryManager
     from aios.syscall.memory import MemorySyscall
@@ -115,19 +117,9 @@ class ConversationExtractor:
 
         query = MemoryQuery(
             operation_type="add_memory",
-            params={
-                "content": self._build_conversation_content(
-                    user_message, assistant_message,
-                ),
-                "context": "conversation",
-                "category": "conversation",
-                "metadata": {
-                    "user_id": user_id or agent_name,
-                    "owner_agent": agent_name,
-                    "memory_type": "conversation",
-                    "sharing_policy": "private",
-                },
-            },
+            params=conversation_request(
+                agent_name, user_message, assistant_message, user_id,
+            ),
         )
         return MemorySyscall(agent_name, query)
 
@@ -176,4 +168,6 @@ class ConversationExtractor:
         assistant_message: str,
     ) -> str:
         """Format the conversation pair for storage."""
-        return f"User: {user_message}\nAssistant: {assistant_message}"
+        return conversation_request(
+            "", user_message, assistant_message
+        )["content"]

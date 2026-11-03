@@ -12,6 +12,8 @@ class KernelRetrievalDouble:
 
     relevance_threshold = 0.0
     retrieve_for_agent = MemoryManager.retrieve_for_agent
+    memory_pipeline = MemoryManager.memory_pipeline
+    pipeline_settings = MemoryManager.pipeline_settings
     address_request = MemoryManager.address_request
     _address_request = MemoryManager._address_request
     _usage_tag = staticmethod(MemoryManager._usage_tag)

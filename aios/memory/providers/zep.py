@@ -28,11 +28,16 @@ if TYPE_CHECKING:
 class ZepProvider(MemoryProvider):
     """Provider using Zep graph API for memory management.
 
+    Its writes are reported synchronously (``synchronous_commit``), so
+    the write barrier is skipped for it.
+
     Attributes:
         client: Zep client instance
         default_user_id: Default user ID for graph operations
         default_session_id: Kept for interface compatibility (not used in graph API)
     """
+
+    synchronous_commit = True
 
     def __init__(self):
         self.client = None

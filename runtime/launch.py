@@ -22,6 +22,7 @@ from aios.hooks.modules.scheduler import rr_scheduler_nonblock as rr_scheduler
 from aios.syscall.syscall import useSysCall
 from aios.config.config_manager import config
 from aios.memory.context_injector import ContextInjector
+from aios.memory.pipeline import PIPELINE_VERSION
 from aios.memory.conversation_extractor import ConversationExtractor
 
 # Providers that get the context injector and conversation extractor.
@@ -525,6 +526,11 @@ async def get_memory_config():
         "auto_inject": manager.auto_inject,
         "auto_extract": manager.auto_extract,
         "backend_llm": manager.backend_llm,
+        # The memory pipeline library's settings and source version: a
+        # replicated agent builds its own copy from these
+        # (docs/REPLICATED_LOGIC.md).
+        "pipeline": manager.pipeline_settings().as_dict(),
+        "pipeline_version": PIPELINE_VERSION,
     }
 
 

@@ -88,6 +88,12 @@ def check_config():
         "auto_inject",
         "auto_extract",
         "backend_llm",
+        "pipeline",
+        "pipeline_version",
+    }, body
+    assert set(body["pipeline"]) == {
+        "relevance_threshold", "max_injected_memories",
+        "max_memory_tokens", "write_barrier",
     }, body
     assert set(body["embedding"]) == {
         "provider", "model", "dimension", "ollama_base_url",

@@ -6,13 +6,19 @@ prepends them as a system message to the LLM query's message list,
 enabling personalized agent responses based on prior interactions.
 """
 import logging
-import time
 from typing import TYPE_CHECKING, Optional
 
 from cerebrum.llm.apis import LLMQuery
-from cerebrum.memory.apis import MemoryQuery
 
-from aios.memory.memory_formatter import format_memory
+from aios.memory.pipeline.facade import (
+    latest_user_message,
+    serialize_messages,
+)
+from aios.memory.pipeline.formatter import (
+    Formatter,
+    estimate_tokens,
+    format_block,
+)
 
 if TYPE_CHECKING:
     from aios.memory.manager import MemoryManager
@@ -24,10 +30,11 @@ class ContextInjector:
     """Retrieves relevant memories and injects them into LLM
     query messages.
 
-    Asks ``MemoryManager.retrieve_for_agent`` which memories the
-    requesting agent sees, formats them, applies the token budget,
-    and prepends the resulting system message at index 0 of the
-    query's message list.
+    A thin kernel client of the memory pipeline library: it switches
+    injection on or off, keeps the kernel's log lines, and asks the
+    manager's ``MemoryPipeline`` (shared barrier, shared identity
+    registry) to retrieve, format, budget and prepend the block at
+    index 0 of the query's message list.
     """
 
     def __init__(
@@ -113,178 +120,57 @@ class ContextInjector:
 
         diagnostics: dict = {
             "auto_inject_enabled": True,
-            "candidate_count": 0,
             "injected_count": 0,
-            "source_agents": [],
-            "memory_types": [],
-            "prompt_tokens_before": 0,
+            "prompt_tokens_before": self._estimate_tokens(
+                self._serialize_messages(query.messages)
+            ),
             "prompt_tokens_after": 0,
             "resolved_user_id": None,
-            "barrier_waits": [],
-            "after_budget": 0,
-            "tokens_estimated": 0,
-            "injected_memories": [],
-            "format_ms": 0.0,
         }
 
         try:
-            diagnostics["prompt_tokens_before"] = (
-                self._estimate_tokens(
-                    self._serialize_messages(
-                        query.messages
-                    )
-                )
-            )
-
-            user_text = self._extract_latest_user_message(
-                query.messages
-            )
-            if user_text is None:
-                diagnostics["prompt_tokens_after"] = (
-                    diagnostics["prompt_tokens_before"]
-                )
-                return (query, diagnostics)
-
-            filtered, retrieval = (
-                self.memory_manager.retrieve_for_agent(
+            # The library does the work (MemoryPipeline.inject), over
+            # the kernel's shared barrier and identity registry.
+            messages, diagnostics = (
+                self.memory_manager.memory_pipeline().inject(
                     agent_name,
-                    agent_name,
-                    user_text,
+                    query.messages,
+                    user_id=user_id,
                     k=self.max_memories,
-                    include_shared=True,
-                    request_user_id=user_id,
+                    max_tokens=self.max_tokens,
                 )
             )
-            retrieval.pop("error", None)
-            diagnostics.update(retrieval)
-            diagnostics["candidate_count"] = retrieval["after_dedupe"]
-            resolved_user_id = retrieval["resolved_user_id"]
-
-            logger.info(
-                "Injection pipeline for agent=%s: "
-                "resolved_user_id=%s, candidates=%d, kept=%d",
-                agent_name,
-                resolved_user_id,
-                retrieval["after_dedupe"],
-                len(filtered),
-            )
-
-            if not filtered:
+            resolved_user_id = diagnostics["resolved_user_id"]
+            if "after_dedupe" in diagnostics:
                 logger.info(
-                    "No memories selected for agent=%s "
-                    "(resolved_user_id=%s)",
+                    "Injection pipeline for agent=%s: "
+                    "resolved_user_id=%s, candidates=%d, kept=%d",
                     agent_name,
                     resolved_user_id,
+                    diagnostics["after_dedupe"],
+                    diagnostics["after_cap"],
                 )
-                diagnostics["prompt_tokens_after"] = (
-                    diagnostics["prompt_tokens_before"]
-                )
+            if not diagnostics["injected_count"]:
+                if "after_dedupe" in diagnostics:
+                    logger.info(
+                        "No memories selected for agent=%s "
+                        "(resolved_user_id=%s)",
+                        agent_name,
+                        resolved_user_id,
+                    )
                 return (query, diagnostics)
 
-            # format_ms: formatting, the token budget and the block.
-            format_started = time.perf_counter()
-
-            # Format memory content to natural language
-            formatted_memories = []
-            for mem in filtered:
-                formatted = dict(mem)  # shallow copy
-                try:
-                    formatted["content"] = format_memory(
-                        mem.get("content", ""),
-                        mem.get("metadata", {}),
-                    )
-                except Exception:
-                    logger.warning(
-                        "Memory formatting failed, "
-                        "using raw content",
-                        exc_info=True,
-                    )
-                formatted_memories.append(formatted)
-            filtered = formatted_memories
-
-            # Truncate by token budget
-            filtered = self._truncate_by_token_budget(
-                filtered
+            query.messages = messages
+            injected = diagnostics["injected_memories"]
+            own = sum(
+                1 for m in injected if m["owner_agent"] == agent_name
             )
-
-            if not filtered:
-                diagnostics["format_ms"] = (
-                    time.perf_counter() - format_started
-                ) * 1000
-                diagnostics["prompt_tokens_after"] = (
-                    diagnostics["prompt_tokens_before"]
-                )
-                return (query, diagnostics)
-
-            # Record injected_count after all filtering
-            diagnostics["injected_count"] = len(filtered)
-            diagnostics["after_budget"] = len(filtered)
-            diagnostics["injected_memories"] = [
-                {
-                    "memory_id": mem.get("memory_id"),
-                    "owner_agent": (mem.get("metadata") or {}).get(
-                        "owner_agent", ""
-                    ),
-                    "memory_type": (mem.get("metadata") or {}).get(
-                        "memory_type", ""
-                    ),
-                    "match_score": mem.get("score"),
-                }
-                for mem in filtered
-            ]
-
-            # Extract unique source_agents and memory_types
-            agents: set = set()
-            types: set = set()
-            for mem in filtered:
-                meta = mem.get("metadata") or {}
-                oa = meta.get("owner_agent", "")
-                if oa:
-                    agents.add(oa)
-                mt = meta.get("memory_type", "")
-                if mt:
-                    types.add(mt)
-            diagnostics["source_agents"] = list(agents)
-            diagnostics["memory_types"] = list(types)
-
-            # Build and prepend the system message
-            block = self._format_memory_block(filtered)
-            diagnostics["tokens_estimated"] = self._estimate_tokens(
-                block
-            )
-            system_msg = {
-                "role": "system",
-                "content": block,
-            }
-            query.messages = [system_msg] + query.messages
-            diagnostics["format_ms"] = (
-                time.perf_counter() - format_started
-            ) * 1000
-
-            diagnostics["prompt_tokens_after"] = (
-                self._estimate_tokens(
-                    self._serialize_messages(
-                        query.messages
-                    )
-                )
-            )
-
             logger.info(
                 "Injected %d memories (%d own + %d shared) "
                 "for agent=%s, resolved_user_id=%s",
-                len(filtered),
-                sum(
-                    1 for m in filtered
-                    if (m.get("metadata") or {}).get(
-                        "owner_agent", ""
-                    ) == agent_name
-                ),
-                sum(
-                    1 for m in filtered
-                    if (m.get("metadata") or {}).get(
-                        "owner_agent", ""
-                    ) != agent_name
-                ),
+                len(injected),
+                own,
+                len(injected) - own,
                 agent_name,
                 resolved_user_id,
             )
@@ -311,66 +197,15 @@ class ContextInjector:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _extract_latest_user_message(
-        messages: list,
-    ) -> Optional[str]:
-        """Return the content of the last user-role message,
-        or ``None`` if none exists."""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                return msg.get("content")
-        return None
+    # The library's helpers, kept under their old names.
+    _extract_latest_user_message = staticmethod(latest_user_message)
+    _format_memory_block = staticmethod(format_block)
+    _serialize_messages = staticmethod(serialize_messages)
+    _estimate_tokens = staticmethod(estimate_tokens)
 
-    @staticmethod
-    def _format_memory_block(
-        memories: list,
-    ) -> str:
-        """Format memories into a delimited system message
-        string."""
-        lines = [
-            "===== MEMORY CONTEXT =====",
-            "The following are relevant memories from prior "
-            "interactions with this user. Use them to "
-            "personalize your response:",
-            "",
-        ]
-        for mem in memories:
-            ts = mem.get("timestamp", "unknown")
-            content = mem.get("content", "")
-            lines.append(f"- [{ts}] {content}")
-
-        lines.append("")
-        lines.append("===== END MEMORY CONTEXT =====")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _serialize_messages(messages: list) -> str:
-        """Join all message content strings for token
-        estimation."""
-        return " ".join(
-            m.get("content", "") for m in messages
+    def _truncate_by_token_budget(self, memories: list) -> list:
+        """Drop the lowest-ranked memories until the block fits
+        ``max_tokens`` (``Formatter.truncate_by_token_budget``)."""
+        return Formatter(self.max_tokens).truncate_by_token_budget(
+            memories
         )
-
-    @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        """Rough token estimate: words * 1.3."""
-        return int(len(text.split()) * 1.3)
-
-    def _truncate_by_token_budget(
-        self,
-        memories: list,
-    ) -> list:
-        """Remove least-relevant memories until the formatted
-        block fits within ``max_tokens``.
-
-        Memories are assumed to be sorted by score descending.
-        We remove from the tail (lowest score) first.
-        """
-        while memories:
-            block = self._format_memory_block(memories)
-            if self._estimate_tokens(block) <= self.max_tokens:
-                return memories
-            # Drop the least relevant (last item)
-            memories = memories[:-1]
-        return memories

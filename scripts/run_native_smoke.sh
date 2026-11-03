@@ -1,16 +1,17 @@
 #!/bin/bash
 # Subtask 6 behavior check: 30 trials per model of one agent-managed
-# condition (docs/NATIVE_USAGE.md), one fresh kernel per model. The
+# condition (native: docs/NATIVE_USAGE.md; replicated, Subtask 8:
+# docs/REPLICATED_LOGIC.md), one fresh kernel per model. The
 # kernel must run with memory.auto_inject and auto_extract false; the
 # harness pre-flight refuses otherwise. Afterwards each kernel log is
 # checked for memory operations, which must be absent.
 # Run from the AIOS repo, detached:
 #   METHOD=native_mem0 bash scripts/run_native_smoke.sh
 set -u
-: "${METHOD:?set METHOD to native_mem0 or native_inhouse}"
+: "${METHOD:?set METHOD to native_* or replicated_*}"
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"
-OUT="results/native_smoke/$METHOD"
+OUT="${OUT:-results/native_smoke/$METHOD}"
 LOGS="$CEREBRUM/$OUT/logs"
 TRIALS="${TRIALS:-30}"
 JUDGE="gpt-5.4:azure"
@@ -19,8 +20,8 @@ RUN_PREFIX="${RUN_PREFIX:-ns6-$METHOD}"
 MEMORY_OPS='add_memory: agent=|retrieve_memory result|Injection pipeline|Stored conversation memory|Injected [0-9]+ memories'
 
 case "$METHOD" in
-    native_mem0|native_inhouse) ;;
-    *) echo "METHOD must be native_mem0 or native_inhouse"; exit 1 ;;
+    native_mem0|native_inhouse|replicated_mem0|replicated_inhouse) ;;
+    *) echo "METHOD must be native_* or replicated_*"; exit 1 ;;
 esac
 mkdir -p "$LOGS"
 
@@ -54,6 +55,8 @@ for entry in "gpt4o gpt-4o:azure" "llama llama3.1:8b:ollama" \
     # Azure variables; exported to the harness only.
     (set -a; . "$AIOS/.env"; set +a
      export CEREBRUM_NATIVE_MEMORY_DIR="$CEREBRUM/.native_memory/$RUN_PREFIX"
+     export CEREBRUM_REPLICATED_MEMORY_DIR="$CEREBRUM/.replicated_memory/$RUN_PREFIX"
+     export AIOS_ROOT="$AIOS"
      cd "$CEREBRUM" && .venv/bin/python \
         -m benchmarks.shared_memory.run_evaluation \
         --trials "$TRIALS" --method "$METHOD" \

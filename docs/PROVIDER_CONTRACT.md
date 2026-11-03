@@ -45,6 +45,13 @@ because SDK search returns them and the injected memory block prints
 The contract tests check honesty: `scored_search` true means every
 `search` row has a float score in [-1, 1], in descending order.
 
+## Commit timing
+
+`synchronous_commit` (class attribute, default `False`): `True` when a
+write is durable once `add` returns. The write barrier is skipped for
+such providers, since a wait would only add latency. The in-memory and
+Zep providers set it; Mem0 and the Chroma in-house provider do not.
+
 ## Required metadata
 
 Every stored item carries `owner_agent`, `user_id`, `memory_type`,

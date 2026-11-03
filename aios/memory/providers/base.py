@@ -123,6 +123,10 @@ class MemoryProvider(ABC):
     it. See docs/PROVIDER_CONTRACT.md for the full contract.
     """
 
+    # True when a write is durable once ``add`` returns, so the write
+    # barrier is skipped for it (a wait would only add latency).
+    synchronous_commit = False
+
     @abstractmethod
     def initialize(self, config: Dict[str, Any]) -> None:
         """Configure the backend. Raises ProviderInitializationError."""

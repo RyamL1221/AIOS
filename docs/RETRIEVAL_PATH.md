@@ -1,5 +1,13 @@
 # Kernel Retrieval Path
 
+Since NeurIPS Subtask 8 the steps below are the memory pipeline library,
+`aios/memory/pipeline/` (`Selector.select`, then `Formatter.build` for
+the block), which the kernel and the replicated agents both run
+(`docs/REPLICATED_LOGIC.md`). `retrieve_for_agent` and the injector
+delegate to `MemoryPipeline` over the kernel's shared barrier and
+identity registry. The block is printed in type order (profile, task
+context, conversation, other) after ranking, cap and budget (Decision 1).
+
 `MemoryManager.retrieve_for_agent` decides which memories an agent sees.
 `ContextInjector.inject` and the `retrieve_memory` branch of
 `MemoryManager.address_request` both call it, directly and never through
@@ -18,7 +26,7 @@ no visibility filtering in the provider.
    scope; without a resolved user, the agent's own scope, where a write
    that names no user is filed.
 4. User partition, failing closed on a missing `user_id`.
-5. Visibility: `apply_sharing_filter` (`aios/memory/visibility.py`), the
+5. Visibility: `apply_sharing_filter` (`aios/memory/pipeline/visibility.py`), the
    only place it runs; providers never filter. `sharing_policy="shared"` only selects the shared fetch; any
    other value also narrows the rule (`"private"`: own private only).
 6. Exact-content dedupe of shared rows against earlier rows, own first.

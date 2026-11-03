@@ -8,7 +8,6 @@ to enable different storage backends (in-house, Mem0, Zep).
 import logging
 import time
 from collections import OrderedDict
-from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Set, Tuple
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
@@ -16,22 +15,45 @@ from cerebrum.utils.usage import tagged
 
 from aios.config.config_manager import config as global_config
 from .embedding import EmbeddingConfig
+from .pipeline import (
+    SHARED_FETCH_FACTOR,  # noqa: F401  (re-exported for callers)
+    UPDATE_PROTECTED_METADATA,  # noqa: F401
+    IdentityResolver,
+    MemoryPipeline,
+    PipelineSettings,
+    Selector,
+    Visibility,
+    note_from_request,
+)
+from .pipeline.barrier import MemoryWriteBarrier, WaitOutcome
+from .pipeline.selector import commits_synchronously
 from .providers import ProviderFactory, MemoryProvider
 from .providers.base import Candidate, ProviderError
-from .providers.in_house import InHouseProvider
-from .providers.zep import ZepProvider
-from .visibility import apply_sharing_filter
-from .write_barrier import MemoryWriteBarrier, WaitOutcome
+from .providers.factory import provider_config
 
 logger = logging.getLogger(__name__)
 
-# Shared retrieval over-fetches because a provider applies k before the
-# kernel's visibility filter removes other agents' private memories.
-SHARED_FETCH_FACTOR = 4
 
-# An update may not move a memory to another owner or user, or rewrite
-# when it was created.
-UPDATE_PROTECTED_METADATA = ("owner_agent", "user_id", "created_at")
+class _KernelIdentity(IdentityResolver):
+    """The kernel's one identity registry, shared by every agent: a
+    write by any agent registers its user in the manager's registry
+    (docs/REPLICATED_LOGIC.md, difference 2)."""
+
+    def __init__(self, manager: "MemoryManager"):
+        super().__init__(
+            registry=getattr(manager, "_known_user_ids", None),
+            logger=logger,
+        )
+        self._manager = manager
+
+    def register(self, user_id: str) -> None:
+        self._manager._register_user_id(user_id)
+        logger.info(
+            "Registered user_id=%s (latest=%s, known=%s)",
+            user_id,
+            self._manager.latest_user_id,
+            self._manager.known_user_ids,
+        )
 
 
 class MemoryManager:
@@ -111,6 +133,7 @@ class MemoryManager:
         # once at construction; defaults are coded in the barrier so
         # omitting the section is safe.
         barrier_config = memory_config.get("write_barrier", {}) or {}
+        self._barrier_config = dict(barrier_config)
         self.barrier = MemoryWriteBarrier(config=barrier_config)
 
         # Selection settings for retrieve_for_agent. A threshold of 0.0
@@ -157,124 +180,67 @@ class MemoryManager:
         memory_config: Dict[str, Any],
         storage_config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Get provider-specific configuration.
-        
-        Extracts the appropriate configuration section based on the provider type.
-        
-        Args:
-            provider_type: The type of provider ("in-house", "in-memory",
-                "mem0", "zep")
-            memory_config: The memory configuration section from config
-            storage_config: The storage configuration section from config
-        
-        Returns:
-            Dictionary containing provider-specific configuration
-        """
-        embedding = EmbeddingConfig.from_memory_config(memory_config)
-        if provider_type == "in-house":
-            return {
-                **(memory_config.get("chroma_inhouse") or {}),
-                "embedding": embedding.as_dict(),
-            }
-        elif provider_type == "in-memory":
-            return dict(memory_config.get("in_memory") or {})
-        elif provider_type == "mem0":
-            mem0_config = dict(memory_config.get("mem0") or {})
-            pinned = embedding.mem0_embedder()
-            configured = mem0_config.get("embedder")
-            if configured and configured != pinned:
-                logger.warning(
-                    "memory.mem0.embedder is ignored; Mem0 embeds with "
-                    "memory.embedding (%s)", embedding.model,
-                )
-            mem0_config["embedder"] = pinned
-            return mem0_config
-        elif provider_type == "zep":
-            return memory_config.get("zep", {})
-        return {}
+        """The provider's configuration (``providers.factory
+        .provider_config``, shared with the replicated agents)."""
+        return provider_config(provider_type, memory_config)
 
     def _provider_supports_barrier(self) -> bool:
         """Return True for providers that participate in the
-        per-user write barrier.
+        per-user write barrier: those whose writes are not durable when
+        ``add`` returns (``MemoryProvider.synchronous_commit`` false,
+        which includes Mem0-shaped test doubles)."""
+        return not commits_synchronously(self.provider)
 
-        The barrier is meaningful only for providers whose writes
-        commit asynchronously (Mem0Provider and Mem0-shaped test
-        doubles). InHouseProvider and ZepProvider commit
-        synchronously inside their own ``add_memory`` calls, so
-        the barrier wait would only add latency without changing
-        ordering -- Clause 3.5 of the design requires those paths
-        stay byte-for-byte identical to the pre-fix behaviour.
+    # ------------------------------------------------------------------
+    # The memory pipeline library (aios.memory.pipeline)
+    # ------------------------------------------------------------------
 
-        We use an *exclusion* check (``not isinstance(...,
-        (InHouseProvider, ZepProvider))``) rather than a positive
-        ``isinstance(self.provider, Mem0Provider)`` so Mem0-shaped
-        test doubles -- which subclass ``MemoryProvider`` directly
-        -- still take the barrier path. This is also a
-        defense-in-depth backstop on top of the barrier's own
-        ``_enabled`` check.
-        """
-        return not isinstance(
-            self.provider, (InHouseProvider, ZepProvider)
+    def pipeline_settings(self) -> PipelineSettings:
+        """The kernel's pipeline settings, as it reports them at
+        ``/memory/config`` for the replicated agents to copy."""
+        return PipelineSettings(
+            relevance_threshold=getattr(self, "relevance_threshold", 0.0),
+            max_injected_memories=getattr(
+                self, "max_injected_memories", 5
+            ),
+            max_memory_tokens=getattr(self, "max_memory_tokens", 1500),
+            write_barrier=dict(getattr(self, "_barrier_config", {})),
         )
-    
+
+    def memory_pipeline(self) -> MemoryPipeline:
+        """The library over what placement gives the kernel: the one
+        write barrier and the one identity registry every agent shares.
+        Built per call from the current settings."""
+        if getattr(self, "_known_user_ids", None) is None:
+            self._known_user_ids = OrderedDict()
+        return MemoryPipeline(
+            self.provider,
+            self.pipeline_settings(),
+            barrier=getattr(self, "barrier", None),
+            resolver=_KernelIdentity(self),
+        )
+
     def _resolve_user_id(
         self,
         agent_name: str,
         request_user_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Resolve the active end-user for a retrieval.
-
-        Returns the explicit per-request identity, or ``None``, which
-        tells the caller to skip shared retrieval and use ``agent_name``
-        for own memories only. Never returns ``agent_name``: it is not a
-        valid end-user for cross-agent retrieval. Never guesses from
-        ``latest_user_id``: that caused cross-user contamination.
-        """
-        if request_user_id and request_user_id != agent_name:
-            logger.info(
-                "user_id resolved from REQUEST: %s (agent=%s)",
-                request_user_id,
-                agent_name,
-            )
-            return request_user_id
-        if not request_user_id:
-            logger.debug(
-                "No request-scoped user_id; skipping user-scoped "
-                "retrieval (agent=%s)",
-                agent_name,
-            )
-        return None
+        """Resolve the active end-user for a retrieval
+        (``IdentityResolver.resolve``)."""
+        return IdentityResolver(logger=logger).resolve(
+            agent_name, request_user_id
+        )
 
     def _await_pending_writes(
         self,
         user_id: Optional[str],
         barrier_snapshot: Optional[int] = None,
     ) -> WaitOutcome:
-        """Wait for writes accepted before a retrieval of ``user_id``.
-
-        Args:
-            user_id: The user the retrieval is scoped to.
-            barrier_snapshot: The high-water mark stamped at syscall
-                acceptance. ``None`` takes one now (kernel-internal
-                retrievals have no acceptance step); the sentinel ``0``
-                skips the wait.
-
-        Returns:
-            The wait outcome; ``BYPASSED`` when no wait ran.
-        """
-        barrier = getattr(self, "barrier", None)
-        if (
-            not user_id
-            or barrier is None
-            or not self._provider_supports_barrier()
-        ):
-            return WaitOutcome.BYPASSED
-        if barrier_snapshot is None:
-            barrier_snapshot = barrier.snapshot(user_id)
-        if not barrier_snapshot:
-            return WaitOutcome.BYPASSED
-        return barrier.wait_until_drained(user_id, barrier_snapshot)
+        """Wait for writes accepted before a retrieval of ``user_id``
+        (``Selector.await_pending_writes``)."""
+        return self.memory_pipeline().selector.await_pending_writes(
+            user_id, barrier_snapshot
+        )
 
     def stamp_syscall(self, memory_syscall) -> None:
         """Stamp a memory syscall against the write barrier.
@@ -314,70 +280,31 @@ class MemoryManager:
             or (params.get("metadata") or {}).get("user_id")
         )
 
-    @staticmethod
-    def _can_write(agent_name: str, metadata: Optional[dict]) -> bool:
-        """Only the owner may update or delete a memory, shared or not.
-        Fails closed: a memory with no owner is not writable."""
-        return (metadata or {}).get("owner_agent") == agent_name
+    _can_write = staticmethod(Visibility.can_write)
+    _can_read = staticmethod(Visibility.can_read)
+    _merge_and_deduplicate = staticmethod(Selector.merge_and_deduplicate)
 
     def _locate_memory(
         self, query: MemoryQuery, agent_name: str
     ) -> Optional[Candidate]:
-        """Fetch a memory named by id, wherever it is stored.
-
-        Providers keep one collection per user, so an id alone cannot
-        find a row. Uses the caller's user_id when given; otherwise tries
-        the agent's own scope, then the provider's default.
-        """
+        """Fetch a memory named by id, wherever it is stored
+        (``MemoryPipeline.locate``), in the caller's user scope."""
         params = query.params
         user_id = (
             params.get("user_id")
             or (params.get("metadata") or {}).get("user_id")
         )
-        scopes = [user_id] if user_id else [agent_name, None]
-        for scope in scopes:
-            found = self.provider.get(params["memory_id"], scope)
-            if found is not None:
-                return found
-        return None
-
-    @staticmethod
-    def _can_read(agent_name: str, metadata: Optional[dict]) -> bool:
-        """Apply the visibility rule to one memory read by id. Fails
-        closed: a memory with no owner is not readable."""
-        metadata = metadata or {}
-        return (
-            metadata.get("owner_agent") == agent_name
-            or metadata.get("sharing_policy") == "shared"
+        return self.memory_pipeline().locate(
+            params["memory_id"], user_id, agent_name
         )
 
     def _fetch_candidates(
         self, scope_user_id: str, query_text: str, top_k: int
     ) -> Tuple[list, Optional[str]]:
-        """One provider search with an explicit ``top_k``, as kernel
-        rows. Returns ``(rows, error)``."""
-        try:
-            found = self.provider.search(query_text, scope_user_id, top_k)
-        except Exception as e:
-            return [], f"{type(e).__name__}: {e}"
-        return [candidate.to_row() for candidate in found], None
-
-    @staticmethod
-    def _merge_and_deduplicate(own: list, shared: list) -> list:
-        """Merge own and shared results, dropping shared rows whose
-        content exactly matches an earlier row. Own rows always come
-        first and are never dropped."""
-        seen_content: set = set()
-        merged: list = []
-        for mem in own:
-            seen_content.add(mem.get("content", ""))
-            merged.append(mem)
-        for mem in shared:
-            content = mem.get("content", "")
-            if content not in seen_content:
-                seen_content.add(content)
-                merged.append(mem)
-        return merged
+        """One provider search (``Selector.fetch``)."""
+        return self.memory_pipeline().selector.fetch(
+            scope_user_id, query_text, top_k
+        )
 
     def retrieve_for_agent(
         self,
@@ -391,212 +318,31 @@ class MemoryManager:
         sharing_policy: Optional[str] = None,
         barrier_snapshot: Optional[int] = None,
     ) -> "tuple[list, dict]":
-        """Decide which memories an agent sees.
+        """Decide which memories an agent sees: the library's selection
+        (``MemoryPipeline.retrieve``), over the kernel's shared barrier
+        and identity registry.
 
         The single kernel retrieval path: context injection and SDK
-        search both end here, so the visibility rule holds whatever a
-        caller passes. Runs identity resolution, one barrier wait, own
-        and shared retrieval, the user-partition check, the visibility
-        rule, exact-content dedupe, the relevance threshold, the sort
-        and the count cap, in that order. Called directly, never through
-        the syscall queue.
-
-        Args:
-            agent_name: The requesting agent.
-            user_id: The scope named by the caller, if any.
-            query_text: The retrieval query.
-            k: Maximum candidates returned; own fetch size.
-            include_shared: Also fetch ``SHARED_FETCH_FACTOR * k`` rows
-                of memories shared by other agents.
-            request_user_id: The per-request identity; wins over
-                ``user_id``.
-            sharing_policy: An SDK caller's policy. ``"shared"`` only
-                selects the shared fetch; any other value also narrows
-                the visibility rule (for example ``"private"``: own
-                private memories only).
-            barrier_snapshot: See ``_await_pending_writes``.
+        search both end here. ``barrier_snapshot`` is the high-water
+        mark stamped when a syscall was accepted (``None``: take one
+        now; ``0``: skip the wait).
 
         Returns:
             ``(candidates, diagnostics)``. ``diagnostics["error"]`` is
             the provider's error when own retrieval failed, else None.
-            ``barrier_wait_ms``, ``search_ms`` (the provider calls) and
-            ``select_ms`` (partition through cap) time the stages.
         """
-        started = time.perf_counter()
-        resolved_user_id = self._resolve_user_id(
-            agent_name, request_user_id or user_id
+        return self.memory_pipeline().retrieve(
+            agent_name, user_id, query_text,
+            k=k,
+            include_shared=include_shared,
+            request_user_id=request_user_id,
+            sharing_policy=sharing_policy,
+            barrier_snapshot=barrier_snapshot,
         )
-        scope_user_id = resolved_user_id or agent_name
-        fetch_shared = include_shared and resolved_user_id is not None
-        top_k_used = {
-            "own": k,
-            "shared": SHARED_FETCH_FACTOR * k if fetch_shared else 0,
-        }
-        diagnostics: Dict[str, Any] = {
-            "resolved_user_id": resolved_user_id,
-            "own_fetched": 0,
-            "shared_fetched": 0,
-            "after_partition": 0,
-            "after_visibility": 0,
-            "after_dedupe": 0,
-            "scores_present": False,
-            "threshold_used": None,
-            "after_threshold": 0,
-            "after_cap": 0,
-            "top_k_used": top_k_used,
-            "barrier_waits": [],
-            "error": None,
-        }
-
-        outcome = self._await_pending_writes(
-            scope_user_id, barrier_snapshot
-        )
-        if outcome is not WaitOutcome.BYPASSED:
-            diagnostics["barrier_waits"].append({
-                "user_id": scope_user_id,
-                "outcome": outcome.name,
-            })
-        waited = time.perf_counter()
-
-        # The provider's own LLM and embedding calls count to this user.
-        with tagged(scope_user_id):
-            # Without a resolved user, own memories live in the agent's
-            # scope, where add_memory files a write that names no user.
-            own, diagnostics["error"] = self._fetch_candidates(
-                scope_user_id, query_text, top_k_used["own"]
-            )
-
-            shared: list = []
-            if fetch_shared:
-                shared, error = self._fetch_candidates(
-                    scope_user_id, query_text, top_k_used["shared"]
-                )
-                if error:
-                    logger.debug(
-                        "Shared memory retrieval failed for user_id=%s: %s",
-                        scope_user_id,
-                        error,
-                    )
-        searched = time.perf_counter()
-        diagnostics["own_fetched"] = len(own)
-        diagnostics["shared_fetched"] = len(shared)
-
-        # User partition (defense in depth, fail closed): a provider
-        # that returns a mis-scoped row must not leak it, and a row with
-        # no user_id does not count as this user's.
-        def in_partition(mem: dict) -> bool:
-            meta = mem.get("metadata") or {}
-            return meta.get("user_id", "") == scope_user_id
-
-        own = [mem for mem in own if in_partition(mem)]
-        shared = [mem for mem in shared if in_partition(mem)]
-        diagnostics["after_partition"] = len(own) + len(shared)
-
-        # The only place visibility is enforced: providers return every
-        # row in the scope (docs/PROVIDER_CONTRACT.md).
-        policy = None if sharing_policy == "shared" else sharing_policy
-
-        def visible(rows: list) -> list:
-            return apply_sharing_filter(
-                rows,
-                agent_name,
-                scope_user_id,
-                policy,
-                lambda mem: mem.get("metadata") or {},
-            )
-
-        own = visible(own)
-        shared = visible(shared)
-        diagnostics["after_visibility"] = len(own) + len(shared)
-
-        results = (
-            self._merge_and_deduplicate(own, shared) if shared else own
-        )
-        diagnostics["after_dedupe"] = len(results)
-
-        # A provider without scored search returns no scores: the
-        # threshold cannot apply and scores_present records that.
-        scores_present = any(
-            mem.get("score") is not None for mem in results
-        )
-        diagnostics["scores_present"] = scores_present
-        if scores_present:
-            threshold = getattr(self, "relevance_threshold", 0.0)
-            diagnostics["threshold_used"] = threshold
-            results = [
-                mem for mem in results
-                if mem.get("score") is None
-                or mem["score"] >= threshold
-            ]
-            results = sorted(
-                results,
-                key=lambda mem: mem.get("score") or 0,
-                reverse=True,
-            )
-        diagnostics["after_threshold"] = len(results)
-
-        results = results[:k]
-        diagnostics["after_cap"] = len(results)
-        selected = time.perf_counter()
-        diagnostics["barrier_wait_ms"] = (waited - started) * 1000
-        diagnostics["search_ms"] = (searched - waited) * 1000
-        diagnostics["select_ms"] = (selected - searched) * 1000
-        return results, diagnostics
 
     def _analyze_query_to_memory(self, query: MemoryQuery) -> 'MemoryNote':
-        """
-        Convert a MemoryQuery to a MemoryNote object.
-        
-        This method extracts parameters from a MemoryQuery and creates a
-        MemoryNote object suitable for provider operations.
-        
-        Args:
-            query: Memory query containing parameters
-        
-        Returns:
-            MemoryNote created from query parameters
-        """
-        from .note import MemoryNote
-        
-        params = query.params
-        valid_keys = [
-            "content", "id", "keywords", "links", "retrieval_count",
-            "timestamp", "last_accessed", "context", "evolution_history",
-            "category", "tags"
-        ]
-        
-        # Extract metadata if present
-        metadata = params.get("metadata", {})
-        
-        # Create filtered data dictionary
-        filtered_data = {}
-        
-        # Add direct parameters
-        for k in params:
-            if k in valid_keys:
-                filtered_data[k] = params[k]
-        
-        # Handle memory_id specifically
-        if "memory_id" in params and "id" not in filtered_data:
-            filtered_data["id"] = params["memory_id"]
-        
-        # Add metadata fields if they exist
-        if "tags" in metadata and "tags" not in filtered_data:
-            filtered_data["tags"] = metadata.get("tags", [])
-        if "keywords" in metadata and "keywords" not in filtered_data:
-            filtered_data["keywords"] = metadata.get("keywords", [])
-        if "category" in metadata and "category" not in filtered_data:
-            filtered_data["category"] = metadata.get("category", "Uncategorized")
-        
-        memory_note = MemoryNote(**filtered_data)
-        
-        # Preserve the full metadata dict on the note so
-        # that providers can read cross-agent fields
-        # (user_id, owner_agent, sharing_policy, memory_type).
-        if metadata:
-            memory_note.metadata = metadata
-        
-        return memory_note
+        """The note a MemoryQuery describes (``note_from_request``)."""
+        return note_from_request(query.params)
     
     def address_request(self, memory_syscall) -> MemoryResponse:
         """
@@ -642,90 +388,42 @@ class MemoryManager:
         
         if operation_type == "add_memory":
             memory_note = self._analyze_query_to_memory(query)
-            # Ensure metadata has a user_id so the memory is
-            # scoped properly in Mem0's ChromaDB.  When the SDK
-            # caller didn't provide an explicit user_id, fall
-            # back to the requesting agent's name — this keeps
-            # add and retrieve consistent (both scope to
-            # agent_name by default).
-            if memory_note.metadata is None:
-                memory_note.metadata = {}
-            if not memory_note.metadata.get("user_id"):
-                memory_note.metadata["user_id"] = (
-                    memory_syscall.agent_name
-                )
-            # The visibility rule keys on owner_agent, so a write
-            # without one would be invisible even to its author.
-            if not memory_note.metadata.get("owner_agent"):
-                memory_note.metadata["owner_agent"] = (
-                    memory_syscall.agent_name
-                )
-            # The rest of the required metadata (PROVIDER_CONTRACT.md).
-            memory_note.metadata.setdefault("memory_type", "")
-            if not memory_note.metadata.get("sharing_policy"):
-                memory_note.metadata["sharing_policy"] = "private"
-            memory_note.metadata.setdefault(
-                "created_at", datetime.now(timezone.utc).isoformat()
-            )
-            # Track user_id for cross-agent discovery.
-            uid = (memory_note.metadata or {}).get("user_id")
+            metadata = memory_note.metadata or {}
             logger.info(
                 "add_memory: agent=%s, uid_from_metadata=%s, "
                 "latest_user_id=%s, known=%s",
                 memory_syscall.agent_name,
-                uid,
+                metadata.get("user_id"),
                 self.latest_user_id,
                 self.known_user_ids,
             )
-            if uid and uid != memory_syscall.agent_name:
-                self._register_user_id(uid)
-                logger.info(
-                    "Registered user_id=%s (latest=%s, "
-                    "known=%s)",
-                    uid,
-                    self.latest_user_id,
-                    self.known_user_ids,
-                )
-            # Drain the per-user write barrier on commit (or
-            # failure / exception) so any retrieval scoped to the
-            # same ``user_id`` waiting on this write's ``seq_no``
-            # is released. ``barrier_seq`` is stamped on the
-            # syscall by ``SyscallExecutor`` (task 6); when absent
-            # (e.g., a direct call from a test that bypasses the
-            # executor), the sentinel ``0`` makes ``release`` a
-            # no-op so the fast path stays free.
-            barrier_seq = getattr(memory_syscall, "barrier_seq", 0)
-            barrier_user_id = memory_note.metadata.get("user_id")
-            resp = None
+            # ``barrier_seq`` is stamped on the syscall when it is
+            # accepted (``stamp_syscall``); the sentinel ``0`` (a direct
+            # call that bypasses the executor) makes the release a no-op.
+            # The library fills the required metadata, registers the
+            # user and releases the barrier even if the provider raises.
             try:
-                try:
-                    resp = MemoryResponse(
-                        success=True,
-                        memory_id=self.provider.add(memory_note),
-                    )
-                except ProviderError as e:
-                    resp = MemoryResponse(success=False, error=str(e))
-                logger.info(
-                    "[MEM0_DEBUG] add_memory result: "
-                    "user_id=%s, success=%s, memory_id=%s, "
-                    "error=%s",
-                    barrier_user_id,
-                    getattr(resp, "success", "?"),
-                    getattr(resp, "memory_id", "?"),
-                    getattr(resp, "error", None),
+                resp = MemoryResponse(
+                    success=True,
+                    memory_id=self.memory_pipeline().write(
+                        memory_syscall.agent_name, None, memory_note,
+                        barrier_seq=getattr(
+                            memory_syscall, "barrier_seq", 0
+                        ),
+                    ),
                 )
-                return resp
-            finally:
-                # ``finally`` guarantees waiters are notified even
-                # if the provider raised; failed writes still
-                # release waiters so a provider error does not
-                # strand retrievals.
-                success = bool(
-                    resp and getattr(resp, "success", False)
-                )
-                self.barrier.release(
-                    barrier_user_id, barrier_seq, success=success
-                )
+            except ProviderError as e:
+                resp = MemoryResponse(success=False, error=str(e))
+            logger.info(
+                "[MEM0_DEBUG] add_memory result: "
+                "user_id=%s, success=%s, memory_id=%s, "
+                "error=%s",
+                memory_note.metadata.get("user_id"),
+                resp.success,
+                resp.memory_id,
+                resp.error,
+            )
+            return resp
         
         elif operation_type == "remove_memory":
             found = self._locate_memory(query, memory_syscall.agent_name)
@@ -841,49 +539,24 @@ class MemoryManager:
             raise ValueError(f"Invalid operation: {operation_type}")
     
     def _update_memory(self, memory_syscall) -> MemoryResponse:
-        """Owner-only update, stamped against the write barrier like a
-        write: a retrieval accepted after the update waits for it, so it
-        reads the new content. The barrier is released on every path."""
-        query = memory_syscall.query
-        params = query.params
-        barrier_user_id = self._update_user_id(query)
-        barrier_seq = getattr(memory_syscall, "barrier_seq", 0)
-        success = False
+        """Owner-only update (``MemoryPipeline.update``), stamped
+        against the write barrier like a write: a retrieval accepted
+        after the update waits for it, so it reads the new content."""
+        params = memory_syscall.query.params
         try:
-            found = self._locate_memory(query, memory_syscall.agent_name)
-            if found is None or not self._can_write(
-                memory_syscall.agent_name, found.metadata
-            ):
-                return MemoryResponse(
-                    success=False, error="Memory not found"
-                )
-            metadata = {
-                key: value
-                for key, value in (params.get("metadata") or {}).items()
-                if key not in UPDATE_PROTECTED_METADATA
-            }
-            try:
-                updated = self.provider.update(
-                    params["memory_id"],
-                    found.metadata.get("user_id") or None,
-                    params.get("content"),
-                    metadata,
-                )
-            except ProviderError as e:
-                return MemoryResponse(success=False, error=str(e))
-            if not updated:
-                return MemoryResponse(
-                    success=False, error="Memory not found"
-                )
-            success = True
-            return MemoryResponse(
-                success=True, memory_id=params["memory_id"]
+            updated = self.memory_pipeline().update(
+                memory_syscall.agent_name,
+                self._update_user_id(memory_syscall.query),
+                params["memory_id"],
+                params.get("content"),
+                params.get("metadata"),
+                barrier_seq=getattr(memory_syscall, "barrier_seq", 0),
             )
-        finally:
-            if barrier_user_id:
-                self.barrier.release(
-                    barrier_user_id, barrier_seq, success=success
-                )
+        except ProviderError as e:
+            return MemoryResponse(success=False, error=str(e))
+        if not updated:
+            return MemoryResponse(success=False, error="Memory not found")
+        return MemoryResponse(success=True, memory_id=params["memory_id"])
 
     def close(self) -> None:
         """

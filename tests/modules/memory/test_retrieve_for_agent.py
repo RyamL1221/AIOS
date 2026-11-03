@@ -95,15 +95,16 @@ def test_injector_source_never_touches_the_provider():
 
 
 def test_injector_retrieves_only_through_the_manager():
+    # Since Subtask 8 the single path is the manager's MemoryPipeline
+    # (retrieve_for_agent delegates to the same library call).
     provider = MagicMock()
     manager = MagicMock()
     manager.provider = provider
-    manager.retrieve_for_agent.return_value = (
-        [row("x")],
-        {"resolved_user_id": USER, "after_dedupe": 1},
+    manager.memory_pipeline.return_value.inject.return_value = (
+        [], {"resolved_user_id": USER, "injected_count": 0},
     )
     make_injector(manager).inject(AGENT, chat_query(), user_id=USER)
-    manager.retrieve_for_agent.assert_called_once()
+    manager.memory_pipeline.return_value.inject.assert_called_once()
     assert provider.mock_calls == []
 
 

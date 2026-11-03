@@ -34,6 +34,8 @@ def _cosine(a: Counter, b: Counter) -> float:
 class InHouseProvider(MemoryProvider):
     """Memories in a dict keyed by user, then id, in insertion order."""
 
+    synchronous_commit = True
+
     def __init__(self):
         self.default_user_id = "default"
         self._store: Dict[str, Dict[str, Candidate]] = {}
