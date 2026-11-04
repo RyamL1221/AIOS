@@ -25,6 +25,7 @@ do not describe this branch.
 | 2 | Conversation writes through the kernel; owner-only by-id writes | Done |
 | 3 | Re-validate `kernel_shared` and `mem0_default` | Done |
 | 4 | Rename `mem0_default` to `kernel_private`; judge prompt v2; re-judge | Done |
+| 4b | Judge retries, then fails the trial (no keyword-only fallback) | Done |
 | 5 | Provider contract; Chroma in-house provider; update stamping | Done |
 | 6 | Native agent-managed conditions (Mem0, in-house) | Done |
 | 7 | Cost instrumentation | Done |
@@ -88,6 +89,19 @@ synthetic data generation. See `docs/REVALIDATION.md`. Re-runs need a new
   `after_visibility` = 0 in all 450 trials, and the "Second" results
   point can use the v2 numbers. paper_v2 is in neither repo, so the
   edit itself waits for Subtask 12.
+
+### Subtask 4b
+
+`HybridJudge.evaluate` (Cerebrum `benchmarks/shared_memory/judge.py`)
+calls the LLM judge up to `JUDGE_RETRIES` (3) times and raises
+`JudgeFailed` if none gives all three scores; `combine` refuses missing
+LLM scores. `run_evaluation.py` marks such a trial failed, with no
+scores and the response kept for a later re-judge; `rejudge.py` uses
+the same path. `TrialResult` records `scorer` (`hybrid_keyword_llm`:
+the keyword score averaged with the LLM's, rounded) and
+`judge_attempts`. `keyword_score` stays: it is the keyword half of
+every score, not only the fallback. Closes known issue 9. Tests:
+Cerebrum `tests/agents/test_judge_retry.py`.
 
 ### Subtask 5
 
@@ -523,9 +537,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
 8. Qwen's replies changed between the workshop and Subtask 3 (median
    `mem0_default` reply 2,010 to 859 characters). Cause unknown; the
    workshop recorded no Ollama or model version. Record both from here on.
-9. `HybridJudge` falls back to the keyword score alone when the LLM
-   judge call fails, without marking the trial. `rejudge.py` retries and
-   fails the trial instead; `run_evaluation.py` still falls back.
+9. Fixed in Subtask 4b: a judge failure after retries fails the trial;
+   there is no keyword-only fallback.
 10. The harness's post-ProfileAgent diagnostic (`pipeline.py`) searches
     without a `user_id`, so it looks in the agent's own scope and warns
     "0 results" on every trial (also in all of Subtask 3). Noise only.
