@@ -13,6 +13,7 @@ LOGS="$CEREBRUM/$OUT/logs"
 TRIALS="${TRIALS:-30}"
 JUDGE="gpt-5.4:azure"
 RUN_PREFIX="${RUN_PREFIX:-ps5-$PROVIDER}"
+MODELS="${MODELS:-gpt4o llama qwen}"  # subset, e.g. MODELS=llama
 
 configured=$("$AIOS/.venv/bin/python" -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["memory"]["provider"])' aios/config/config.yaml)
 if [ "$configured" != "$PROVIDER" ]; then
@@ -32,6 +33,7 @@ stop_kernel() {
 for entry in "gpt4o gpt-4o:azure" "llama llama3.1:8b:ollama" \
         "qwen qwen2.5:7b:ollama"; do
     read -r model assistant <<<"$entry"
+    case " $MODELS " in *" $model "*) ;; *) continue ;; esac
     cell="$OUT/${model}_kernel_shared"
     if cell_done "$CEREBRUM/$cell/results_kernel_shared.json"; then
         echo "$(date) skip $model"

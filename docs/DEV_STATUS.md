@@ -28,6 +28,7 @@ do not describe this branch.
 | 5 | Provider contract; Chroma in-house provider; update stamping | Done |
 | 6 | Native agent-managed conditions (Mem0, in-house) | Done |
 | 7 | Cost instrumentation | Done |
+| 8 | Memory pipeline library; replicated-logic locus condition | Done |
 
 ### Subtask 1
 
@@ -335,13 +336,153 @@ ms), because the writers' Mem0 calls run outside the kernel, so the
 assistant's request arrives at a random point in the scheduler's 1 s
 cycle.
 
+### Subtask 8
+
+- Spec first: `docs/REPLICATED_LOGIC.md` (committed `99d9c70`, before
+  any agent code): the condition, its three inherent differences (no
+  shared write barrier, no shared identity resolution, no single policy
+  instance), the non-logic differences, and the predicted tie.
+- **Library** `aios/memory/pipeline/`, depending only on the provider
+  contract and the `memory:` settings:
+  - `IdentityResolver` (`identity.py`);
+  - `WriteBarrier` (`barrier.py`, moved from `write_barrier.py`);
+  - `Visibility` (`visibility.py`, moved);
+  - `Selector` (`selector.py`, the former `retrieve_for_agent` body);
+  - `Formatter` (`formatter.py`; `memory_formatter.py` moved);
+  - `PipelineSettings`;
+  - the `MemoryPipeline` facade (`write`, `update`, `retrieve`,
+    `build_block`, `inject`).
+
+  The old module paths are shims. `PIPELINE_VERSION` is the first 16 hex
+  digits of a sha256 over `pipeline/*.py`. Whether a backend commits
+  synchronously is now the provider attribute `synchronous_commit` (True
+  for in-house and Zep), not an isinstance check in the manager.
+- **Kernel as a thin client.** `MemoryManager.memory_pipeline()` builds
+  a `MemoryPipeline` over the kernel's provider, its one shared barrier
+  and its registry (`_KernelIdentity`). The add, update and retrieve
+  branches and `ContextInjector.inject` call it; the log lines are
+  unchanged. `/memory/config` also reports `pipeline` (the settings) and
+  `pipeline_version`.
+- **Decision 1 resolved (closes open decision 1).** Rank by score for
+  threshold, cap and budget, then print in type order: profile, task
+  context, conversation, other. `kernel_shared` is re-run under it below.
+- **Replicated agents.** Cerebrum
+  `cerebrum/example/agents/replicated/`, conditions `replicated_mem0` and
+  `replicated_inhouse` (`conditions.REPLICATED_CONDITIONS`):
+  - Each agent builds its own provider client and `MemoryPipeline`, with
+    its own barrier and resolver, from `/memory/config`.
+  - The writers upsert as the kernel writers' SDK calls do.
+  - The assistant injects the library's block and writes the
+    conversation turn itself.
+  - Kernel memory must be off; the Subtask 6 pre-flight enforces it.
+  - Every `TrialResult` records `locus` (`kernel`, `replicated`,
+    `native`, `none`) and `pipeline_version`.
+  - `library.load()` puts AIOS on `sys.path` (`AIOS_ROOT`, default the
+    sibling checkout).
+- **Tests.**
+  - AIOS `tests/modules/memory/test_pipeline_library.py`:
+    - injector ≡ library for 20 seeded users (byte-identical prompts,
+      identical diagnostics without timings);
+    - SDK search ≡ library over agents × sharing policies;
+    - kernel writes ≡ library writes;
+    - type order after ranking, and the budget dropping the
+      lowest-ranked memory;
+    - the library imports and runs in a fresh interpreter without the
+      manager, syscalls, config, scheduler or server.
+  - Cerebrum `tests/agents/test_replicated_agents.py` runs
+    `_replicated_checks.py` in a fresh interpreter (see known issue 18):
+    - zero kernel memory calls in both conditions;
+    - writers update on a second trial;
+    - separate pipeline, barrier and resolver per agent, and no shared
+      registry (difference 2);
+    - the difference-1 demonstration: with local barriers a read during
+      another agent's accepted write misses it; with one shared barrier
+      it waits (≈0.3 s) and sees it.
+
+    The same file also tests the pre-flight and `locus`.
+- Drivers: `scripts/run_locus_smoke.sh` (it restores `config.yaml` on
+  exit) and `scripts/set_memory_mode.py` (byte-preserving
+  provider / kernel-memory switch). Analysis:
+  `python -m benchmarks.shared_memory.locus_compare <dir> --csv ...`.
+
+**30-trial smoke** (Cerebrum `results/locus_smoke/`, judge v2).
+390 trials, 0 failed:
+
+- 0 memory operations in every replicated kernel log;
+- `locus` correct and `pipeline_version` `72185008bbe22f83` on every
+  trial, kernel and replicated;
+- profile first in every block;
+- 6 embedding calls per trial in every cell.
+
+Means (profile / task / integration), replicated − kernel and the
+pre-registered cell rule (`locus_compare.py`, `summary.csv`):
+
+| Backend | Model | kernel_shared | replicated | Diff | Rule |
+|---|---|---|---|---|---|
+| Mem0 | GPT-4o | 4.77 / 5.00 / 4.73 | 4.63 / 4.97 / 4.60 | −0.13 / −0.03 / −0.13 | pass |
+| Mem0 | Llama-3.1:8B | 3.93 / 4.53 / 3.87 | 3.73 / 4.60 / 3.53 | −0.20 / +0.07 / −0.33 | integration fails |
+| Mem0 | Qwen-2.5:7B | 3.77 / 4.70 / 3.63 | 3.43 / 4.83 / 3.37 | −0.33 / +0.13 / −0.27 | pass |
+| In-house | GPT-4o | 4.73 / 5.00 / 4.57 | 4.77 / 5.00 / 4.73 | +0.03 / 0.00 / +0.17 | pass |
+| In-house | Llama-3.1:8B | 3.50 / 4.37 / 3.40 | 3.97 / 4.60 / 3.93 | **+0.47** / +0.23 / **+0.53** | profile, integration fail |
+| In-house | Qwen-2.5:7B | 3.63 / 4.90 / 3.53 | 3.53 / 4.67 / 3.47 | −0.10 / −0.23 / −0.07 | task fails |
+
+16 of 18 judge cells are within 0.25 (the two flagged ones are below).
+The mean replicated − kernel difference over all 18 is −0.01 (Mem0
+−0.14, in-house +0.12). Latency is the same within model noise. The
+memory stages take 35-67 ms in every cell, and the scheduler wait
+710-980 ms.
+
+`kernel_shared` under the type-ordered block, against the v2 baseline
+(Subtask 6 brackets, storage order):
+
+- within 0.16 on every score, except Llama;
+- Llama: Mem0 +0.16 / +0.07 / +0.30, in-house −0.27 / −0.09 / −0.17.
+
+The Llama shifts go in opposite directions on the two backends, so they
+are not an effect of the block order.
+
+**The two flagged cells (in-house Llama, replicated above kernel by
++0.47 profile, +0.53 integration).** Investigated as the design
+requires. No logic difference was found:
+
+- The code is the same. Kernel and replicated ran the same
+  `pipeline_version`, and the equivalence test proves kernel ≡ library
+  byte for byte.
+- The blocks look the same. They were rebuilt from both stores with the
+  library (`repo-artifacts/Cerebrum/locus_smoke/rebuild_blocks.py`).
+  Every trial on both sides injected exactly profile + task context, in
+  that order, of 137-172 tokens. The mix of clean and nested writer
+  JSON is the same on both sides.
+- User ids are unique per run, so there were no stale rows.
+- The cells are unpaired: users are generated per trial, so the two
+  cells score different users (known issue 20).
+- The low kernel trials injected both memories. Llama used the name
+  and ignored the preferences.
+- A re-draw of the kernel cell (`kernel_inhouse_redraw/`) gave 3.57 /
+  3.83 / 2.93. Its task and integration drop is upstream of memory:
+  in 10 of its 30 trials the Llama TaskAgent's extraction returned no
+  task fields (e.g. `status: success. message: Task context extracted
+  successfully.`), against 1 of 30 in the first draw and 2 of 30 in
+  replicated (known issue 21). Without those trials its task score is
+  4.75.
+- The direction is not consistent across backends. On Mem0 the same
+  model goes the other way (−0.20 / −0.33). Pooled over both backends,
+  the Llama locus difference is +0.13 / +0.15 / +0.10 (Welch p 0.37 /
+  0.29 / 0.53), under 0.25.
+
+**Not explained.** The profile gap on in-house Llama holds across both
+kernel draws: 3.50 and 3.57 against 3.97, Welch p = 0.012 against the
+pooled 60 kernel trials. That is one of 18 cells chosen after the fact
+(Bonferroni p ≈ 0.2). I found no mechanism that differs between the
+two paths. A paired run on fixed users would settle it; this branch
+has no fixed dataset (known issue 20). Until then the clean condition
+is read as a tie with one unexplained small-model cell, and the
+difference-1 demonstration test shows where the two loci actually
+differ.
+
 ## Open decisions
 
-1. Injected-block order. With scored search the block is in similarity
-   order (task context first), not the storage order the v2 baseline was
-   produced with (profile first). Either keep it and re-run the
-   `kernel_shared` baseline under it before comparing new conditions to
-   it, or rank for the cap but print the block in a fixed order.
+None.
 
 ## Test baselines
 
@@ -352,7 +493,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
   `manager` argument is collected as a missing fixture).
 - Cerebrum `tests/agents`: 19 failures, 2 errors at
   `neurips-subtask-03` (one flaky test makes it 19 or 20); unchanged at
-  `neurips-subtask-07` (AIOS 310 passed, Cerebrum 303 passed). The names
+  `neurips-subtask-07` (AIOS 310 passed, Cerebrum 303 passed) and
+  `neurips-subtask-08` (AIOS 315 passed, Cerebrum 307 passed). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -411,6 +553,31 @@ These fail on `workshop-postrun` too and are not caused by later work.
     issue 10) is tagged with the agent name, not the trial's user, so
     its embedding call is not counted in the trial. It is harness
     instrumentation, not part of any condition.
+17. The harness venv has `mem0ai` 2.0.2, the kernel 2.0.0. 2.0.2 builds
+    its default OpenAI LLM when constructed and fails without a key, so
+    the replicated Mem0 agents give it `memory.backend_llm` through
+    LiteLLM. Writes are verbatim (`infer=False`), so it is never called;
+    the stored rows and search are the same code as the kernel's.
+18. Cerebrum has a tracked `aios/` stub, imported by some of its tests,
+    that shadows the kernel's `aios` package in the same interpreter.
+    The replicated agents' checks therefore run in a subprocess, and
+    `library.load()` fails with a clear message if the stub is already
+    imported.
+19. The kernel's conversation write runs on a background thread after
+    the reply; the replicated assistant's runs synchronously after it.
+    Both are outside measured latency, and the next trial is a new user,
+    so neither can affect a score here (docs/REPLICATED_LOGIC.md).
+20. Comparisons between conditions are unpaired: the harness generates
+    each trial's user with an LLM, without a seed, so two cells never
+    score the same users. A 30-trial Llama cell moved by up to 0.53
+    between two draws of the same condition (Subtask 8). Paired
+    comparisons need a fixed dataset on this branch, ported by hand,
+    not cherry-picked from `feature/self-improving-memory`.
+21. Llama's writers sometimes return a status payload instead of the
+    schema (`{"status": "success", "message": ...}`), and it is stored
+    as the memory: 1-10 of 30 task-context writes per Llama cell in
+    Subtask 8, in every locus. The writers do not validate their
+    extraction.
 
 ## Fixed
 
