@@ -26,7 +26,6 @@ import requests
 SEED = 20261101
 TRIALS = 10
 MODEL = {"name": "qwen2.5:7b", "backend": "ollama"}
-BLOCK_START = "===== MEMORY CONTEXT ====="
 
 NAMES = ["Ana", "Bo", "Chen", "Dee", "Eli", "Fay", "Gus", "Hana", "Ivo", "Jo"]
 ROLES = ["analyst", "nurse", "teacher", "pilot", "chef", "editor"]
@@ -117,14 +116,23 @@ def chat(base_url: str, user_id: str, query: str) -> dict:
 
 
 def parse_block(block) -> list:
-    """Return a block's memory lines, without their timestamps."""
-    if not block or not block.startswith(BLOCK_START):
+    """Return a block's memory lines, without bullets or timestamps, in
+    either block format (``aios.memory.pipeline.formatter``)."""
+    from aios.memory.pipeline.formatter import (
+        BLOCK_FOOTER, BLOCK_HEADER, COMPACT_HEADER,
+    )
+    if not block:
         return []
-    body = block.split("\n", 3)[3].rsplit("===== END", 1)[0]
+    if block.startswith(COMPACT_HEADER + "\n"):
+        body = block.split("\n", 1)[1]
+        pattern = r"(?m)^- "
+    elif block.startswith(BLOCK_HEADER):
+        body = block.split("\n", 3)[3].rsplit(BLOCK_FOOTER, 1)[0]
+        pattern = r"(?m)^- \[[^\]]*\] "
+    else:
+        return []
     return [
-        part.strip()
-        for part in re.split(r"(?m)^- \[[^\]]*\] ", body)
-        if part.strip()
+        part.strip() for part in re.split(pattern, body) if part.strip()
     ]
 
 

@@ -187,6 +187,8 @@ class SyscallExecutor:
             # Cerebrum LLMResponse has no field for them.
             result["token_usage"] = syscall.get_token_usage()
             result["llm_timing"] = self._llm_timing(syscall)
+            # The temperature and seed the model call used (Subtask 9d).
+            result["decoding"] = getattr(syscall, "decoding", None)
         return result
 
     @staticmethod

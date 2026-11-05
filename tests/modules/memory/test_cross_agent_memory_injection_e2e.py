@@ -339,8 +339,9 @@ class TestCrossAgentMemoryInjectionE2E(unittest.TestCase):
     def test_injected_prompt_contains_memory_context_header(
         self,
     ) -> None:
-        """The injected system message should include the
-        MEMORY CONTEXT delimiters."""
+        """The injected system message is the compact memory block
+        (Subtask 9d): one header line, a bullet per memory, no
+        delimiters."""
         query = LLMQuery(
             messages=[
                 {"role": "user", "content": "Tell me about me"}
@@ -364,16 +365,12 @@ class TestCrossAgentMemoryInjectionE2E(unittest.TestCase):
         messages = captured_query["messages"]
         system_content = messages[0]["content"]
 
-        self.assertIn(
-            "MEMORY CONTEXT", system_content,
-            "Injected message should include MEMORY CONTEXT "
-            "header",
+        self.assertTrue(
+            system_content.startswith("Known about this user:\n- "),
+            f"Injected message should be the compact block: "
+            f"{system_content!r}",
         )
-        self.assertIn(
-            "END MEMORY CONTEXT", system_content,
-            "Injected message should include "
-            "END MEMORY CONTEXT footer",
-        )
+        self.assertNotIn("MEMORY CONTEXT", system_content)
 
     # ----------------------------------------------------------
     # Verify user_id scoping

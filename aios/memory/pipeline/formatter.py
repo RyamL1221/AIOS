@@ -6,10 +6,18 @@ Decision 1 (docs/REPLICATED_LOGIC.md): candidates arrive ranked by
 score, and the budget drops the lowest-ranked first; the block is then
 printed profile, task context, conversation, then any other type, each
 in score order.
+
+Block format (Subtask 9d): ``"compact"`` (the default) is one header
+line and a bullet per memory, the shape of the native agents' block;
+``"legacy"`` is the pre-9d kernel block (delimiters, an instruction
+line and a timestamp per line), kept for the formatting ablation.
+Timestamps stay in the memory's metadata either way. ``recency`` adds a
+relative age per bullet ("(3 days ago)"), off by default.
 """
 import logging
 import time
-from typing import Any, Dict, List, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from .memory_formatter import format_memory
 
@@ -17,8 +25,20 @@ logger = logging.getLogger(__name__)
 
 TYPE_ORDER = ("profile", "task_context", "conversation")
 
+BLOCK_FORMATS = ("compact", "legacy")
+DEFAULT_BLOCK_FORMAT = "compact"
+
+COMPACT_HEADER = "Known about this user:"
+
+# The legacy block (format "legacy").
 BLOCK_HEADER = "===== MEMORY CONTEXT ====="
 BLOCK_FOOTER = "===== END MEMORY CONTEXT ====="
+LEGACY_INSTRUCTION = (
+    "The following are relevant memories from prior "
+    "interactions with this user. Use them to "
+    "personalize your response:"
+)
+TIMESTAMP_FORMAT = "%Y%m%d%H%M"
 
 
 def estimate_tokens(text: str) -> int:
@@ -37,37 +57,122 @@ def type_rank(mem: dict) -> int:
     return len(TYPE_ORDER)
 
 
-def format_block(memories: list) -> str:
-    """Format memories into a delimited system message string."""
-    lines = [
-        BLOCK_HEADER,
-        "The following are relevant memories from prior "
-        "interactions with this user. Use them to "
-        "personalize your response:",
-        "",
-    ]
+def relative_age(timestamp: Any, now: datetime) -> Optional[str]:
+    """``"just now"``, ``"N minutes ago"``, ``"N hours ago"`` or ``"N
+    days ago"`` for a ``YYYYMMDDHHMM`` timestamp; ``None`` if it does
+    not parse."""
+    try:
+        then = datetime.strptime(str(timestamp), TIMESTAMP_FORMAT)
+    except (TypeError, ValueError):
+        return None
+    minutes = int((now - then).total_seconds() // 60)
+    if minutes < 1:
+        return "just now"
+    for size, unit in ((1440, "day"), (60, "hour"), (1, "minute")):
+        if minutes >= size:
+            count = minutes // size
+            return f"{count} {unit}{'' if count == 1 else 's'} ago"
+    return "just now"
+
+
+def _bullet(mem: dict, recency: bool, now: Optional[datetime]) -> str:
+    line = f"- {mem.get('content', '')}"
+    if recency:
+        age = relative_age(mem.get("timestamp"), now or datetime.now())
+        if age:
+            line += f" ({age})"
+    return line
+
+
+def format_block(
+    memories: list,
+    block_format: str = DEFAULT_BLOCK_FORMAT,
+    *,
+    recency: bool = False,
+    now: Optional[datetime] = None,
+) -> str:
+    """Format memories into the block's system message text."""
+    if block_format not in BLOCK_FORMATS:
+        raise ValueError(
+            f"block_format must be one of {BLOCK_FORMATS}, "
+            f"got {block_format!r}"
+        )
+    if block_format == "compact":
+        return "\n".join(
+            [COMPACT_HEADER]
+            + [_bullet(mem, recency, now) for mem in memories]
+        )
+    lines = [BLOCK_HEADER, LEGACY_INSTRUCTION, ""]
     for mem in memories:
         ts = mem.get("timestamp", "unknown")
-        content = mem.get("content", "")
-        lines.append(f"- [{ts}] {content}")
-
+        line = f"- [{ts}] {mem.get('content', '')}"
+        if recency:
+            age = relative_age(ts, now or datetime.now())
+            if age:
+                line += f" ({age})"
+        lines.append(line)
     lines.append("")
     lines.append(BLOCK_FOOTER)
     return "\n".join(lines)
 
 
+def is_memory_block(text: str) -> bool:
+    """Whether a system message is a memory block, in either format."""
+    return isinstance(text, str) and (
+        text.startswith(COMPACT_HEADER + "\n")
+        or text.startswith(BLOCK_HEADER + "\n")
+    )
+
+
+def block_contents(text: str) -> List[str]:
+    """The memory lines of a block, without bullet, timestamp or age
+    (the first line of a multi-line memory)."""
+    if not is_memory_block(text):
+        return []
+    out = []
+    for line in text.split("\n")[1:]:
+        if not line.startswith("- "):
+            continue
+        body = line[2:]
+        if text.startswith(BLOCK_HEADER) and body.startswith("["):
+            body = body[body.index("]") + 2:] if "] " in body else body
+        out.append(body)
+    return out
+
+
 class Formatter:
     """Builds the memory block for one pipeline."""
 
-    def __init__(self, max_tokens: int):
+    def __init__(
+        self,
+        max_tokens: int,
+        block_format: str = DEFAULT_BLOCK_FORMAT,
+        *,
+        recency: bool = False,
+        now: Optional[datetime] = None,
+    ):
+        if block_format not in BLOCK_FORMATS:
+            raise ValueError(
+                f"block_format must be one of {BLOCK_FORMATS}, "
+                f"got {block_format!r}"
+            )
         self.max_tokens = max_tokens
+        self.block_format = block_format
+        self.recency = recency
+        self.now = now
+
+    def render(self, memories: list) -> str:
+        """This formatter's block text for ``memories``, in order."""
+        return format_block(
+            memories, self.block_format, recency=self.recency, now=self.now,
+        )
 
     def truncate_by_token_budget(self, memories: list) -> list:
         """Remove least-relevant memories until the formatted block
         fits within ``max_tokens``. Memories arrive sorted by score
         descending; the tail goes first."""
         while memories:
-            block = format_block(memories)
+            block = self.render(memories)
             if estimate_tokens(block) <= self.max_tokens:
                 return memories
             memories = memories[:-1]
@@ -97,7 +202,7 @@ class Formatter:
 
         kept = self.truncate_by_token_budget(formatted)
         kept = sorted(kept, key=type_rank)  # stable: score order within
-        text = format_block(kept) if kept else ""
+        text = self.render(kept) if kept else ""
         diagnostics: Dict[str, Any] = {
             "injected_count": len(kept),
             "after_budget": len(kept),
@@ -120,6 +225,8 @@ class Formatter:
                 {memory_type_of(mem) for mem in kept} - {""}
             ),
             "tokens_estimated": estimate_tokens(text) if text else 0,
+            "block_format": self.block_format,
+            "block_recency": self.recency,
             "format_ms": (time.perf_counter() - started) * 1000,
         }
         return text, diagnostics

@@ -147,6 +147,11 @@ class MemoryManager:
         self.max_memory_tokens = memory_config.get(
             "max_memory_tokens", 1500
         )
+        # The block's format (Subtask 9d): "compact" (default) or the
+        # pre-9d "legacy" kernel block; validated here, at startup.
+        _block = PipelineSettings.from_memory_config(memory_config)
+        self.block_format = _block.block_format
+        self.block_recency = _block.block_recency
         # Whether the kernel injects and extracts memories: off for the
         # agent-managed (native) conditions (docs/NATIVE_USAGE.md).
         self.auto_inject = bool(memory_config.get("auto_inject", False))
@@ -205,6 +210,8 @@ class MemoryManager:
             ),
             max_memory_tokens=getattr(self, "max_memory_tokens", 1500),
             write_barrier=dict(getattr(self, "_barrier_config", {})),
+            block_format=getattr(self, "block_format", "compact"),
+            block_recency=getattr(self, "block_recency", False),
         )
 
     def memory_pipeline(self) -> MemoryPipeline:

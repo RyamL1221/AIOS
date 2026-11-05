@@ -5,6 +5,7 @@ from aios.utils.id_generator import generator_tool_call_id
 from cerebrum.llm.apis import LLMQuery, LLMResponse
 from litellm import completion
 import json
+from aios.llm_core.decoding import decoding_for
 from .utils import merge_messages_with_tools, merge_messages_with_response_format, slash_to_double_underscore, double_underscore_to_slash, decode_litellm_tool_calls, decode_hf_tool_calls
 from typing import Dict, Optional, Any, List, Union
 import time
@@ -703,6 +704,15 @@ class LLMAdapter:
                 response_format = llm_syscall.query.response_format
                 temperature = llm_syscall.query.temperature if llm_syscall.query.temperature is not None else 1.0 # Default temp if not set
                 max_tokens = llm_syscall.query.max_new_tokens if llm_syscall.query.max_new_tokens is not None else 1000 # Default max tokens
+                # Decoding set on the request's llms entry for this model
+                # (Subtask 9d): it overrides the query temperature, which
+                # the /query handler does not carry.
+                decoding = decoding_for(llm_syscall.query.llms, model_name)
+                temperature = decoding.get("temperature", temperature)
+                seed = decoding.get("seed")
+                llm_syscall.decoding = {
+                    "temperature": temperature, "seed": seed,
+                }
 
                 # Basic validation
                 if not messages or not isinstance(messages, list):
@@ -751,7 +761,8 @@ class LLMAdapter:
                     message_return_type=message_return_type,
                     response_format=response_format,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    seed=seed,
                 )
             except Exception as e:
                 # Handle errors specifically from _get_model_response (API errors, timeouts etc.)
@@ -813,7 +824,8 @@ class LLMAdapter:
         message_return_type: Optional[str] = "text",
         response_format: Optional[Dict[str, Dict]] = None,
         temperature: float = 1.0,
-        max_tokens: int = 1000
+        max_tokens: int = 1000,
+        seed: Optional[int] = None,
     ) -> tuple[Union[str, List, Dict], bool, Optional[object]]: # (response, finished, usage)
         """
         Get response from the specific model backend. Handles API calls and context management.
@@ -830,6 +842,9 @@ class LLMAdapter:
             response_format: Optional response format specification.
             temperature: Temperature parameter.
             max_tokens: Max tokens parameter.
+            seed: Sampling seed, passed to LiteLLM and OpenAI-compatible
+                calls when set (not to the context manager or the local
+                HuggingFace backend).
 
         Returns:
             Tuple of (model_response, finished_flag, usage). Model response
@@ -879,6 +894,8 @@ class LLMAdapter:
                     "temperature": temperature,
                     "max_tokens": max_tokens
                 }
+                if seed is not None:
+                    completion_kwargs["seed"] = seed
 
                 # Add tools if provided (use processed tool names)
                 if tools:
@@ -960,6 +977,7 @@ class LLMAdapter:
                     completion_kwargs.pop("tools", None)
                     completion_kwargs.pop("tool_choice", None)
                     completion_kwargs.pop("response_format", None)
+                    completion_kwargs.pop("seed", None)
                     
                     # HfLocalBackend generate might raise its own errors
                     generated_text = model.generate(**completion_kwargs)

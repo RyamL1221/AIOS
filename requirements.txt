@@ -38,6 +38,6 @@ opentelemetry-exporter-otlp-proto-grpc>=1.25.0
 opentelemetry-proto>=1.25.0
 
 # Memory provider integrations (optional)
-mem0ai>=2.0.0
+mem0ai==2.0.2  # pinned in both repos (Subtask 9d)
 # Pinned to 2.0.0 — later versions have API incompatibilities with Zep free tier
 zep-cloud==2.0.0

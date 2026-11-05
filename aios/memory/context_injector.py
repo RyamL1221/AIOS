@@ -206,6 +206,9 @@ class ContextInjector:
     def _truncate_by_token_budget(self, memories: list) -> list:
         """Drop the lowest-ranked memories until the block fits
         ``max_tokens`` (``Formatter.truncate_by_token_budget``)."""
-        return Formatter(self.max_tokens).truncate_by_token_budget(
-            memories
-        )
+        settings = self.memory_manager.pipeline_settings()
+        return Formatter(
+            self.max_tokens,
+            settings.block_format,
+            recency=settings.block_recency,
+        ).truncate_by_token_budget(memories)

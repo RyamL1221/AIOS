@@ -34,6 +34,7 @@ if _ROOT not in sys.path:
 from cerebrum.llm.apis import LLMQuery
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
+from aios.memory.pipeline.formatter import is_memory_block
 from aios.memory.context_injector import ContextInjector
 from tests.modules.memory._doubles.kernel_retrieval import (
     KernelRetrievalDouble,
@@ -241,7 +242,7 @@ class TestLegacyFallbackBehavior(unittest.TestCase):
         for msg in query.messages:
             if msg.get("role") == "system":
                 content = msg.get("content", "")
-                if "MEMORY CONTEXT" in content:
+                if is_memory_block(content):
                     return content
         return ""
 
@@ -396,7 +397,7 @@ class TestRequestScopedUserIdentity(unittest.TestCase):
         for msg in query.messages:
             if msg.get("role") == "system":
                 content = msg.get("content", "")
-                if "MEMORY CONTEXT" in content:
+                if is_memory_block(content):
                     return content
         return ""
 

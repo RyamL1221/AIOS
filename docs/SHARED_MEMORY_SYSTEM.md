@@ -212,15 +212,21 @@ The merged candidates go through a multi-stage filter:
 
 ### 4.7 Prompt Injection
 
-Surviving memories are formatted into a system message and prepended to the LLM query:
+Surviving memories are formatted into a system message and prepended to the LLM query. Since NeurIPS Subtask 9d the default (`memory.block_format: compact`) is one header line and a bullet per memory, in type order (profile, task context, conversation):
+
+```
+Known about this user:
+- My name is Alice. I prefer coding in Python, using VS Code and Docker.
+- I'm working on Dynamic Form Builder, testing conditional rendering.
+```
+
+`memory.block_recency: true` appends a relative age to each bullet ("(3 days ago)"). The pre-9d block (delimiters, an instruction line, a timestamp per line) is still available as `memory.block_format: legacy`:
 
 ```
 ===== MEMORY CONTEXT =====
-The following are relevant memories from prior interactions with this user.
-Use them to personalize your response:
+The following are relevant memories from prior interactions with this user. Use them to personalize your response:
 
-- [] User profile: Their name is Alice. They prefer coding in Python. They like using VS Code, Docker.
-- [] Current task context: Working on project Dynamic Form Builder. Running experiment: Testing conditional rendering.
+- [202611041200] My name is Alice. ...
 
 ===== END MEMORY CONTEXT =====
 ```

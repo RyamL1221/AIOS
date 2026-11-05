@@ -75,6 +75,8 @@ memory:
   relevance_threshold: 0.0     # Minimum similarity score for memory injection
   max_injected_memories: 5     # Max memories to inject per LLM call
   max_memory_tokens: 1500      # Token budget for injected memory block
+  block_format: "compact"      # "compact" (one header + bullets) or "legacy" (pre-9d kernel block)
+  block_recency: false         # add a relative age per bullet, e.g. "(3 days ago)"
 
 
   # The one embedding model every memory backend uses

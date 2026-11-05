@@ -267,7 +267,11 @@ class MemoryPipeline:
             self.settings.max_memory_tokens
             if max_tokens is None else max_tokens
         )
-        return Formatter(budget).build(candidates)
+        return Formatter(
+            budget,
+            self.settings.block_format,
+            recency=self.settings.block_recency,
+        ).build(candidates)
 
     def inject(
         self,

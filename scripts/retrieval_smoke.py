@@ -7,6 +7,12 @@ check writes to its own new user, so runs do not affect each other. With
 Azure and checks that the Mem0 LLM synced to it.
 
     python scripts/retrieval_smoke.py [--kernel-log logs/kernel.log]
+
+Most checks compare stored text exactly, so they need verbatim writes:
+with ``memory.mem0.infer: true`` (``backend_extraction`` at
+``/memory/config``) Mem0 rewrites every write into extracted facts and
+those checks are skipped. Run once with ``infer: false`` for the full
+set.
 """
 import argparse
 import sys
@@ -88,12 +94,14 @@ def check_config():
         "auto_inject",
         "auto_extract",
         "backend_llm",
+        "backend_extraction",
         "pipeline",
         "pipeline_version",
     }, body
     assert set(body["pipeline"]) == {
         "relevance_threshold", "max_injected_memories",
         "max_memory_tokens", "write_barrier",
+        "block_format", "block_recency",
     }, body
     assert set(body["embedding"]) == {
         "provider", "model", "dimension", "ollama_base_url",
@@ -125,6 +133,23 @@ def check_scored_retrieval():
     assert diagnostics["threshold_used"] == config[
         "relevance_threshold"
     ], diagnostics
+
+
+def check_block_format():
+    """The injected block uses the kernel's configured format
+    (Subtask 9d: "compact" unless memory.block_format says "legacy")."""
+    user = f"smoke_{RUN}_block"
+    write(user, "profile_agent", "prefers Rust", "shared")
+    pipeline = requests.get(
+        f"{BASE_URL}/memory/config", timeout=10
+    ).json()["pipeline"]
+    assert pipeline["block_format"] in ("compact", "legacy"), pipeline
+    diagnostics = chat(user)
+    assert diagnostics["injected_count"] == 1, diagnostics
+    assert diagnostics["block_format"] == pipeline["block_format"], (
+        diagnostics, pipeline,
+    )
+    assert diagnostics["block_recency"] == pipeline["block_recency"]
 
 
 def check_own_roundtrip_without_metadata():
@@ -242,6 +267,7 @@ def check_azure_mem0_llm_sync():
 
 
 CHECKS = [
+    check_block_format,
     check_config,
     check_privacy_gap,
     check_scored_retrieval,
@@ -255,6 +281,18 @@ CHECKS = [
 ]
 
 
+# Checks that need the kernel to store writes verbatim (see the module
+# docstring); the Mem0 LLM sync check also needs the synced, not the
+# pinned, backend LLM.
+NEEDS_VERBATIM = {
+    "check_privacy_gap", "check_scored_retrieval",
+    "check_own_roundtrip_without_metadata", "check_get_memory_visibility",
+    "check_update_delete_owner_only",
+    "check_conversation_write_visible_immediately",
+    "check_memory_id_and_update", "check_azure_mem0_llm_sync",
+}
+
+
 def main() -> int:
     """Run every check and report each result."""
     global KERNEL_LOG
@@ -262,10 +300,14 @@ def main() -> int:
     parser.add_argument("--kernel-log")
     KERNEL_LOG = parser.parse_args().kernel_log
     failed = 0
-    internal_llm = requests.get(
-        f"{BASE_URL}/memory/config", timeout=10
-    ).json()["capabilities"]["internal_llm"]
+    config = requests.get(f"{BASE_URL}/memory/config", timeout=10).json()
+    internal_llm = config["capabilities"]["internal_llm"]
+    extracting = bool(config.get("backend_extraction"))
     for check in CHECKS:
+        if extracting and check.__name__ in NEEDS_VERBATIM:
+            print(f"SKIP {check.__name__}: the backend extracts facts "
+                  "(memory.mem0.infer); needs verbatim writes")
+            continue
         if check is check_azure_mem0_llm_sync and KERNEL_LOG is None:
             print(f"SKIP {check.__name__}: no --kernel-log")
             continue

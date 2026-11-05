@@ -55,6 +55,7 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
+from aios.memory.pipeline.formatter import block_contents
 from tests.modules.memory._doubles.legacy import (
     LegacyProviderAdapter as MemoryProvider,
 )
@@ -170,14 +171,7 @@ def _injected_contents(result_query: LLMQuery) -> List[str]:
     if len(result_query.messages) <= 1:
         return []
     sys_content = result_query.messages[0].get("content", "")
-    lines = sys_content.split("\n")
-    contents = []
-    for line in lines:
-        if line.startswith("- ["):
-            # Format: "- [timestamp] content"
-            bracket_end = line.index("]", 3)
-            contents.append(line[bracket_end + 2:])
-    return contents
+    return block_contents(sys_content)
 
 
 # ==================================================================

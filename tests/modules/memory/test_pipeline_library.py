@@ -4,7 +4,9 @@ The equivalence test is the proof that "replicated" means replicated:
 for 20 seeded users, the kernel path (``ContextInjector.inject`` and SDK
 search through ``MemoryManager``) and a direct ``MemoryPipeline`` call
 give byte-identical memory blocks and identical diagnostics, and kernel
-writes and library writes store the same rows.
+writes and library writes store the same rows. Since Subtask 9d it runs
+for both block formats: the default ``compact`` block and the ``legacy``
+one kept behind ``memory.block_format``.
 """
 import json
 import random
@@ -19,6 +21,7 @@ from cerebrum.memory.apis import MemoryQuery
 
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
+from aios.memory.pipeline.formatter import estimate_tokens, format_block
 from aios.memory.pipeline import (
     TYPE_ORDER,
     MemoryPipeline,
@@ -93,15 +96,23 @@ def query_text(seed: int) -> str:
     return " ".join(rng.choice(WORDS) for _ in range(5))
 
 
-@pytest.fixture
-def kernel():
+BLOCK_STARTS = {
+    "compact": "Known about this user:\n- ",
+    "legacy": "===== MEMORY CONTEXT =====",
+}
+
+
+@pytest.fixture(params=["compact", "legacy"])
+def kernel(request):
     """A real MemoryManager on the in-memory provider, its injector, and
-    every user's memories written through the kernel's write path."""
+    every user's memories written through the kernel's write path; once
+    per block format."""
+    memory_config = dict(MEMORY_CONFIG, block_format=request.param)
     with patch("aios.memory.manager.global_config") as config:
-        config.get_memory_config.return_value = dict(MEMORY_CONFIG)
+        config.get_memory_config.return_value = memory_config
         config.get_storage_config.return_value = {}
         manager = MemoryManager()
-    injector = ContextInjector(manager, dict(MEMORY_CONFIG))
+    injector = ContextInjector(manager, memory_config)
     for seed in range(20):
         for agent, params in seeded_requests(seed):
             syscall = MemorySyscall(agent, MemoryQuery(
@@ -112,10 +123,15 @@ def kernel():
     return manager, injector
 
 
-def library_over(provider) -> MemoryPipeline:
-    """A direct library call: its own barrier and resolver."""
+def library_over(manager) -> MemoryPipeline:
+    """A direct library call: its own barrier and resolver, with the
+    settings the kernel reports at /memory/config (as a replicated agent
+    builds them)."""
     return MemoryPipeline(
-        provider, PipelineSettings.from_memory_config(MEMORY_CONFIG)
+        manager.provider,
+        PipelineSettings.from_memory_config(
+            manager.pipeline_settings().as_dict()
+        ),
     )
 
 
@@ -128,7 +144,7 @@ def without_timings(diagnostics: dict) -> dict:
 
 def test_kernel_injection_equals_the_library_for_20_users(kernel):
     manager, injector = kernel
-    library = library_over(manager.provider)
+    library = library_over(manager)
     injected_somewhere = 0
     for seed in range(20):
         user = f"user{seed:02d}"
@@ -148,9 +164,14 @@ def test_kernel_injection_equals_the_library_for_20_users(kernel):
         assert without_timings(kernel_diag) == without_timings(library_diag)
         if kernel_diag["injected_count"]:
             injected_somewhere += 1
-            assert query.messages[0]["content"].startswith(
-                "===== MEMORY CONTEXT ====="
-            )
+            block = query.messages[0]["content"]
+            assert block.startswith(BLOCK_STARTS[manager.block_format])
+            if manager.block_format == "compact":
+                bullets = [line for line in block.split("\n")[1:]
+                           if line.startswith("- ")]
+                assert len(bullets) == kernel_diag["injected_count"]
+                assert not any(line.startswith("- [") for line in bullets)
+                assert "MEMORY CONTEXT" not in block
         # The private note of another agent and the other user's memory
         # never reach the block.
         for mem in kernel_diag["injected_memories"]:
@@ -161,7 +182,7 @@ def test_kernel_injection_equals_the_library_for_20_users(kernel):
 
 def test_kernel_sdk_search_equals_the_library_for_20_users(kernel):
     manager, _ = kernel
-    library = library_over(manager.provider)
+    library = library_over(manager)
     for seed in range(20):
         user = f"user{seed:02d}"
         for agent in AGENTS:
@@ -208,10 +229,13 @@ def test_kernel_writes_equal_library_writes(kernel):
         assert stored_rows(store, user)
 
 
-def test_block_is_printed_in_type_order_after_ranking():
+@pytest.mark.parametrize("block_format", ["compact", "legacy"])
+def test_block_is_printed_in_type_order_after_ranking(block_format):
     store = InHouseProvider()
     store.initialize({})
-    library = MemoryPipeline(store, PipelineSettings(max_memory_tokens=10_000))
+    library = MemoryPipeline(store, PipelineSettings(
+        max_memory_tokens=10_000, block_format=block_format,
+    ))
     rows = [
         {"memory_id": "c", "content": "chat", "score": 0.9, "timestamp": "t",
          "metadata": {"memory_type": "conversation", "owner_agent": "a"}},
@@ -230,10 +254,14 @@ def test_block_is_printed_in_type_order_after_ranking():
     assert TYPE_ORDER == ("profile", "task_context", "conversation")
     assert text.index("profile") < text.index("task") < text.index("chat")
     # The budget drops the lowest-ranked first (the profile here), not
-    # the last printed.
-    # 45 tokens fit the block with three of the four memories (49 with
-    # all four).
-    small = MemoryPipeline(store, PipelineSettings(max_memory_tokens=45))
+    # the last printed: a budget that fits three of the four memories
+    # keeps the three best-ranked.
+    three = estimate_tokens(format_block(rows[:3], block_format))
+    four = estimate_tokens(format_block(rows, block_format))
+    assert three < four
+    small = MemoryPipeline(store, PipelineSettings(
+        max_memory_tokens=three, block_format=block_format,
+    ))
     _, diagnostics = small.build_block(rows)
     kept = [m["memory_id"] for m in diagnostics["injected_memories"]]
     assert kept == ["t", "c", "x"]

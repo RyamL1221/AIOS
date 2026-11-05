@@ -80,6 +80,13 @@ in the order the backend returned them, then its usual system prompt
 and the user's query, and calls `llm_chat` with the user's id. With no
 visible memories it sends no block.
 
+Since Subtask 9d the kernel and replicated conditions use the same
+shape (the library's `compact` block: `Known about this user:` and a
+bullet per memory, no delimiters, instruction line or timestamps), so
+the loci differ only in the header's wording and in the order (backend
+order here, profile / task context / conversation in the kernel). The
+native renderer stays the agents' own by design.
+
 **Conversation memory.** After the response, the AssistantAgent writes
 the user/assistant turn to the backend as a private `conversation`
 memory, as Mem0's documentation shows for chat. This happens after the

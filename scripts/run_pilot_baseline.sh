@@ -12,7 +12,10 @@
 # One fresh kernel per phase and model. Sets memory.provider and the
 # kernel memory mode between kernels, never during one, and restores
 # config.yaml byte for byte at exit. Resumable: finished cells are
-# skipped. Run from the AIOS repo, detached:
+# skipped. Every assistant and writer call uses fixed decoding (Subtask
+# 9d: run_evaluation's default temperature 0.0 and seed; DECODING_ARGS
+# passes other flags, e.g. "--sampled"). METHODS limits each phase to the
+# methods named. Run from the AIOS repo, detached:
 #   MODELS="gpt4o qwen" bash scripts/run_pilot_baseline.sh
 set -u
 AIOS="$(pwd)"
@@ -28,6 +31,8 @@ JUDGE="gpt-5.4:azure"
 RUN_PREFIX="${RUN_PREFIX:-p9}"
 MODELS="${MODELS:-gpt4o qwen llama}"
 PHASES="${PHASES:-kmem0 kinh agent}"
+METHODS="${METHODS:-}"
+DECODING_ARGS="${DECODING_ARGS:-}"
 MEMORY_OPS='add_memory: agent=|retrieve_memory result|Injection pipeline|Stored conversation memory|Injected [0-9]+ memories'
 KERNEL=""
 mkdir -p "$LOGS"
@@ -73,6 +78,7 @@ run_cell() {  # $1 = phase, $2 = method, $3 = model, [$4 = provider]
         -m benchmarks.shared_memory.run_evaluation \
         --dataset "$DATASET" --trials "$TRIALS" --method "$method" \
         ${check[@]+"${check[@]}"} --assistant-model "$(assistant_of "$model")" \
+        $DECODING_ARGS \
         --judge-model "$JUDGE" --run-id "$RUN_PREFIX-$phase-$method-$model" \
         --output "$cell" > "$LOGS/${phase}_${method}_${model}.log" 2>&1) || {
         echo "$(date) FAILED $phase $method $model"; exit 1;
@@ -99,6 +105,14 @@ for phase in $PHASES; do
                methods="replicated_mem0 replicated_inhouse native_mem0 native_inhouse naive_concat vanilla_rag" ;;
         *) echo "unknown phase $phase"; exit 1 ;;
     esac
+    if [ -n "$METHODS" ]; then
+        keep=""
+        for method in $methods; do
+            case " $METHODS " in *" $method "*) keep="$keep $method" ;; esac
+        done
+        methods="$keep"
+        [ -n "$methods" ] || continue
+    fi
     for model in $MODELS; do
         phase_needed "$phase" "$model" $methods || { echo "$(date) skip $phase $model"; continue; }
         start_kernel "${phase}_$model"
