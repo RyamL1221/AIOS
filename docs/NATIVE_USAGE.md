@@ -235,7 +235,11 @@ Choices:
   other keys than the schema's (`username`, `tools`, `project_name`,
   `next_actions`, or everything nested under one key), so the renderer
   maps those aliases, unwraps a single nested object and keeps unknown
-  keys as `<key>: <value>` sentences (`native/render.py`).
+  keys as `<key>: <value>` sentences (`native/render.py`). Since
+  Subtask 9 this renderer is the one shared by every writer, kernel and
+  replicated too (`shared_memory_utils.render`), applied after schema
+  validation: unknown keys are dropped, and an extraction that does not
+  validate after two retries is not stored at all.
 
 **Writer to consumer, 5 users** (gpt-4o, natural language, Mem0 2.0.2,
 three separate `Memory` clients on one store): for each user the profile

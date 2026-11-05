@@ -87,10 +87,10 @@ memory:
     dimension: 768
     ollama_base_url: "http://localhost:11434"
 
-  # Internal LLM for agent-managed backends: Mem0's fact extraction in
-  # the native_mem0 condition (docs/NATIVE_USAGE.md), pinned separately
-  # from the assistant model. The kernel only reports it (/memory/config);
-  # the agents read their credentials from AZURE_API_* in the environment.
+  # Internal LLM for Mem0's fact extraction, pinned separately from the
+  # assistant model: the kernel's Mem0 with mem0.infer, and the native
+  # and replicated agents' Mem0 (docs/NATIVE_USAGE.md). Credentials come
+  # from AZURE_API_* in the environment.
   backend_llm:
     provider: "azure_openai"
     model: "gpt-4o"
@@ -114,6 +114,10 @@ memory:
   mem0:
     api_key: ""  # Optional: for Mem0 cloud
     user_id: "default"
+    # Mem0 extracts facts from each write with memory.backend_llm
+    # (infer=True), as the native agents' Mem0 does (Subtask 9). false
+    # stores the writers' text verbatim (the pre-Subtask-9 kernel mode).
+    infer: true
     # LLM config for Mem0 fact extraction. When omitted or empty, the
     # kernel automatically uses the same model as the assistant agent
     # (propagated from the runtime LLMQuery.llms field). Set this only

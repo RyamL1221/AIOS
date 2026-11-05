@@ -18,7 +18,7 @@ provider's default scope (`default_user_id`, usually `"default"`).
 
 | Method | Returns | Rules |
 |---|---|---|
-| `add(note)` | memory id | Store `note.content` verbatim with `note_metadata(note)`. Raise `ProviderError` on failure. `note.metadata["user_id"]` is the scope. |
+| `add(note)` | memory id | Store `note.content` with `note_metadata(note)` (verbatim, except Mem0 with `infer`, which stores the facts it extracts). Raise `ProviderError` on failure. `note.metadata["user_id"]` is the scope. |
 | `search(query_text, user_id, top_k)` | `list[Candidate]` | Up to `top_k` of the user's memories, closest first. Scored when `scored_search`. No visibility filter, no threshold. |
 | `list(user_id, top_k)` | `list[Candidate]` | Up to `top_k` of the user's memories in storage order, `score=None`. |
 | `get(memory_id, user_id)` | `Candidate` or `None` | One memory in the user's scope. |
@@ -116,7 +116,18 @@ lists round-trip.
 
 ### Mem0
 
-Kernel mode stores verbatim (`infer=False`) in one Mem0 store per user.
+Kernel mode keeps one Mem0 store per user. Since Subtask 9
+(`memory.mem0.infer: true`) Mem0 extracts facts from each write with its
+internal LLM, pinned to `memory.backend_llm` (Azure gpt-4o through
+LiteLLM), exactly as the native and replicated agents' Mem0 does: the
+writer is passed as `agent_id`, and a conversation turn goes in as a user
+and an assistant message. One write can become several fact rows, each
+with the full metadata (Mem0 copies the metadata dict to every fact;
+`tests/modules/memory/test_mem0_infer.py`, and a 5-user live check with
+`scripts/check_fact_metadata.py`); `add` returns the first fact's id,
+or `""` when Mem0 extracted nothing. The assistant model no longer
+replaces this LLM (`sync_llm_from_query` is a no-op). `infer: false`
+stores verbatim, as before.
 `list` is `get_all`. `search` queries the user's Chroma collection through
 Mem0's own vector store and embedder, and converts the raw distance to a
 cosine similarity (`1 - d/2`: Mem0's collections use Chroma's default

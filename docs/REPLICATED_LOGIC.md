@@ -43,7 +43,9 @@ uses the same library.
   settings, embedding), so in the clean condition every copy matches
   the kernel's settings by construction.
 - **Backend.** `replicated_mem0` uses the kernel's `Mem0Provider`
-  (verbatim writes, `infer=False`, scored search). `replicated_inhouse`
+  (scored search; since Subtask 9 the kernel's `infer` setting, read
+  from `/memory/config` `backend_extraction`, with the pinned
+  `memory.backend_llm`, so it extracts facts as the kernel's Mem0 does). `replicated_inhouse`
   uses the kernel's `ChromaInHouseProvider`. Each condition has its own
   store, separate from the kernel's.
 - **Records.** Every trial records `locus` (`kernel`, `replicated`,

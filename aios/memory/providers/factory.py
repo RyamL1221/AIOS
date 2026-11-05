@@ -51,6 +51,15 @@ def provider_config(
                 "memory.embedding (%s)", embedding.model,
             )
         mem0_config["embedder"] = pinned
+        if mem0_config.get("infer"):
+            # Mem0 extracts facts with the pinned internal LLM, as the
+            # native agents' Mem0 does (Subtask 9), not the synced
+            # assistant model.
+            from cerebrum.utils.usage import mem0_llm_config
+
+            mem0_config["llm"] = mem0_llm_config(
+                memory_config.get("backend_llm") or {}
+            )
         return mem0_config
     elif provider_type == "zep":
         return memory_config.get("zep", {})

@@ -1,8 +1,10 @@
 """
 Mem0Provider - Memory provider using Mem0 for AI-native memory management.
 
-Kernel mode stores content verbatim (``infer=False``) in one Mem0 store
-per user. ``search`` scores through Mem0's own vector store: Mem0's
+Kernel mode stores in one Mem0 store per user. With ``memory.mem0.infer``
+(Subtask 9) Mem0's own LLM, pinned to ``memory.backend_llm``, extracts
+facts from each write as it does for the native agents; without it the
+content is stored verbatim (``infer=False``). ``search`` scores through Mem0's own vector store: Mem0's
 ``search()`` cannot be used for that, because its Chroma adapter returns
 the raw L2 distance as ``score`` and ``score_and_rank`` treats it as a
 similarity, so results come back least similar first, clamped at 1.0
@@ -64,6 +66,8 @@ class Mem0Provider(MemoryProvider):
         # The LLM set by sync_llm_from_query, applied to every client.
         self._synced_llm = None
         self._default_collection_prefix = "mem0_memories"
+        # Mem0 extracts facts from each write with its pinned LLM.
+        self.backend_extraction = False
 
         # Shared ChromaDB PersistentClient (set during initialize).
         self._persistent_client = None
@@ -106,6 +110,7 @@ class Mem0Provider(MemoryProvider):
             # Extract default IDs from config
             self.default_user_id = config.get("user_id", "default")
             self.default_agent_id = config.get("agent_id")
+            self.backend_extraction = bool(config.get("infer", False))
             
             # Build Mem0 configuration
             mem0_config = {}
@@ -562,6 +567,8 @@ class Mem0Provider(MemoryProvider):
         """
         if not llms or not self.client:
             return
+        if self.backend_extraction:
+            return  # the LLM is pinned to memory.backend_llm
 
         # Use the first entry in the list (primary model).
         primary = llms[0]
@@ -629,6 +636,22 @@ class Mem0Provider(MemoryProvider):
                     return value
 
         return []
+
+    def _extract_memory_ids(self, result: object) -> List[str]:
+        """Every memory id in a Mem0 ``add()`` response, in order (one
+        per stored fact with extraction); the single-id shapes of
+        ``_extract_memory_id`` otherwise."""
+        items = result.get("results") if isinstance(result, dict) else None
+        if isinstance(items, list):
+            ids = [
+                str(item.get("id") or item.get("memory_id"))
+                for item in items
+                if isinstance(item, dict)
+                and (item.get("id") or item.get("memory_id"))
+            ]
+            return ids
+        single = self._extract_memory_id(result)
+        return [single] if single else []
 
     def _extract_memory_id(
         self, result: object
@@ -707,28 +730,57 @@ class Mem0Provider(MemoryProvider):
         )
 
     def add(self, memory_note: "MemoryNote") -> str:
+        """Store one note and return a memory id. With extraction, Mem0
+        may store several facts (each with the full metadata) or none;
+        the first fact's id is returned, ``""`` for none."""
         metadata = note_metadata(memory_note)
         user_id = self._scope(metadata.get("user_id"))
         kwargs: Dict[str, Any] = {
             "user_id": user_id,
             "metadata": metadata,
-            # Store the content verbatim. With infer=True Mem0's LLM
-            # extracts facts and dedupes by hash, and in June 2026 that
-            # stored nothing while add() reported success.
-            "infer": False,
+            "infer": self.backend_extraction,
         }
-        if self.default_agent_id:
+        content: Any = memory_note.content
+        if self.backend_extraction:
+            # As the native agents call it: the writer as the agent, and
+            # a conversation turn as role-tagged messages.
+            kwargs["agent_id"] = metadata.get("owner_agent")
+            content = self._messages(content, metadata)
+        elif self.default_agent_id:
             kwargs["agent_id"] = self.default_agent_id
         client = self._get_client_for_user(user_id)
         try:
-            result = client.add(memory_note.content, **kwargs)
+            result = client.add(content, **kwargs)
         except Exception as e:
             raise ProviderError(f"Mem0 add failed: {e}") from e
-        memory_id = self._extract_memory_id(result)
-        if not memory_id:
+        memory_ids = self._extract_memory_ids(result)
+        if not memory_ids:
+            if self.backend_extraction:
+                logger.info("add: Mem0 extracted no facts for %s", user_id)
+                return ""
             raise ProviderError("Mem0 add returned no memory id")
-        self._await_stored(client, memory_id)
-        return memory_id
+        for memory_id in memory_ids:
+            self._await_stored(client, memory_id)
+        return memory_ids[0]
+
+    _TURN = re.compile(
+        r"\AUser: (?P<user>.*?)\nAssistant: (?P<assistant>.*)\Z",
+        re.DOTALL,
+    )
+
+    @classmethod
+    def _messages(cls, content: str, metadata: Dict[str, Any]) -> Any:
+        """A conversation memory's ``User: ...\\nAssistant: ...`` text as
+        the two messages Mem0's extraction expects; other content as
+        is (Mem0 makes it one user message)."""
+        if metadata.get("memory_type") == "conversation":
+            match = cls._TURN.match(content or "")
+            if match:
+                return [
+                    {"role": "user", "content": match["user"]},
+                    {"role": "assistant", "content": match["assistant"]},
+                ]
+        return content
 
     def search(
         self, query_text: str, user_id: Optional[str], top_k: int

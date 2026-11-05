@@ -526,6 +526,11 @@ async def get_memory_config():
         "auto_inject": manager.auto_inject,
         "auto_extract": manager.auto_extract,
         "backend_llm": manager.backend_llm,
+        # Whether the backend extracts facts from writes itself (Mem0
+        # with memory.mem0.infer, using backend_llm).
+        "backend_extraction": bool(
+            getattr(manager.provider, "backend_extraction", False)
+        ),
         # The memory pipeline library's settings and source version: a
         # replicated agent builds its own copy from these
         # (docs/REPLICATED_LOGIC.md).

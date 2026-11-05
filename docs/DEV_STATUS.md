@@ -30,6 +30,8 @@ do not describe this branch.
 | 6 | Native agent-managed conditions (Mem0, in-house) | Done |
 | 7 | Cost instrumentation | Done |
 | 8 | Memory pipeline library; replicated-logic locus condition | Done |
+| 9 | Fixed paired dataset; stored-content parity; writer validation | Done |
+| 9c | Explain the `kernel_shared` deficit (investigation) | Done |
 
 ### Subtask 1
 
@@ -494,6 +496,152 @@ is read as a tie with one unexplained small-model cell, and the
 difference-1 demonstration test shows where the two loci actually
 differ.
 
+### Subtask 9
+
+Goal: every cell of the locus × backend grid scores the same users with
+the same stored content on a given backend, and no writer failure is
+stored silently, so a difference between two cells can only come from
+locus, backend or model.
+
+- **Fixed dataset.** Cerebrum `benchmarks/shared_memory/data/users_v1.jsonl`:
+  150 users (profile, task context, plausible actions, follow-up query)
+  generated once with `synth.py`'s prompts and GPT-4o
+  (`gpt-4o-2024-11-20`), seed 20261104, on 2026-11-04. The first record
+  is the header (seed, model, date, a hash of the generator's source,
+  LiteLLM version, seed rule). `dataset.py generate` calls LiteLLM
+  directly, because the kernel's chat API carries no seed; a duplicate
+  name or a query naming a profile or task literal is regenerated with
+  the next seed (17 profiles needed a second attempt, 3 a third; no
+  query still named a literal). 150 distinct names. `pilot_v1` is the first 30
+  users. `run_evaluation.py --dataset users_v1|pilot_v1|<file>` scores
+  user `i` as trial `i`, so every cell is paired by construction;
+  `--dataset random` keeps per-trial generation and is never used for
+  reported results. `--trials` defaults to the dataset's size. Every
+  trial records `dataset` and `input_sha256` (a hash of the two writers'
+  inputs and the query), every results file the dataset's name, sha256,
+  seed, model and date.
+- **Paired analysis.** `benchmarks/shared_memory/compare.py`: per-user
+  differences between two cells of the same dataset, with mean, 95% t
+  CI, paired t, Wilcoxon signed-rank (zeros dropped; `n_nonzero`
+  reported) and paired TOST against ±0.25. A user failed in either cell
+  is dropped and counted by reason; cells of different datasets, or a
+  user whose `input_sha256` differs, are an error.
+  `pilot_report.py` builds the table below from `results/pilot_v1`.
+- **One stored content across loci.** The native renderer is now the
+  single shared one (`shared_memory_utils.render`; `native/render.py`
+  is removed). Kernel, replicated and native writers all store the same
+  plain-language text, and keep the validated fields as JSON in
+  `metadata["structured"]`. The kernel's formatter passes plain text
+  through unchanged, so the kernel block now shows the writers'
+  first-person sentences ("My name is ...") instead of the formatter's
+  "User profile: ..." rendering of JSON.
+- **Mem0 extraction in the kernel (`memory.mem0.infer: true`).** The
+  kernel's Mem0 now writes with `infer=True` and its internal LLM pinned
+  to `memory.backend_llm` (Azure gpt-4o through LiteLLM, temperature
+  0.1; `cerebrum.utils.usage.mem0_llm_config`, shared with the native
+  agents), passing the writer as `agent_id` and a conversation turn as
+  two role-tagged messages, as the native agents do. The assistant model
+  no longer replaces that LLM. The replicated Mem0 agents follow the
+  kernel's setting (`/memory/config` `backend_extraction`). Before
+  switching, verified that Mem0 2.0.0 copies the full metadata dict to
+  every extracted fact (`deepcopy(metadata)` per record): a test against
+  a real Mem0 + Chroma store (`tests/modules/memory/test_mem0_infer.py`)
+  and a 5-user live check (`scripts/check_fact_metadata.py`) on the
+  kernel, replicated and native Mem0 stores: every one of 56 / 49 / 55
+  fact rows had `owner_agent`, `user_id`, `memory_type`,
+  `sharing_policy` and `structured`; 3-4 profile facts and 3-4 task
+  facts per user. In-house has no extraction; nothing changes there.
+  Every trial records `backend_extraction` (true on every Mem0 cell,
+  false on in-house, none for the two memory-less baselines).
+- **Writer validation (closes known issue 21).** Writers validate their
+  extraction against the profile / task schema (aliases and one nested
+  object accepted, `blockers` may be empty, every other field required
+  and non-empty; `shared_memory_utils.validate_extraction`), retry up
+  to two times, and on final failure store nothing: the trial records
+  `writer_failed` (e.g. `["task_agent"]`), is marked failed and is not
+  run past the writers or judged. Every trial records `writer_retries`
+  per writer; `writer_tokens` counts every attempt.
+- **Models.** `docs/MODELS.md`: GPT-4o, Qwen-2.5:7B and Llama-3.1:8B
+  (the workshop's, kept for comparability), with Ollama digests; the
+  stress-sweep pair is GPT-4o and Qwen-2.5:7B.
+- **Driver.** AIOS `scripts/run_pilot_baseline.sh`: phase `kmem0`
+  (Mem0, kernel memory on), `kinh` (in-house), `agent` (kernel memory
+  off: replicated, native, and the two baselines, which with kernel
+  memory on would have their chat turn stored and extracted by the
+  kernel); one fresh kernel per phase and model, `config.yaml` restored
+  at exit, resumable (`scripts/pilot_cell_done.py`: only writer failures
+  may be failed).
+- **Tests.** Cerebrum `test_writer_parity.py` (validation, retries, the
+  same text and fields from all three loci, failures stored nowhere,
+  writer tokens per attempt, the failed trial not judged),
+  `test_dataset_paired.py` (the committed dataset, pilot_v1, two runs of
+  a cell see identical users and inputs, paired statistics, exclusions),
+  `_replicated_checks.py` (replicated Mem0 follows the kernel's
+  extraction and counts its LiteLLM calls). AIOS `test_mem0_infer.py`.
+
+**pilot_v1 re-baseline** (`Cerebrum/results/pilot_v1/`, PROVENANCE
+there): 10 cells × 3 models × 30 users, 900 trials, judge v2. 3 trials
+failed, all Llama writer failures after two retries (Mem0
+`kernel_shared`, in-house `kernel_shared`, in-house native; one each),
+stored nothing and were not judged. Llama retried a writer in 5-11
+trials per cell, GPT-4o and Qwen in none. **Superseded by Subtask 9d**,
+which re-runs it under fixed decoding and the shared block renderer.
+
+Paired, other − `kernel_shared` on the same users, 95% t CI (bold: CI
+excludes 0):
+
+| Model | Backend | Other | n | Profile | Task | Integration |
+|---|---|---|---|---|---|---|
+| GPT-4o | Mem0 | replicated | 30 | +0.17 [−0.05, +0.39] | +0.00 [−0.10, +0.10] | +0.13 [−0.10, +0.37] |
+| GPT-4o | Mem0 | native | 30 | +0.17 [−0.11, +0.45] | −0.03 [−0.10, +0.03] | +0.17 [−0.11, +0.45] |
+| GPT-4o | in-house | replicated | 30 | +0.03 [−0.22, +0.28] | +0.00 | +0.17 [−0.08, +0.41] |
+| GPT-4o | in-house | native | 30 | +0.17 [−0.03, +0.36] | +0.00 | +0.20 [−0.01, +0.41] |
+| Qwen | Mem0 | replicated | 30 | +0.27 [−0.19, +0.73] | −0.17 [−0.34, +0.01] | +0.20 [−0.21, +0.61] |
+| Qwen | Mem0 | native | 30 | **+0.63 [+0.18, +1.09]** | −0.03 [−0.15, +0.09] | **+0.53 [+0.13, +0.93]** |
+| Qwen | in-house | replicated | 30 | +0.23 [−0.32, +0.79] | +0.03 [−0.12, +0.19] | +0.27 [−0.26, +0.79] |
+| Qwen | in-house | native | 30 | +0.43 [−0.12, +0.99] | +0.07 [−0.07, +0.20] | +0.47 [−0.04, +0.97] |
+| Llama | Mem0 | replicated | 29 | −0.10 [−0.54, +0.33] | −0.10 [−0.26, +0.05] | −0.14 [−0.50, +0.22] |
+| Llama | Mem0 | native | 29 | +0.28 [−0.06, +0.61] | −0.10 [−0.32, +0.11] | +0.24 [−0.09, +0.57] |
+| Llama | in-house | replicated | 29 | +0.03 [−0.43, +0.49] | +0.03 [−0.13, +0.19] | +0.14 [−0.28, +0.55] |
+| Llama | in-house | native | 28 | +0.14 [−0.38, +0.67] | +0.00 [−0.18, +0.18] | +0.32 [−0.19, +0.83] |
+
+Task usage is within ±0.25 everywhere. The Subtask 8 in-house Llama gap
+(+0.47 profile, unpaired) is +0.03 paired (closes known issue 20).
+`kernel_private` scores 1.07-1.20 on profile in every cell, as designed.
+Cost per trial: Mem0 cells 0.062-0.073 USD (almost all Mem0's GPT-4o
+extraction, ~24,000 tokens), in-house GPT-4o ~0.007 USD, local models
+0 USD in API calls. Per-cell means, tokens, latency and cost:
+`results/pilot_v1/cells.csv`; the paired table with p-values and TOST:
+`paired.csv` (`pilot_report.py`).
+
+### Subtask 9c (investigation, no code change)
+
+Why Qwen/Mem0 native beat `kernel_shared` by +0.63 profile. Scripts and
+outputs in `repo-artifacts/Cerebrum/s9c/`.
+
+- The kernel injects every fact it stored (≤ 8, so the cap of 10 never
+  binds), as native does; on all 60 Qwen and GPT-4o users both blocks
+  hold the name, language, style and every tool. No pipeline stage
+  drops a fact: dedupe removes only the shared fetch's copy of each own
+  row; threshold, cap and budget keep n.
+- Extraction: fact counts per user differ (25/30) but not on average
+  (Qwen 7.23 vs 7.30, GPT-4o 7.2 vs 7.0); the extraction prompts and
+  LLM settings are byte-identical, so it is GPT-4o sampling. The same
+  locus re-run gives the same profile fact set in only 11-17 of 30 users.
+- The kernel block costs more prompt tokens (Qwen 437 vs 314): header,
+  instruction line, footer and a 12-digit timestamp per line. It always
+  puts profile first; native's Mem0 order does in 7-9 of 30 users.
+- The judge never sees the block; its reasoning cites the kernel-side
+  answers omitting tools and language.
+- 2×2 ablation on Qwen (format × facts+order, 2 answers per user):
+  kernel 3.60 / native 3.87 profile; neither factor alone moves it
+  (+0.03, +0.00); total +0.27 [−0.05, +0.58], integration +0.30
+  [+0.04, +0.56].
+
+Verdict: not fewer facts (a), not the judge (c); mostly answer noise
+(temperature 1.0, one answer per user), with a residual ~0.3 that needs
+the whole native block (b). Fix: Subtask 9d.
+
 ## Open decisions
 
 None.
@@ -508,7 +656,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
 - Cerebrum `tests/agents`: 19 failures, 2 errors at
   `neurips-subtask-03` (one flaky test makes it 19 or 20); unchanged at
   `neurips-subtask-07` (AIOS 310 passed, Cerebrum 303 passed) and
-  `neurips-subtask-08` (AIOS 315 passed, Cerebrum 307 passed). The names
+  `neurips-subtask-08` (AIOS 315 passed, Cerebrum 307 passed) and
+  `neurips-subtask-09` (AIOS 321 passed, Cerebrum 340 passed). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -580,17 +729,20 @@ These fail on `workshop-postrun` too and are not caused by later work.
     the reply; the replicated assistant's runs synchronously after it.
     Both are outside measured latency, and the next trial is a new user,
     so neither can affect a score here (docs/REPLICATED_LOGIC.md).
-20. Comparisons between conditions are unpaired: the harness generates
-    each trial's user with an LLM, without a seed, so two cells never
-    score the same users. A 30-trial Llama cell moved by up to 0.53
-    between two draws of the same condition (Subtask 8). Paired
-    comparisons need a fixed dataset on this branch, ported by hand,
-    not cherry-picked from `feature/self-improving-memory`.
-21. Llama's writers sometimes return a status payload instead of the
-    schema (`{"status": "success", "message": ...}`), and it is stored
-    as the memory: 1-10 of 30 task-context writes per Llama cell in
-    Subtask 8, in every locus. The writers do not validate their
-    extraction.
+20. Fixed in Subtask 9: cells are paired on the fixed dataset
+    `users_v1` (`pilot_v1` = its first 30 users).
+21. Fixed in Subtask 9: writers validate their extraction, retry twice,
+    and on failure store nothing and fail the trial (`writer_failed`).
+22. `users_v1` is skewed: 122 of 150 users prefer Python (the rest
+    JavaScript), and Visual Studio Code, Docker, Git and Postman make up
+    most tools; 104 distinct queries, one asked 17 times. Fine for
+    paired locus comparisons; a limit on any claim about attribute
+    coverage.
+23. With `memory.mem0.infer` one write can store several Mem0 facts but
+    returns only the first id, so a later `update_memory` by that id
+    replaces one fact and leaves the others. Harmless in single-write
+    trials (pilot_v1); the accumulating benchmark needs an update rule
+    for extracted facts.
 
 ## Fixed
 
