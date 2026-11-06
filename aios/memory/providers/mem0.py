@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
-from cerebrum.utils.usage import count_embeddings
+from cerebrum.utils.usage import count_embeddings, seed_mem0_llm
 
 from .base import (
     Candidate,
@@ -111,6 +111,8 @@ class Mem0Provider(MemoryProvider):
             self.default_user_id = config.get("user_id", "default")
             self.default_agent_id = config.get("agent_id")
             self.backend_extraction = bool(config.get("infer", False))
+            # memory.backend_llm.seed, set on every client built here.
+            self._llm_seed = config.get("llm_seed")
             
             # Build Mem0 configuration
             mem0_config = {}
@@ -204,6 +206,7 @@ class Mem0Provider(MemoryProvider):
                 # Use default configuration
                 self.client = Memory()
             self._count_embeddings(self.client)
+            seed_mem0_llm(self.client, self._llm_seed)
                 
         except Exception as e:
             from . import ProviderInitializationError
@@ -494,6 +497,7 @@ class Mem0Provider(MemoryProvider):
             # Create the per-user Memory instance.
             client = Memory.from_config(user_config)
             self._count_embeddings(client)
+            seed_mem0_llm(client, getattr(self, "_llm_seed", None))
             if self._synced_llm is not None:
                 client.llm = self._synced_llm
 

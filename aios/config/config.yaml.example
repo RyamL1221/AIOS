@@ -96,7 +96,11 @@ memory:
   backend_llm:
     provider: "azure_openai"
     model: "gpt-4o"
-    temperature: 0.1
+    # Fixed decoding for Mem0's own extraction, as for the assistant and
+    # writers (Subtask 10; 0.1 with no seed before). Azure treats the
+    # seed as best effort.
+    temperature: 0.0
+    seed: 20261105
 
   # In-house provider (provider: "in-house"): verbatim memories in one
   # Chroma collection per user, cosine similarity as the score.

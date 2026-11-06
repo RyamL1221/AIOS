@@ -57,9 +57,11 @@ def provider_config(
             # assistant model.
             from cerebrum.utils.usage import mem0_llm_config
 
-            mem0_config["llm"] = mem0_llm_config(
-                memory_config.get("backend_llm") or {}
-            )
+            backend_llm = memory_config.get("backend_llm") or {}
+            mem0_config["llm"] = mem0_llm_config(backend_llm)
+            # Mem0's LLM config has no seed; the provider sets it on
+            # each client it builds (Subtask 10).
+            mem0_config["llm_seed"] = backend_llm.get("seed")
         return mem0_config
     elif provider_type == "zep":
         return memory_config.get("zep", {})

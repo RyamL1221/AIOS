@@ -158,3 +158,53 @@ def test_without_infer_content_is_stored_verbatim(tmp_path):
     ]
     assert llm.prompts == []
     provider.close()
+
+
+SEEDED_LLM = dict(BACKEND_LLM, temperature=0.0, seed=7)
+
+
+def test_provider_config_carries_the_backend_llm_seed():
+    """Subtask 10: Mem0's extraction runs at the fixed decoding; its LLM
+    config has no seed, so the seed travels beside it."""
+    config = provider_config("mem0", {
+        "mem0": {"infer": True}, "backend_llm": SEEDED_LLM,
+    })
+    assert config["llm"]["config"]["temperature"] == 0.0
+    assert config["llm_seed"] == 7
+    unseeded = provider_config("mem0", {
+        "mem0": {"infer": True}, "backend_llm": BACKEND_LLM,
+    })
+    assert unseeded["llm_seed"] is None
+
+
+@needs_ollama
+def test_every_client_extracts_with_the_seed(tmp_path, monkeypatch):
+    """The default client and each per-user client send the seed and
+    temperature 0 on Mem0's extraction call."""
+    import litellm
+
+    memory_config = {
+        "mem0": {"user_id": "default", "infer": True, "vector_store": {
+            "provider": "chroma", "config": {
+                "collection_name": "seeded",
+                "path": str(tmp_path / "mem0"),
+            }}},
+        "backend_llm": SEEDED_LLM,
+    }
+    provider = Mem0Provider()
+    provider.initialize(provider_config("mem0", memory_config))
+    calls = []
+
+    def completion(**params):
+        calls.append(params)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(litellm, "supports_function_calling",
+                        lambda model: True)
+    for client in (provider.client, provider._get_client_for_user(USER)):
+        assert client.llm.seed == 7
+        with pytest.raises(RuntimeError):
+            client.llm.generate_response([{"role": "user", "content": "x"}])
+    assert [(c["seed"], c["temperature"]) for c in calls] == [(7, 0.0)] * 2
+    provider.close()
