@@ -149,6 +149,8 @@ class MemoryPipeline:
         metadata = note.metadata
         if not metadata.get("user_id"):
             metadata["user_id"] = user_id or agent_name
+        # Stored under the resolver's canonical id (HETEROGENEITY.md).
+        metadata["user_id"] = self.resolver.canonical(metadata["user_id"])
         # The visibility rule keys on owner_agent, so a write without
         # one would be invisible even to its author.
         if not metadata.get("owner_agent"):
@@ -188,6 +190,7 @@ class MemoryPipeline:
         find a row. Uses the caller's user_id when given; otherwise tries
         the agent's own scope, then the provider's default.
         """
+        user_id = self.resolver.canonical(user_id)
         scopes = [user_id] if user_id else [agent_name, None]
         for scope in scopes:
             found = self.provider.get(memory_id, scope)
@@ -205,6 +208,7 @@ class MemoryPipeline:
         the agent's. Raises ``ProviderError``. Held against the barrier
         like a write, so a retrieval accepted after it reads the new
         content; released on every path."""
+        user_id = self.resolver.canonical(user_id)
         if barrier_seq is None:
             barrier_seq = (
                 self.barrier.acquire(user_id)
@@ -301,6 +305,7 @@ class MemoryPipeline:
             "after_budget": 0,
             "tokens_estimated": 0,
             "injected_memories": [],
+            "block_text": "",
             "format_ms": 0.0,
         }
         unchanged = diagnostics["prompt_tokens_before"]

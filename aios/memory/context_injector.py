@@ -115,6 +115,7 @@ class ContextInjector:
                 "after_budget": 0,
                 "tokens_estimated": 0,
                 "injected_memories": [],
+                "block_text": "",
                 "format_ms": 0.0,
             })
 

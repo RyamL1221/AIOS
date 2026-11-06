@@ -19,6 +19,8 @@ class KernelRetrievalDouble:
     _usage_tag = staticmethod(MemoryManager._usage_tag)
     _analyze_query_to_memory = MemoryManager._analyze_query_to_memory
     stamp_syscall = MemoryManager.stamp_syscall
+    canonical_user_id = MemoryManager.canonical_user_id
+    canonicalize_request = MemoryManager.canonicalize_request
     _resolve_user_id = MemoryManager._resolve_user_id
     _await_pending_writes = MemoryManager._await_pending_writes
     _fetch_candidates = MemoryManager._fetch_candidates

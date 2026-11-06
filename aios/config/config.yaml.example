@@ -102,6 +102,13 @@ memory:
     temperature: 0.0
     seed: 20261105
 
+  # The kernel's identity rules (Subtask 10, docs/HETEROGENEITY.md):
+  # every request's user id is canonicalized once, at acceptance.
+  # Replicated and native agents resolve identity themselves.
+  identity:
+    casefold: true
+    email_domains: ["users.example"]
+
   # In-house provider (provider: "in-house"): verbatim memories in one
   # Chroma collection per user, cosine similarity as the score.
   chroma_inhouse:

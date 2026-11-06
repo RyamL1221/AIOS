@@ -536,6 +536,10 @@ async def get_memory_config():
         # (docs/REPLICATED_LOGIC.md).
         "pipeline": manager.pipeline_settings().as_dict(),
         "pipeline_version": PIPELINE_VERSION,
+        # The kernel's identity rules (memory.identity). Not part of
+        # ``pipeline``: replicated agents resolve identity themselves
+        # (docs/HETEROGENEITY.md).
+        "identity": manager.identity_rules.as_dict(),
     }
 
 
@@ -545,6 +549,9 @@ async def get_memory_cost(user_id: str, wait: float = 5.0):
     and embedding calls recorded for one trial's user
     (``cerebrum.utils.usage``). Waits up to ``wait`` seconds for calls
     still being recorded. Reading empties the record."""
+    manager = active_components.get("memory")
+    if manager is not None:  # usage is tagged with canonical ids
+        user_id = manager.canonical_user_id(user_id)
     records = await asyncio.to_thread(
         backend_usage.ACCUMULATOR.take, user_id, wait
     )

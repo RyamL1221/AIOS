@@ -140,6 +140,29 @@ def block_contents(text: str) -> List[str]:
     return out
 
 
+# Metadata a writer may attach to say who wrote a memory for whom; the
+# pipeline copies it into the diagnostics and never reads it.
+PROVENANCE_FIELDS = ("provenance_agent", "provenance_user")
+
+
+def injected_entry(mem: dict) -> Dict[str, Any]:
+    """One injected memory in the diagnostics: id, owner, type, score,
+    and the stored ``user_id`` / ``sharing_policy`` and provenance the
+    judge-free measures read (docs/HETEROGENEITY.md)."""
+    metadata = mem.get("metadata") or {}
+    entry = {
+        "memory_id": mem.get("memory_id"),
+        "owner_agent": metadata.get("owner_agent", ""),
+        "memory_type": memory_type_of(mem),
+        "match_score": mem.get("score"),
+        "user_id": metadata.get("user_id", ""),
+        "sharing_policy": metadata.get("sharing_policy", ""),
+    }
+    for key in PROVENANCE_FIELDS:
+        entry[key] = metadata.get(key)
+    return entry
+
+
 class Formatter:
     """Builds the memory block for one pipeline."""
 
@@ -206,17 +229,7 @@ class Formatter:
         diagnostics: Dict[str, Any] = {
             "injected_count": len(kept),
             "after_budget": len(kept),
-            "injected_memories": [
-                {
-                    "memory_id": mem.get("memory_id"),
-                    "owner_agent": (mem.get("metadata") or {}).get(
-                        "owner_agent", ""
-                    ),
-                    "memory_type": memory_type_of(mem),
-                    "match_score": mem.get("score"),
-                }
-                for mem in kept
-            ],
+            "injected_memories": [injected_entry(mem) for mem in kept],
             "source_agents": sorted({
                 (mem.get("metadata") or {}).get("owner_agent", "")
                 for mem in kept
@@ -227,6 +240,9 @@ class Formatter:
             "tokens_estimated": estimate_tokens(text) if text else 0,
             "block_format": self.block_format,
             "block_recency": self.recency,
+            # The block as sent, for judge-free checks of what reached
+            # the consumer (docs/HETEROGENEITY.md).
+            "block_text": text,
             "format_ms": (time.perf_counter() - started) * 1000,
         }
         return text, diagnostics

@@ -19,6 +19,7 @@ from .pipeline import (
     SHARED_FETCH_FACTOR,  # noqa: F401  (re-exported for callers)
     UPDATE_PROTECTED_METADATA,  # noqa: F401
     IdentityResolver,
+    IdentityRules,
     MemoryPipeline,
     PipelineSettings,
     Selector,
@@ -43,6 +44,7 @@ class _KernelIdentity(IdentityResolver):
         super().__init__(
             registry=getattr(manager, "_known_user_ids", None),
             logger=logger,
+            rules=getattr(manager, "identity_rules", None),
         )
         self._manager = manager
 
@@ -132,6 +134,13 @@ class MemoryManager:
         # ContextInjector (inline waits). Reads memory.write_barrier.*
         # once at construction; defaults are coded in the barrier so
         # omitting the section is safe.
+        # The kernel's one identity rule set (memory.identity): every
+        # request's user id is canonicalized once, at acceptance
+        # (docs/HETEROGENEITY.md). Validated here, at startup.
+        self.identity_rules = IdentityRules.from_config(
+            memory_config.get("identity")
+        )
+
         barrier_config = memory_config.get("write_barrier", {}) or {}
         self._barrier_config = dict(barrier_config)
         self.barrier = MemoryWriteBarrier(config=barrier_config)
@@ -263,6 +272,9 @@ class MemoryManager:
         """
         query = memory_syscall.query
         operation = query.operation_type
+        # Canonical ids before stamping, so the barrier keys of a write
+        # and a read for the same user agree.
+        self.canonicalize_request(query)
         if operation in ("add_memory", "add_agentic_memory"):
             user_id = query.params.get("metadata", {}).get("user_id")
             if user_id:
@@ -277,6 +289,27 @@ class MemoryManager:
                 memory_syscall.barrier_snapshot = self.barrier.snapshot(
                     user_id
                 )
+
+    def canonical_user_id(self, user_id: Optional[str]) -> Optional[str]:
+        """``user_id`` under the kernel's identity rules."""
+        rules = getattr(self, "identity_rules", None)
+        return rules.canonical(user_id) if rules else user_id
+
+    def canonicalize_request(self, query) -> None:
+        """Rewrite a memory request's ``user_id`` and
+        ``metadata.user_id`` to canonical form, in place. Idempotent:
+        runs at acceptance (``stamp_syscall``) and again when the
+        request is served, for callers that skip the executor."""
+        params = getattr(query, "params", None)
+        if not isinstance(params, dict):
+            return
+        if params.get("user_id"):
+            params["user_id"] = self.canonical_user_id(params["user_id"])
+        metadata = params.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("user_id"):
+            metadata["user_id"] = self.canonical_user_id(
+                metadata["user_id"]
+            )
 
     @staticmethod
     def _update_user_id(query: MemoryQuery) -> Optional[str]:
@@ -375,6 +408,7 @@ class MemoryManager:
         if not isinstance(memory_syscall, MemorySyscall):
             raise TypeError(f"Expected MemorySyscall, got {type(memory_syscall)}")
         
+        self.canonicalize_request(memory_syscall.query)
         with tagged(self._usage_tag(memory_syscall)):
             return self._address_request(memory_syscall)
 
@@ -391,6 +425,7 @@ class MemoryManager:
 
     def _address_request(self, memory_syscall) -> MemoryResponse:
         query = memory_syscall.query
+        self.canonicalize_request(query)
         operation_type = query.operation_type
         
         if operation_type == "add_memory":

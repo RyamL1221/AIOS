@@ -25,7 +25,7 @@ from .facade import (
     note_from_request,
 )
 from .formatter import TYPE_ORDER, Formatter, estimate_tokens
-from .identity import IdentityResolver
+from .identity import IdentityResolver, IdentityRules
 from .selector import SHARED_FETCH_FACTOR, Selector
 from .settings import PipelineSettings
 from .visibility import Visibility, apply_sharing_filter
@@ -49,6 +49,7 @@ __all__ = [
     "UPDATE_PROTECTED_METADATA",
     "Formatter",
     "IdentityResolver",
+    "IdentityRules",
     "MemoryPipeline",
     "MemoryWriteBarrier",
     "PipelineSettings",
