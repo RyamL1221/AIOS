@@ -4,6 +4,15 @@ The models every reported NeurIPS 2027 result uses (decided in
 Subtask 9, 2026-11-04). A run records its assistant and judge model in
 the results file. Changing an entry here needs a new baseline.
 
+## Decoding
+
+Every assistant and writer call: temperature 0.0, seed 20261105 (Subtask
+9d), recorded in `experiment_metadata.decoding` and per trial. Ollama is
+deterministic under it; Azure GPT-4o treats the seed as best effort.
+Mem0's internal LLM keeps its own setting (below), so Mem0 cells still
+vary between runs (DEV_STATUS known issue 26).
+Writer retries: see the writer-failure rule below.
+
 ## Assistant models
 
 The assistant model also runs the two writers' extraction calls in
@@ -21,6 +30,12 @@ writers sometimes return a status payload instead of the schema (known
 issue 21): since Subtask 9 such an extraction is retried, and a writer
 that still fails stores nothing and its trial is counted, not scored.
 
+**Writer-failure rule.** A cell in which more than 20% of trials (more
+than 6 of 30) have a writer failure does not report scores for that
+model; it is re-run after a fix or the model is dropped from that cell.
+Since the Subtask 9d follow-up a retry samples (temperature 0.3, seed +
+n) instead of repeating the greedy first attempt.
+
 ## Stress-sweep pair
 
 **GPT-4o and Qwen-2.5:7B.** One API model and the local model whose
@@ -31,7 +46,7 @@ than writer failures.
 
 | Role | Model | Version |
 |---|---|---|
-| Judge | `gpt-5.4:azure` | `gpt-5.4-2026-03-05`, judge prompt v2 |
+| Judge | `gpt-5.4:azure` | `gpt-5.4-2026-03-05`, judge prompt v2; greedy (temperature 0, seed 20261105) since the Subtask 9d follow-up, recorded as `judge_temperature` / `judge_seed` |
 | Mem0's internal LLM (`memory.backend_llm`), every Mem0 condition | Azure `gpt-4o` through LiteLLM | as above, temperature 0.1 |
 | Embedding (`memory.embedding`), every backend | `nomic-embed-text` on Ollama | digest `0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f`, 768 dimensions |
 | Dataset generation (`users_v1`) | Azure `gpt-4o` through LiteLLM | as above, seed 20261104 |

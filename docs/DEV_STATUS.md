@@ -32,6 +32,7 @@ do not describe this branch.
 | 8 | Memory pipeline library; replicated-logic locus condition | Done |
 | 9 | Fixed paired dataset; stored-content parity; writer validation | Done |
 | 9c | Explain the `kernel_shared` deficit (investigation) | Done |
+| 9d | Shared compact block; fixed decoding; mem0ai pinned; greedy judge; re-baseline | Done |
 
 ### Subtask 1
 
@@ -585,7 +586,8 @@ failed, all Llama writer failures after two retries (Mem0
 `kernel_shared`, in-house `kernel_shared`, in-house native; one each),
 stored nothing and were not judged. Llama retried a writer in 5-11
 trials per cell, GPT-4o and Qwen in none. **Superseded by Subtask 9d**,
-which re-runs it under fixed decoding and the shared block renderer.
+which re-runs it under fixed decoding and the shared block renderer;
+use the Subtask 9d table (greedy judge), not this one.
 
 Paired, other − `kernel_shared` on the same users, 95% t CI (bold: CI
 excludes 0):
@@ -642,6 +644,132 @@ Verdict: not fewer facts (a), not the judge (c); mostly answer noise
 (temperature 1.0, one answer per user), with a residual ~0.3 that needs
 the whole native block (b). Fix: Subtask 9d.
 
+### Subtask 9d
+
+- **Shared block renderer.** `aios/memory/pipeline/formatter.py`
+  `format_block` renders the block for the kernel and the replicated
+  agents: `compact` (default) is the line "Known about this user:" and
+  one bullet per memory, with no delimiters, instruction line or
+  per-line timestamp (timestamps stay in metadata). `legacy` is the
+  pre-9d kernel block, kept for the Subtask 19 ablation. Optional
+  `block_recency` appends a relative age ("(2 hours ago)"), off by
+  default. Config `memory.block_format` / `memory.block_recency`,
+  validated at startup, reported in `/memory/config` `pipeline`, copied
+  by the replicated agents and recorded per trial in
+  `injection_diagnostics` (`native` on native trials, which keep their
+  own renderer). `is_memory_block` / `block_contents` parse both
+  formats.
+- **Fixed decoding.** Temperature 0.0 and seed 20261105 on every
+  assistant and writer call in every condition. `/query` drops
+  `LLMQuery.temperature`, so the harness puts both on each `llms` entry
+  (`with_decoding`); the adapter applies them (`decoding_for`), LiteLLM
+  forwards the seed to Ollama and Azure, and the reply envelope carries
+  `decoding`. Recorded in `ExperimentMetadata.decoding` and per trial.
+  `--temperature`, `--seed none`, `--sampled` override it.
+- **Determinism, 5 users, two runs each:** Qwen gave byte-identical
+  answers on 5/5. GPT-4o got identical prompts, but its answers
+  differed on every user (similarity 0.22-0.69): Azure treats the seed
+  as best effort.
+- **Writer retries sample** (follow-up). With greedy decoding a retry
+  would repeat the failed first attempt. Attempt 0 keeps the run's
+  decoding; attempt n uses temperature 0.3 and seed + n
+  (`attempt_llms`). Each trial records `writer_attempt_settings`.
+- **Greedy judge** (follow-up). The judge runs at temperature 0.0 and
+  seed 20261105 (`JUDGE_TEMPERATURE`, `JUDGE_SEED`), recorded as
+  `judge_temperature` / `judge_seed`. The prompt is unchanged, so it
+  stays judge v2. `rejudge.py` also records the source judge's
+  decoding. Every later run uses this judge.
+- **mem0ai 2.0.2** pinned in both venvs and both `requirements.txt`
+  (closes known issue 17). `tests/environment/test_mem0_pin.py`.
+- **Tests.**
+  - AIOS: `test_block_renderer.py`, `test_decoding.py` (decoding
+    reaches the LiteLLM call and the envelope), `test_mem0_pin.py`.
+  - AIOS: `test_pipeline_library.py` is now parametrized over both
+    formats: the kernel and the library build byte-identical blocks.
+  - Cerebrum: `test_fixed_decoding.py`, `test_retry_and_judge_decoding.py`
+    and `_replicated_checks.py` (the replicated block is compact and
+    follows the kernel's `legacy` flag).
+- **Smoke.** `scripts/retrieval_smoke.py` checks the block format. Its
+  verbatim-storage checks are skipped when `backend_extraction` is on.
+- **Docs.** `docs/MODELS.md` covers decoding, the writer-failure rule
+  and the judge decoding.
+
+**pilot_v1 re-baseline** (`Cerebrum/results/pilot_v1_9d/`, PROVENANCE
+there): 10 cells × 3 models × 30 users, fixed decoding, compact block,
+run 2026-11-05 17:06 to 2026-11-06 00:41. All 900 trials completed. No
+writer failed or retried in any cell; pilot_v1 had 3 Llama failures and
+5-11 retried trials per Llama cell. So no Llama cell breaks the
+writer-failure rule (more than 6 of 30) and none was re-run.
+
+The Qwen Mem0 `kernel_shared` cell was re-run. I ran the Cerebrum suite
+against the live kernel during its first run (known issue 25). The
+re-run used run id `p9dr-...` and the same code; the original is in
+`repo-artifacts/Cerebrum/pilot_v1_9d_contaminated/`.
+
+The re-judge with the greedy judge (`results/pilot_v1_9d_greedy/`)
+covered the same 900 responses: judge calls only, none failed.
+Agreement with the run's sampled judge, pooled over the 720
+non-`kernel_private` trials:
+
+| Dimension | Sampled mean | Greedy mean | Spearman ρ | Changed > 1 pt | Exact |
+|---|---|---|---|---|---|
+| Profile | 3.783 | 3.774 | 0.893 | 0.8% | 84.0% |
+| Task | 4.789 | 4.786 | 0.974 | 0.0% | 99.2% |
+| Integration | 3.761 | 3.754 | 0.929 | 0.3% | 88.8% |
+
+Only one cell mean moved by more than 0.25: Qwen in-house
+`kernel_shared` profile, 3.27 → 3.00 (exact agreement 46.7%). Per
+cell: `results/pilot_v1_9d_greedy/judge_agreement.csv`.
+
+The greedy judge is not fully repeatable. Re-judging the 90 Mem0
+`kernel_shared` trials a second time gave exact agreement of 92.2%
+(profile), 100% (task) and 94.4% (integration); sampled vs greedy on
+those cells was about 84% on profile. Greedy decoding about halves the
+judge noise.
+
+**This table replaces Subtask 9's.** Greedy judge, paired on the same
+users, other − `kernel_shared`, 95% t CI. No CI excludes 0.
+Equivalence is TOST at ±0.25 with p < 0.05.
+
+| Model | Backend | Other | n | Profile | Task | Integration |
+|---|---|---|---|---|---|---|
+| GPT-4o | Mem0 | replicated | 30 | +0.00 [−0.20, +0.20] | +0.00 | +0.03 [−0.15, +0.22] |
+| GPT-4o | Mem0 | native | 30 | +0.03 [−0.15, +0.22] | +0.00 | +0.00 [−0.17, +0.17] |
+| GPT-4o | in-house | replicated | 30 | +0.20 [−0.03, +0.43] | +0.00 | +0.20 [−0.01, +0.41] |
+| GPT-4o | in-house | native | 30 | +0.23 [−0.04, +0.51] | +0.00 | +0.13 [−0.12, +0.39] |
+| Qwen | Mem0 | replicated | 30 | −0.27 [−0.59, +0.06] | +0.07 [−0.10, +0.23] | −0.10 [−0.40, +0.20] |
+| Qwen | Mem0 | native | 30 | −0.10 [−0.54, +0.34] | −0.03 [−0.15, +0.09] | −0.07 [−0.47, +0.34] |
+| Qwen | in-house | replicated | 30 | +0.17 [−0.08, +0.41] | +0.00 | +0.13 [−0.03, +0.30] |
+| Qwen | in-house | native | 30 | +0.20 [−0.33, +0.73] | −0.07 [−0.16, +0.03] | +0.13 [−0.32, +0.59] |
+| Llama | Mem0 | replicated | 30 | +0.13 [−0.06, +0.32] | +0.00 [−0.20, +0.20] | +0.03 [−0.12, +0.19] |
+| Llama | Mem0 | native | 30 | −0.03 [−0.30, +0.23] | −0.03 [−0.22, +0.15] | +0.00 [−0.28, +0.28] |
+| Llama | in-house | replicated | 30 | +0.00 [−0.14, +0.14] | +0.03 [−0.03, +0.10] | +0.10 [−0.01, +0.21] |
+| Llama | in-house | native | 30 | −0.17 [−0.62, +0.28] | +0.03 [−0.12, +0.19] | −0.07 [−0.48, +0.35] |
+
+- **The Qwen Mem0 native gap is gone:** +0.63 [+0.18, +1.09] profile in
+  Subtask 9, −0.10 [−0.54, +0.34] now.
+- **Equivalent within ±0.25** (TOST):
+  - GPT-4o Mem0 replicated and native, on every dimension.
+  - Llama Mem0 replicated, task and integration.
+  - Llama in-house replicated, every dimension.
+- **Not shown equivalent at n = 30:** the in-house and Qwen comparisons
+  are inconclusive, with wide CIs.
+- **Cell means** (profile / integration):
+  - GPT-4o: 4.53-4.77 / 4.57-4.77.
+  - Qwen: Mem0 3.53-3.80 / 3.60-3.70; in-house 3.00-3.20 / 3.07-3.20.
+  - Llama: 3.87-4.20 / 3.90-4.10.
+  - `kernel_private`: 1.00-1.03 / 1.00, as designed.
+  - Baselines: naive_concat 2.93-4.67 profile; vanilla_rag 1.90-2.30.
+- **Cost per trial** (unchanged from Subtask 9):
+  - Mem0 cells: 0.062-0.073 USD.
+  - In-house GPT-4o: about 0.007 USD.
+  - Local models: 0 USD in API calls.
+- **Files:**
+  - Per-cell means, tokens, latency and cost:
+    `results/pilot_v1_9d_greedy/cells.csv`.
+  - Paired table with p-values and TOST: `paired.csv`.
+  - The sampled-judge versions are in `results/pilot_v1_9d/`.
+
 ## Open decisions
 
 None.
@@ -657,7 +785,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
   `neurips-subtask-03` (one flaky test makes it 19 or 20); unchanged at
   `neurips-subtask-07` (AIOS 310 passed, Cerebrum 303 passed) and
   `neurips-subtask-08` (AIOS 315 passed, Cerebrum 307 passed) and
-  `neurips-subtask-09` (AIOS 321 passed, Cerebrum 340 passed). The names
+  `neurips-subtask-09` (AIOS 321 passed, Cerebrum 340 passed) and
+  `neurips-subtask-09d` (AIOS 349 passed, Cerebrum 353 passed; run with
+  no kernel listening, see known issue 25). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -715,11 +845,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
     issue 10) is tagged with the agent name, not the trial's user, so
     its embedding call is not counted in the trial. It is harness
     instrumentation, not part of any condition.
-17. The harness venv has `mem0ai` 2.0.2, the kernel 2.0.0. 2.0.2 builds
-    its default OpenAI LLM when constructed and fails without a key, so
-    the replicated Mem0 agents give it `memory.backend_llm` through
-    LiteLLM. Writes are verbatim (`infer=False`), so it is never called;
-    the stored rows and search are the same code as the kernel's.
+17. Fixed in Subtask 9d: `mem0ai` is 2.0.2 in both venvs, pinned in
+    both `requirements.txt`. (2.0.2 builds its default OpenAI LLM when
+    constructed, so the replicated Mem0 agents still give it
+    `memory.backend_llm` through LiteLLM.)
 18. Cerebrum has a tracked `aios/` stub, imported by some of its tests,
     that shadows the kernel's `aios` package in the same interpreter.
     The replicated agents' checks therefore run in a subprocess, and
@@ -743,6 +872,40 @@ These fail on `workshop-postrun` too and are not caused by later work.
     replaces one fact and leaves the others. Harmless in single-write
     trials (pilot_v1); the accumulating benchmark needs an update rule
     for extracted facts.
+24. Azure GPT-4o treats the seed as best effort. Under fixed decoding,
+    GPT-4o answers differ between runs (5 of 5 users), as do the greedy
+    judge's scores (8% of profile scores differ on a test-retest). Qwen
+    and Llama on Ollama are deterministic. GPT-4o and judge noise
+    remain, so compare cells paired and with CIs.
+25. Cerebrum on this branch has no `tests/conftest.py` kernel guard (it
+    exists only on `feature/self-improving-memory`), so `pytest
+    tests/agents` sends real requests to any kernel on port 8000. On
+    2026-11-05 it did so during the 9d re-baseline: test user
+    `eve_davis__kernel_private`, 17:22-17:24, during Qwen Mem0
+    `kernel_shared` trials 0-2. That cell was re-run; two suite
+    failures in that run came from the live kernel. Rule 5 is the only
+    protection. Porting the guard (by hand) is a candidate for
+    Subtask 10.
+26. Mem0's own extraction (`memory.backend_llm`, Azure gpt-4o,
+    temperature 0.1, no seed) is outside the fixed decoding, so a Mem0
+    cell is not repeatable. In the re-run Qwen `kernel_shared` cell the
+    injected count differed from the first run in 14 of 30 users and no
+    answer matched. In-house cells do not have this. Putting it under
+    fixed decoding is an open choice and would need the Mem0 cells
+    re-run.
+27. Judge retries repeat at greedy decoding: a retry after an
+    unparseable reply gets the same reply, so only transport errors
+    benefit. No re-judge trial needed a retry (900 of 900 in one
+    attempt). A sampled retry schedule like the writers' is an option.
+28. `retrieval_smoke.py`'s verbatim-storage checks are skipped when
+    Mem0 `infer` is on (extracted facts are not the written text). They
+    run, and pass, with `infer` off.
+29. The Subtask 9c ablation called Ollama with `num_ctx` 16384. This
+    branch's adapter sets no `num_ctx` (Ollama's default applies).
+    pilot_v1 prompts are short, but a longer accumulating benchmark
+    needs it checked.
+30. `chromadb` is 1.5.9 in the harness venv and 1.5.8 in the kernel's.
+    Only `mem0ai` is pinned across both.
 
 ## Fixed
 
