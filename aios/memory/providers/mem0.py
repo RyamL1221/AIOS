@@ -11,6 +11,7 @@ similarity, so results come back least similar first, clamped at 1.0
 (docs/PROVIDER_CONTRACT.md, "Mem0").
 """
 import copy
+import hashlib
 import logging
 import os
 import re
@@ -384,9 +385,18 @@ class Mem0Provider(MemoryProvider):
             prefix = "mem0"
             max_user_len = 63 - len(prefix) - 1
 
-        sanitized_user_id = (
-            sanitized_user_id[:max_user_len].strip("_-")
-        )
+        if len(sanitized_user_id) > max_user_len:
+            # Too long: keep a prefix and a hash of the full id, so two
+            # ids sharing a long prefix never share a collection (known
+            # issue 31). Ids that fit keep their name unchanged.
+            digest = hashlib.sha256(
+                str(user_id).encode("utf-8")
+            ).hexdigest()[:10]
+            keep = max_user_len - len(digest) - 1
+            head = sanitized_user_id[:keep].strip("_-") if keep > 0 else ""
+            sanitized_user_id = (
+                f"{head}_{digest}" if head else digest[:max_user_len]
+            )
 
         if not sanitized_user_id:
             sanitized_user_id = "default"
