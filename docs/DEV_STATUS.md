@@ -33,6 +33,7 @@ do not describe this branch.
 | 9 | Fixed paired dataset; stored-content parity; writer validation | Done |
 | 9c | Explain the `kernel_shared` deficit (investigation) | Done |
 | 9d | Shared compact block; fixed decoding; mem0ai pinned; greedy judge; re-baseline | Done |
+| 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 
 ### Subtask 1
 
@@ -770,6 +771,106 @@ Equivalence is TOST at ±0.25 with p < 0.05.
   - Paired table with p-values and TOST: `paired.csv`.
   - The sampled-judge versions are in `results/pilot_v1_9d/`.
 
+### Subtask 10
+
+Spec: `docs/HETEROGENEITY.md`, written before the variant code (AIOS
+`3ca7d2c`).
+
+- **Housekeeping**, each its own commit:
+  - The live-kernel guard is ported to Cerebrum `tests/conftest.py`
+    (Cerebrum `8ed13d5`; closes known issue 25). The 4
+    `test_kernel_private_unit.py` tests that passed only because the
+    connection failed are now marked `live_kernel`.
+  - Mem0's extraction runs at temperature 0.0, seed 20261105, in both
+    loci (AIOS `cf7a082`, Cerebrum `2ca7fc7`; issue 26).
+  - `chromadb==1.5.9` is pinned in both repos (issue 30).
+- **Variants**: `cerebrum/example/agents/variants/`, one module per
+  variant. `apply_variant` applies a variant to any agent in any locus
+  and restores the agent afterwards. An aspect the locus has no channel
+  for is recorded in `variants_not_applied`; for example, the kernel
+  ignores a consumer's own retrieval settings.
+  - V1: stale version (legacy block, private writes).
+  - V2: identity convention (mixed case plus an email domain).
+  - V3: missing sharing metadata on writes; a V3 consumer ignores
+    visibility.
+  - V4: tuned consumer (k 5, threshold 0.5, budget 1500).
+  - V5: raw-payload writer (JSON with off-schema keys).
+- **Schedule**: `variants/schedule.py`, seeded and identical across
+  loci, so cells pair by trial index. CLI flags: `--heterogeneity
+  0|1|2`, `--variant-seed` (default 20261106). H > 0 requires
+  `--no-judge` and `--method`. Every trial records
+  `variants_applied`.
+- **Kernel identity canonicalization**: config `memory.identity`
+  (`casefold`, `email_domains`). It is applied at syscall acceptance
+  (before the barrier) and in `address_request`. The pipeline library
+  defaults to no rules, so replicated and native agents resolve ids as
+  given.
+- **Judge-free measures** on every trial (`benchmarks/shared_memory/
+  judge_free.py`): `profile_facts_in_block`, `cross_user_rows`,
+  `private_rows_from_others`, `memories_missing`, `raw_payload_rows`.
+  They are computed from the block text and per-row provenance
+  (`provenance_agent` / `provenance_user`, added by the harness to
+  every write and read by no memory logic).
+- **Silent backend failure guard** (Cerebrum `04631f6`, AIOS
+  `da25e2c`). Mem0 logs and swallows its extraction LLM's errors. From
+  a network Azure refused, a native Mem0 cell ran 5 trials with 0
+  backend calls and 0 injected rows, and every trial "completed".
+  - Every writer now reports `stored_rows`.
+  - A trial whose backend extracts fails as `backend_extraction_failed`
+    when a successful writer stored no row, or when the backend
+    recorded no LLM call.
+  - The drivers' `pilot_cell_done.py` then stops instead of moving on.
+
+  This is the project's third silent failure, after the keyword judge
+  fallback (4b) and stored writer status payloads (9): real memory
+  systems fail quietly, and only a layer that sees every write
+  notices. It belongs in the paper's motivation.
+- **Functional check**: Qwen, the first 5 `pilot_v1` users, judge off,
+  every locus × backend × H = 18 cells, 90 trials. None failed or was
+  scored; 0 leaked rows anywhere. Files are in
+  `Cerebrum/results/heterogeneity_check/` (`trials.csv`, `table.md`,
+  PROVENANCE).
+
+| Variant | Kernel (in-house / Mem0) | Replicated (in-house / Mem0) | Native (in-house / Mem0) | Verdict |
+|---|---|---|---|---|
+| V1 task writer (H1 t0) | 1 missing / 1 missing | 1 / 1 missing | 1 / 1 missing | as predicted: private writes are missed everywhere |
+| V1 consumer (H1 t2) | no change (kernel renders) | legacy block, +31 / +38 tokens | legacy block, +30 / +42 tokens | as predicted |
+| V2 task writer (H1 t3) | 0 missing / 0 missing | 1 / 1 missing | 1 / 1 missing | as predicted: only the kernel resolves the alias |
+| V2 consumer (H2 t0) | 0 missing / 0 missing | 2 / 2 missing | 2 / 2 missing | as predicted |
+| V3 profile writer (H1 t4) | 1 missing / 1 missing | 1 / 1 missing | 1 / 1 missing | as predicted: private default; no leaks |
+| V3 consumer (H2 t4) | 0 leaks (not applied) | 0 leaks (not applied: the library enforces) | 0 leaks | no leak opportunity: its writer pair was V2 (schedule) |
+| V4 profile writer (H1 t1) | no change | no change / −2 rows | no change / −1 row | Mem0 noise only |
+| V4 consumer (H2 t1) | kernel keeps 0.0 / k 10, not applied | threshold 0.5: 0 rows (in-house), 1 row (Mem0) | 0 rows / −2 rows | finding: at 0.5 the in-house block is empty |
+| V5 writer (H2 t0, t1) | +1 raw row / 0 raw rows | 0 raw rows | 0 raw rows | finding: see below |
+| V5 consumer (H2 t3) | no change | no change | no change | as predicted: its JSON write lands after the read |
+
+- **Design checks.**
+  - V2, V3: zero kernel leaks, and missing or leak in another locus in
+    12 of 12 trials: PASS.
+  - V4: the kernel keeps its own settings, and replicated after_cap
+    changes: PASS.
+  - V5 raw rows rise: PASS under kernel in-house; FINDING in the other
+    five cells.
+- **Findings** (recorded, not tuned away):
+  - Mem0 extraction re-renders V5's JSON into facts, so no raw row
+    reaches the block, in any locus.
+  - Outside the kernel, the 5-user schedule places V5 writers only at
+    H2, next to a V2 or V4 consumer, and those consumers empty the
+    block first. The V5 writer is therefore not isolated outside the
+    kernel. The replicated unit check (`_heterogeneity_checks.py`)
+    shows it raises raw rows when isolated.
+  - A V4 consumer on in-house at threshold 0.5 injects nothing, since
+    relevant rows score 0.32-0.60. Native Mem0 is barely affected,
+    because its scores saturate near 1.0.
+  - Mem0 cells move by ±2 rows with no variant effect: Azure treats
+    the seed as best effort.
+- **Tests**:
+  - AIOS: `test_identity_rules.py` (20), `test_pilot_cell_done.py`.
+  - Cerebrum: `test_live_kernel_guard.py` (7), `test_heterogeneity.py`
+    (40, including `_heterogeneity_checks.py` in a subprocess),
+    `test_extraction_guard.py` (14), and extraction-seed tests in
+    `test_fixed_decoding.py`.
+
 ## Open decisions
 
 None.
@@ -787,7 +888,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   `neurips-subtask-08` (AIOS 315 passed, Cerebrum 307 passed) and
   `neurips-subtask-09` (AIOS 321 passed, Cerebrum 340 passed) and
   `neurips-subtask-09d` (AIOS 349 passed, Cerebrum 353 passed; run with
-  no kernel listening, see known issue 25). The names
+  no kernel listening, see known issue 25) and `neurips-subtask-10`
+  (AIOS 373 passed; Cerebrum `tests/test_live_kernel_guard.py
+  tests/agents` 412 passed, 4 skipped, the same 19 failures and 2
+  errors). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -877,7 +981,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
     judge's scores (8% of profile scores differ on a test-retest). Qwen
     and Llama on Ollama are deterministic. GPT-4o and judge noise
     remain, so compare cells paired and with CIs.
-25. Cerebrum on this branch has no `tests/conftest.py` kernel guard (it
+25. Fixed in Subtask 10 (Cerebrum `8ed13d5`): the guard is ported;
+    tests that need a kernel are marked `live_kernel`. Before: Cerebrum on this branch had no `tests/conftest.py` kernel guard (it
     exists only on `feature/self-improving-memory`), so `pytest
     tests/agents` sends real requests to any kernel on port 8000. On
     2026-11-05 it did so during the 9d re-baseline: test user
@@ -886,7 +991,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
     failures in that run came from the live kernel. Rule 5 is the only
     protection. Porting the guard (by hand) is a candidate for
     Subtask 10.
-26. Mem0's own extraction (`memory.backend_llm`, Azure gpt-4o,
+26. Fixed in Subtask 10: Mem0's extraction runs at temperature 0.0 and
+    seed 20261105 in both loci. Azure treats the seed as best effort,
+    so Mem0 cells still vary by about ±2 injected rows. Before: Mem0's own extraction (`memory.backend_llm`, Azure gpt-4o,
     temperature 0.1, no seed) is outside the fixed decoding, so a Mem0
     cell is not repeatable. In the re-run Qwen `kernel_shared` cell the
     injected count differed from the first run in 14 of 30 users and no
@@ -904,8 +1011,28 @@ These fail on `workshop-postrun` too and are not caused by later work.
     branch's adapter sets no `num_ctx` (Ollama's default applies).
     pilot_v1 prompts are short, but a longer accumulating benchmark
     needs it checked.
-30. `chromadb` is 1.5.9 in the harness venv and 1.5.8 in the kernel's.
-    Only `mem0ai` is pinned across both.
+30. Fixed in Subtask 10: `chromadb==1.5.9` is pinned in both repos.
+31. The kernel's Mem0 per-user collection names keep only the first 49
+    characters of the user id (`_collection_name_for_user`, prefix
+    `mem0_memories`), with no hash, so two long ids can share a
+    collection. The user filter and the partition check keep their
+    rows apart, so this is not a leak, but a shared collection mixes
+    stores. The native backend adds a hash. Not fixed here.
+32. Mem0 swallows extraction LLM errors (Azure firewall refusals
+    included) and stores nothing. Since Subtask 10 the harness fails
+    such trials (`backend_extraction_failed`). Any other caller of
+    Mem0, including the kernel's own conversation writes, still gets
+    an empty result with no error.
+33. Two Subtask 10 native Mem0 H0 runs were excluded: one was cut off
+    by a laptop shutdown, the other ran from a network Azure refused.
+    Both are in `repo-artifacts/Cerebrum/heterogeneity_check_interrupted/`.
+    The resumed driver also overwrote the first `kernel_agent.log`; the
+    log from the 2026-11-07 resume was archived before the second run.
+34. The heterogeneity schedule's first 5 users never pair a V3 consumer
+    with a V1 or V3 writer, so they give no native leak opportunity,
+    and they place V5 writers outside the kernel only next to a V2 or
+    V4 consumer. A scored heterogeneity run needs more users, or a
+    schedule that guarantees those pairings.
 
 ## Fixed
 
