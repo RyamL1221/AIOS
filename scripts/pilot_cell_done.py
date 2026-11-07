@@ -1,7 +1,8 @@
 """
 Exit 0 if a results file is a finished pilot cell: every trial present,
 and the only failed trials are writer failures (Subtask 9: counted and
-reported, not scored). A judge or pipeline failure needs a re-run.
+reported, not scored). A judge or pipeline failure, or a memory backend
+that failed silently (``backend_extraction_failed``), needs a re-run.
 """
 import json
 import sys
