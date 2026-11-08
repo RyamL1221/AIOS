@@ -28,6 +28,10 @@ class KernelRetrievalDouble:
     _locate_memory = MemoryManager._locate_memory
     _update_memory = MemoryManager._update_memory
     _update_user_id = staticmethod(MemoryManager._update_user_id)
+    _remove_memory = MemoryManager._remove_memory
+    _list_memory = MemoryManager._list_memory
+    _caller_user_id = staticmethod(MemoryManager._caller_user_id)
+    _failure = staticmethod(MemoryManager._failure)
     _can_read = staticmethod(MemoryManager._can_read)
     _can_write = staticmethod(MemoryManager._can_write)
     _merge_and_deduplicate = staticmethod(

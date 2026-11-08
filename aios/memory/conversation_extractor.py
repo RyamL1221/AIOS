@@ -52,6 +52,7 @@ class ConversationExtractor:
         user_message: str,
         assistant_message: str,
         user_id: str | None = None,
+        session: int | None = None,
     ) -> None:
         """Store a conversation pair in a background daemon thread.
 
@@ -68,6 +69,10 @@ class ConversationExtractor:
                 user_id instead of the agent name, keeping
                 it in the same Mem0 scope as profile/task
                 memories written by other agents.
+            session: The caller's current session (benchmark v2),
+                stamped on the stored turn as ``metadata.session``
+                so the block can give it an age in sessions. None
+                stamps nothing.
         """
         if not self.enabled:
             return
@@ -76,6 +81,7 @@ class ConversationExtractor:
         try:
             syscall = self._build_syscall(
                 agent_name, user_message, assistant_message, user_id,
+                session,
             )
             # Stamp here, on the request thread, and not in the
             # background: the chat response must not return before the
@@ -105,13 +111,15 @@ class ConversationExtractor:
         user_message: str,
         assistant_message: str,
         user_id: str | None = None,
+        session: int | None = None,
     ) -> "MemorySyscall":
         """Build the write, as a syscall that only carries data: it goes
         straight to ``address_request`` and is never started or queued.
 
         Uses the resolved user_id when available so the memory lands in
         the same Mem0 scope as profile/task memories written by other
-        agents for this user. Falls back to agent_name.
+        agents for this user. Falls back to agent_name. A ``session``
+        is stamped in the metadata.
         """
         from aios.syscall.memory import MemorySyscall
 
@@ -119,6 +127,9 @@ class ConversationExtractor:
             operation_type="add_memory",
             params=conversation_request(
                 agent_name, user_message, assistant_message, user_id,
+                extra_metadata=(
+                    None if session is None else {"session": session}
+                ),
             ),
         )
         return MemorySyscall(agent_name, query)

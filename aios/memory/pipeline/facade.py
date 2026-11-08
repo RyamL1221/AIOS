@@ -31,6 +31,10 @@ NOTE_FIELDS = (
     "category", "tags",
 )
 
+# ``list_own``'s default size: more rows than any user's store holds, so
+# a listing is complete (a revoke deletes every row it finds).
+LIST_TOP_K = 10_000
+
 _LOCAL = object()
 
 
@@ -58,30 +62,38 @@ def note_from_request(params: Dict[str, Any]) -> MemoryNote:
 def conversation_request(
     agent_name: str, user_message: str, assistant_message: str,
     user_id: Optional[str] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """The write request for the conversation memory after a chat turn:
     the pair as text, private to the assistant, in the user's scope
-    (the agent's own scope without a user)."""
+    (the agent's own scope without a user). ``extra_metadata`` is
+    merged over that metadata, as a deployment adds it to every write:
+    provenance, or the ``session`` the turn belongs to (benchmark
+    v2)."""
+    metadata = {
+        "user_id": user_id or agent_name,
+        "owner_agent": agent_name,
+        "memory_type": "conversation",
+        "sharing_policy": "private",
+    }
+    metadata.update(extra_metadata or {})
     return {
         "content": f"User: {user_message}\nAssistant: {assistant_message}",
         "context": "conversation",
         "category": "conversation",
-        "metadata": {
-            "user_id": user_id or agent_name,
-            "owner_agent": agent_name,
-            "memory_type": "conversation",
-            "sharing_policy": "private",
-        },
+        "metadata": metadata,
     }
 
 
 def conversation_note(
     agent_name: str, user_message: str, assistant_message: str,
     user_id: Optional[str] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> MemoryNote:
     """The conversation memory as a note (``conversation_request``)."""
     return note_from_request(conversation_request(
-        agent_name, user_message, assistant_message, user_id
+        agent_name, user_message, assistant_message, user_id,
+        extra_metadata,
     ))
 
 
@@ -235,7 +247,49 @@ class MemoryPipeline:
             if self.barrier and user_id:
                 self.barrier.release(user_id, barrier_seq, success=success)
 
+    def delete(
+        self, agent_name: str, user_id: Optional[str], memory_id: str
+    ) -> bool:
+        """Owner-only delete; False when the memory is missing or not
+        the agent's (shared or not: only the owner may delete). Deletes
+        from the scope the memory was found in. Raises
+        ``ProviderError``."""
+        found = self.locate(memory_id, user_id, agent_name)
+        if found is None or not Visibility.can_write(
+            agent_name, found.metadata
+        ):
+            return False
+        owner_user = found.metadata.get("user_id") or None
+        with tagged(owner_user or agent_name):
+            return bool(self.provider.delete(memory_id, owner_user))
+
     # -- reads ---------------------------------------------------------
+
+    def list_own(
+        self, agent_name: str, user_id: Optional[str], *,
+        top_k: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Every memory ``agent_name`` owns in ``user_id``'s scope (the
+        agent's own scope without a user), as rows (``Candidate
+        .to_row``), unscored, in storage order.
+
+        A writer lists its own rows to find the ones it must delete on a
+        revoke (docs/BENCHMARK_V2.md, "Revoke and deletion"). Owner-only:
+        another agent's rows are left out, shared or not, as are rows
+        outside the user's partition. ``top_k`` caps the rows returned;
+        the provider is asked for at least ``LIST_TOP_K``, so the cap
+        applies to the agent's own rows. Raises ``ProviderError``.
+        """
+        scope = self.resolver.canonical(user_id) or agent_name
+        limit = LIST_TOP_K if top_k is None else top_k
+        with tagged(scope):
+            found = self.provider.list(scope, max(limit, LIST_TOP_K))
+        rows = [
+            candidate.to_row() for candidate in found
+            if (candidate.metadata or {}).get("user_id", "") == scope
+            and Visibility.can_write(agent_name, candidate.metadata)
+        ]
+        return rows[:max(limit, 0)]
 
     def retrieve(
         self,
@@ -262,11 +316,14 @@ class MemoryPipeline:
         )
 
     def build_block(
-        self, candidates: list, *, max_tokens: Optional[int] = None
+        self, candidates: list, *, max_tokens: Optional[int] = None,
+        session: Optional[int] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """The memory block for selected candidates
         (``Formatter.build``); ``max_tokens`` defaults to
-        ``max_memory_tokens``."""
+        ``max_memory_tokens``. ``session`` is the caller's current
+        session, which session ages count from
+        (``block_recency_unit: "session"``)."""
         budget = (
             self.settings.max_memory_tokens
             if max_tokens is None else max_tokens
@@ -275,6 +332,8 @@ class MemoryPipeline:
             budget,
             self.settings.block_format,
             recency=self.settings.block_recency,
+            recency_unit=self.settings.block_recency_unit,
+            current_session=session,
         ).build(candidates)
 
     def inject(
@@ -285,11 +344,13 @@ class MemoryPipeline:
         user_id: Optional[str] = None,
         k: Optional[int] = None,
         max_tokens: Optional[int] = None,
+        session: Optional[int] = None,
     ) -> Tuple[List[dict], Dict[str, Any]]:
         """Retrieve for the latest user message and prepend the block as
         a system message. Returns the new message list and the
         injection diagnostics. Messages come back unchanged when there
-        is no user message or nothing to inject."""
+        is no user message or nothing to inject. ``session`` is the
+        caller's current session (``build_block``)."""
         diagnostics: Dict[str, Any] = {
             "auto_inject_enabled": True,
             "candidate_count": 0,
@@ -325,7 +386,9 @@ class MemoryPipeline:
             diagnostics["prompt_tokens_after"] = unchanged
             return messages, diagnostics
 
-        text, block = self.build_block(candidates, max_tokens=max_tokens)
+        text, block = self.build_block(
+            candidates, max_tokens=max_tokens, session=session
+        )
         diagnostics.update(block)
         if not text:
             diagnostics["prompt_tokens_after"] = unchanged

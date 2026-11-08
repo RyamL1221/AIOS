@@ -744,6 +744,12 @@ class SyscallExecutor:
                         query.llms
                     )
 
+                # The caller's current session (benchmark v2), attached
+                # by the kernel request handler like the user id: the
+                # block's session ages count from it, and the stored
+                # conversation turn is stamped with it.
+                request_session = getattr(query, "_request_session", None)
+
                 # Context injection (before LLM call)
                 injection_diag = None
                 if self.context_injector:
@@ -758,6 +764,7 @@ class SyscallExecutor:
                         self.context_injector.inject(
                             agent_name, query,
                             user_id=request_user_id,
+                            session=request_session,
                         )
                     )
                     logger.debug(
@@ -799,6 +806,7 @@ class SyscallExecutor:
                             user_msg,
                             str(assistant_msg),
                             user_id=resolved_uid,
+                            session=request_session,
                         )
 
                 return llm_response
@@ -852,6 +860,10 @@ class SyscallExecutor:
             elif query.operation_type == "retrieve_memory":
                 return self.execute_memory_syscall(agent_name, query)
             elif query.operation_type == "get_memory":
+                return self.execute_memory_syscall(agent_name, query)
+            elif query.operation_type == "list_memory":
+                # Owner-only listing (benchmark v2): a writer finds its
+                # own rows to delete on a revoke.
                 return self.execute_memory_syscall(agent_name, query)
         elif isinstance(query, StorageQuery):
             return self.execute_storage_syscall(agent_name, query)

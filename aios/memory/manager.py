@@ -157,10 +157,13 @@ class MemoryManager:
             "max_memory_tokens", 1500
         )
         # The block's format (Subtask 9d): "compact" (default) or the
-        # pre-9d "legacy" kernel block; validated here, at startup.
+        # pre-9d "legacy" kernel block, and what its recency ages count
+        # (benchmark v2): "time" (default) or "session". Validated here,
+        # at startup.
         _block = PipelineSettings.from_memory_config(memory_config)
         self.block_format = _block.block_format
         self.block_recency = _block.block_recency
+        self.block_recency_unit = _block.block_recency_unit
         # Whether the kernel injects and extracts memories: off for the
         # agent-managed (native) conditions (docs/NATIVE_USAGE.md).
         self.auto_inject = bool(memory_config.get("auto_inject", False))
@@ -221,6 +224,7 @@ class MemoryManager:
             write_barrier=dict(getattr(self, "_barrier_config", {})),
             block_format=getattr(self, "block_format", "compact"),
             block_recency=getattr(self, "block_recency", False),
+            block_recency_unit=getattr(self, "block_recency_unit", "time"),
         )
 
     def memory_pipeline(self) -> MemoryPipeline:
@@ -468,26 +472,11 @@ class MemoryManager:
             return resp
         
         elif operation_type == "remove_memory":
-            found = self._locate_memory(query, memory_syscall.agent_name)
-            if found is None or not self._can_write(
-                memory_syscall.agent_name, found.metadata
-            ):
-                return MemoryResponse(
-                    success=False, error="Memory not found"
-                )
-            memory_id = query.params["memory_id"]
-            try:
-                deleted = self.provider.delete(
-                    memory_id, found.metadata.get("user_id") or None
-                )
-            except ProviderError as e:
-                return MemoryResponse(success=False, error=str(e))
-            if not deleted:
-                return MemoryResponse(
-                    success=False, error="Memory not found"
-                )
-            return MemoryResponse(success=True, memory_id=memory_id)
-        
+            return self._remove_memory(memory_syscall)
+
+        elif operation_type == "list_memory":
+            return self._list_memory(memory_syscall)
+
         elif operation_type == "update_memory":
             return self._update_memory(memory_syscall)
         
@@ -599,6 +588,79 @@ class MemoryManager:
         if not updated:
             return MemoryResponse(success=False, error="Memory not found")
         return MemoryResponse(success=True, memory_id=params["memory_id"])
+
+    # The by-id and listing operations below answer every failure with a
+    # response: an exception would leave the FIFO scheduler's syscall
+    # unanswered, and its caller (and the HTTP server) waiting forever.
+
+    @staticmethod
+    def _caller_user_id(query: MemoryQuery) -> Optional[str]:
+        """The user a request names: ``params.user_id``, else
+        ``metadata.user_id``."""
+        params = query.params or {}
+        return (
+            params.get("user_id")
+            or (params.get("metadata") or {}).get("user_id")
+        )
+
+    @staticmethod
+    def _failure(
+        operation: str, memory_syscall, error: Exception
+    ) -> MemoryResponse:
+        """A failed operation as a response, logged with its cause."""
+        logger.warning(
+            "%s failed for agent=%s: %s",
+            operation,
+            memory_syscall.agent_name,
+            error,
+            exc_info=not isinstance(error, ProviderError),
+        )
+        if isinstance(error, ProviderError):
+            return MemoryResponse(success=False, error=str(error))
+        return MemoryResponse(
+            success=False, error=f"{type(error).__name__}: {error}"
+        )
+
+    def _remove_memory(self, memory_syscall) -> MemoryResponse:
+        """Owner-only delete (``MemoryPipeline.delete``) in the caller's
+        user scope. A memory that is missing, or not the agent's, gets
+        the same "Memory not found"."""
+        query = memory_syscall.query
+        memory_id = (query.params or {}).get("memory_id")
+        try:
+            deleted = self.memory_pipeline().delete(
+                memory_syscall.agent_name,
+                self._caller_user_id(query),
+                memory_id,
+            )
+        except Exception as e:
+            return self._failure("remove_memory", memory_syscall, e)
+        if not deleted:
+            return MemoryResponse(success=False, error="Memory not found")
+        return MemoryResponse(success=True, memory_id=memory_id)
+
+    def _list_memory(self, memory_syscall) -> MemoryResponse:
+        """Owner-only listing (``MemoryPipeline.list_own``): the rows the
+        agent owns for ``params.user_id``, unranked, in
+        ``search_results``. ``params.k`` caps them; by default every row
+        is listed."""
+        query = memory_syscall.query
+        params = query.params or {}
+        try:
+            rows = self.memory_pipeline().list_own(
+                memory_syscall.agent_name,
+                params.get("user_id"),
+                top_k=params.get("k"),
+            )
+        except Exception as e:
+            return self._failure("list_memory", memory_syscall, e)
+        logger.info(
+            "list_memory: agent=%s, user_id=%s, rows=%d",
+            memory_syscall.agent_name,
+            params.get("user_id"),
+            len(rows),
+        )
+        return MemoryResponse(success=True, search_results=rows)
 
     def close(self) -> None:
         """

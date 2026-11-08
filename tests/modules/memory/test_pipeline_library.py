@@ -251,7 +251,9 @@ def test_block_is_printed_in_type_order_after_ranking(block_format):
     assert [m["memory_id"] for m in diagnostics["injected_memories"]] == [
         "p", "t", "c", "x",
     ]
-    assert TYPE_ORDER == ("profile", "task_context", "conversation")
+    assert TYPE_ORDER == (
+        "profile", "task_context", "calendar", "conversation",
+    )
     assert text.index("profile") < text.index("task") < text.index("chat")
     # The budget drops the lowest-ranked first (the profile here), not
     # the last printed: a budget that fits three of the four memories

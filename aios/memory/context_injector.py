@@ -63,6 +63,7 @@ class ContextInjector:
         agent_name: str,
         query: LLMQuery,
         user_id: Optional[str] = None,
+        session: Optional[int] = None,
     ) -> "tuple[LLMQuery, dict]":
         """Retrieve relevant memories and prepend as a system
         message, returning diagnostics alongside the query.
@@ -77,6 +78,9 @@ class ContextInjector:
                 is a non-empty string different from agent_name.
                 When absent or None, only the agent's own
                 memories are retrieved (no shared injection).
+            session: The caller's current session (benchmark v2):
+                with ``memory.block_recency_unit: session``, each
+                bullet's age counts the sessions since its row's.
 
         Retrieval behavior:
 
@@ -139,6 +143,7 @@ class ContextInjector:
                     user_id=user_id,
                     k=self.max_memories,
                     max_tokens=self.max_tokens,
+                    session=session,
                 )
             )
             resolved_user_id = diagnostics["resolved_user_id"]
@@ -212,4 +217,5 @@ class ContextInjector:
             self.max_tokens,
             settings.block_format,
             recency=settings.block_recency,
+            recency_unit=settings.block_recency_unit,
         ).truncate_by_token_budget(memories)

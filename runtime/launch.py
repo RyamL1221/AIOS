@@ -828,6 +828,13 @@ async def handle_query(request: QueryRequest):
                     "LLM query request_user_id=%s",
                     request.user_id,
                 )
+            # The caller's current session (LLMQuery.session, benchmark
+            # v2), which the rebuilt query would drop: the memory block
+            # gives each row its age in sessions from it, and the stored
+            # conversation turn is stamped with it.
+            query._request_session = getattr(
+                request.query_data, "session", None
+            )
             result_dict = await asyncio.to_thread(
                 execute_request, # The method to call
                 request.agent_name,               # First arg to execute_request

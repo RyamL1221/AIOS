@@ -18,7 +18,10 @@ class PipelineSettings:
     budget; ``write_barrier`` is ``memory.write_barrier``;
     ``block_format`` (``memory.block_format``) is ``"compact"`` or
     ``"legacy"`` and ``block_recency`` (``memory.block_recency``) adds a
-    relative age per bullet (Subtask 9d)."""
+    relative age per bullet (Subtask 9d). ``block_recency_unit``
+    (``memory.block_recency_unit``) is what that age counts: ``"time"``,
+    the wall-clock age (the default), or ``"session"``, the sessions
+    since the row's ``metadata.session`` (benchmark v2)."""
 
     relevance_threshold: float = 0.0
     max_injected_memories: int = 5
@@ -26,12 +29,18 @@ class PipelineSettings:
     write_barrier: Dict[str, Any] = field(default_factory=dict)
     block_format: str = "compact"
     block_recency: bool = False
+    block_recency_unit: str = "time"
 
     def __post_init__(self):
         if self.block_format not in ("compact", "legacy"):
             raise ValueError(
                 "memory.block_format must be 'compact' or 'legacy', "
                 f"got {self.block_format!r}"
+            )
+        if self.block_recency_unit not in ("time", "session"):
+            raise ValueError(
+                "memory.block_recency_unit must be 'time' or 'session', "
+                f"got {self.block_recency_unit!r}"
             )
 
     @classmethod
@@ -58,6 +67,9 @@ class PipelineSettings:
             block_recency=bool(memory_config.get(
                 "block_recency", defaults.block_recency
             )),
+            block_recency_unit=memory_config.get(
+                "block_recency_unit", defaults.block_recency_unit
+            ),
         )
 
     def as_dict(self) -> Dict[str, Any]:

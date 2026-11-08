@@ -18,13 +18,21 @@ from pathlib import Path
 
 from .barrier import MemoryWriteBarrier, WaitOutcome, WriteBarrier
 from .facade import (
+    LIST_TOP_K,
     UPDATE_PROTECTED_METADATA,
     MemoryPipeline,
     conversation_note,
     conversation_request,
     note_from_request,
 )
-from .formatter import TYPE_ORDER, Formatter, estimate_tokens
+from .formatter import (
+    PROVENANCE_FIELDS,
+    RECENCY_UNITS,
+    TYPE_ORDER,
+    Formatter,
+    estimate_tokens,
+    session_age,
+)
 from .identity import IdentityResolver, IdentityRules
 from .selector import SHARED_FETCH_FACTOR, Selector
 from .settings import PipelineSettings
@@ -43,7 +51,10 @@ def _source_hash() -> str:
 PIPELINE_VERSION = _source_hash()
 
 __all__ = [
+    "LIST_TOP_K",
     "PIPELINE_VERSION",
+    "PROVENANCE_FIELDS",
+    "RECENCY_UNITS",
     "SHARED_FETCH_FACTOR",
     "TYPE_ORDER",
     "UPDATE_PROTECTED_METADATA",
@@ -62,4 +73,5 @@ __all__ = [
     "conversation_request",
     "estimate_tokens",
     "note_from_request",
+    "session_age",
 ]
