@@ -259,6 +259,17 @@ its `user_id`, `sharing_policy` and provenance.
   is not `shared`. A leak.
 - `memories_missing`: writers that stored a memory in the trial of which
   no row reached the block. `memories_missing_writers` names them.
+  Since Subtask 14 they are split by cause, and `memories_missing` is
+  `memories_withheld + memories_lost` (each with a `_writers` list):
+  - **withheld**: every row the writer stored was private, or carried
+    no policy (the private default). The visibility rule kept it from
+    the consumer, as it should.
+  - **lost**: the writer stored at least one shared row and none
+    reached the block. The row was stored under another user id, or
+    the threshold, the dedupe, the cap or the budget dropped it.
+
+  `judge_free.split_missing` computes the split from the written
+  records, so result files from before Subtask 14 split the same way.
 - `raw_payload_rows`: block rows that are a JSON object or contain a
   writer-schema key (`user_name`, `preferred_tools`, ...). The form
   measure for V5.

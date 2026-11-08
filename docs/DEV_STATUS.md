@@ -35,6 +35,7 @@ do not describe this branch.
 | 9d | Shared compact block; fixed decoding; mem0ai pinned; greedy judge; re-baseline | Done |
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
+| 14 | Accumulating multi-session benchmark (v2) | In progress |
 
 ### Subtask 1
 
@@ -916,6 +917,54 @@ was committed and tagged `pilot-v1-code` (AIOS `ef05d66`, Cerebrum
 - **Tests**:
   - AIOS: `test_mem0_collection_names.py` (4), `test_pilot_cell_done.py`.
   - Cerebrum: `test_pilot_schedule.py`, `test_pilot_analysis.py` (7).
+
+### Subtask 14
+
+Subtasks 12 and 13 are not started; 14 comes first.
+
+- **`memories_missing` split** (its own commit). A missing writer is
+  *withheld* when every row it stored was private or had no policy (the
+  private default): the visibility rule kept it from the consumer, as
+  it should. It is *lost* when it stored a shared row and none reached
+  the block (another user id, or dropped by the threshold, the dedupe,
+  the cap or the budget). `memories_missing == memories_withheld +
+  memories_lost`. The split is in `JudgeFreeMeasures`
+  (`judge_free.split_missing`). `pilot_analysis.py --missing-split`
+  recomputes it for the pilot's files, which predate it:
+  `Cerebrum/results/pilot_v1_hetero/missing_split.md`, plus CSVs. The
+  pre-registered outputs reproduce byte for byte.
+- **The pilot's split**, the share of trials with a missing writer,
+  both backends pooled. The figures are identical on both models:
+
+  | Locus | H1 withheld / lost | H2 withheld / lost | H ≥ 1 missing (withheld, lost) |
+  |---|---|---|---|
+  | kernel | 0.20 / 0.00 | 0.53 / 0.00 | 0.37 (0.37, 0.00) |
+  | replicated | 0.20 / 0.30 | 0.53 / 0.43 | 0.68 (0.37, 0.37) |
+  | native | 0.20 / 0.25 | 0.43 / 0.42 | 0.60 (0.32, 0.33) |
+
+  A trial can have one withheld and one lost writer, so the two parts
+  can sum to more than the missing rate.
+- **The kernel's misses, by variant.** Missing writer instances, both
+  models and both backends (2 × 2 × the variant's users). Every one is
+  withheld; none is lost.
+
+  | Missing writer | H1 | H2 | Withheld | Lost |
+  |---|---|---|---|---|
+  | V1 profile writer (stale version, private) | 8 | 20 | 28 | 0 |
+  | V3 profile writer (no sharing metadata) | 8 | 20 | 28 | 0 |
+  | V1 task writer | 4 | 16 | 20 | 0 |
+  | V3 task writer | 4 | 16 | 20 | 0 |
+  | Any other variant or reference writer | 0 | 0 | 0 | 0 |
+
+  The H2 rows include each writer's pairings with a V1, V2 or V3
+  consumer, which change nothing in the kernel. The kernel's whole
+  `memories_missing` advantage is therefore in *lost*: 0.00 against
+  0.37 (replicated) and 0.33 (native). Its remaining misses are
+  writes the writer did not share. Withheld is the same in the kernel
+  and replicated (0.37). Native is lower (0.32), because its V3
+  consumer leaks the private row instead (users 5, 15 and 25). Outside
+  the kernel, rows are lost to the V2 writer and consumer (identity)
+  and the V4 consumer (threshold 0.5).
 
 ## Open decisions
 
