@@ -372,7 +372,8 @@ All six cells run v2: `kernel_shared` on Mem0 and on in-house,
 By-design differences that the probes will show, stated before any
 run:
 - **Kernel and replicated** fetch own k plus shared 4k rows, then cap
-  at k = 10 by score, then fit the 2,000-token budget.
+  at k = 10 by score, then fit the 500-token budget (see the
+  amendment below).
 - **Native** fetches k rows from the backend and applies visibility
   afterwards, so other agents' private rows and the assistant's own
   conversations take slots. It has no budget. Native Mem0 ranks by
@@ -387,9 +388,9 @@ run:
   "names both" failures should be more common in Mem0 cells.
   Contradictions come from another writer, whose Mem0 scope is
   different, so contradiction is not affected.
-- **The budget** can bind only through long rows: the assistant's own
-  conversation rows in in-house cells (v1's consumer answers run about
-  330 words). Ten writer rows come to about 700 estimated tokens.
+- **The budget** binds through long rows: the assistant's own
+  conversation rows in in-house cells. Ten one-sentence writer rows come
+  to about 250 estimated tokens.
 
 **Heterogeneity.** The variants apply unchanged, through the same
 channels, to `profile_agent`, `task_agent` and `assistant_agent`.
@@ -489,7 +490,7 @@ trial per user, trial *i* = user *i*, as v1 does. For each user:
 `/memory/config` reports:
 - recency on with unit `session` (or off, with `--no-recency` for an
   ablation);
-- `max_injected_memories` 10, `max_memory_tokens` 2000,
+- `max_injected_memories` 10, `max_memory_tokens` 500,
   `relevance_threshold` 0.0 and `block_format` compact;
 - `write_barrier.timeout_ms` of at least 60,000 for a kernel method
   (see below);
@@ -652,3 +653,26 @@ These are expectations, not a rule.
 - Four probed slots and one private fact per user, over 150 users
   built on `users_v1`, whose profiles are skewed (known issue 22).
 - No scored heterogeneity in this subtask.
+
+## Amendment 1 (2026-11-08, before the functional check)
+
+**The budget is 500 tokens, not 2,000.** One `pilot_v2` user (user 0,
+Qwen, H = 0, no judge) was run through all six cells to test the
+harness end to end. The cap bound in every probe of every cell
+(after_threshold 17 to 32 against k = 10). The blocks came to 180 to
+980 estimated tokens, so a 2,000-token budget could never bind: v2's
+rows are one sentence each, where v1's were whole renderings.
+
+The task says the cap and the budget bind. This spec's functional check
+requires the budget to bind and says the design changes before the
+smoke if it does not. So every v2 run sets `memory.max_memory_tokens`
+to 500, through `scripts/set_memory_mode.py --budget 500`, and the
+pre-flight checks it.
+- On that user, 500 binds in the later probes of the in-house kernel and
+  replicated cells, whose blocks hold the long conversation rows (543,
+  534 and 726 tokens), and never in the Mem0 cells (at most 379).
+- k stays 10 (`--k 10`, set explicitly, since `config.yaml.example`
+  has 5; known issue 3). Native has no budget, by design.
+- The v1 runs keep 2,000; v2's numbers are not comparable with v1's on
+  this account either.
+
