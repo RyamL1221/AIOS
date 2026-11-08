@@ -1106,10 +1106,14 @@ These fail on `workshop-postrun` too and are not caused by later work.
 28. `retrieval_smoke.py`'s verbatim-storage checks are skipped when
     Mem0 `infer` is on (extracted facts are not the written text). They
     run, and pass, with `infer` off.
-29. The Subtask 9c ablation called Ollama with `num_ctx` 16384. This
-    branch's adapter sets no `num_ctx` (Ollama's default applies).
-    pilot_v1 prompts are short, but a longer accumulating benchmark
-    needs it checked.
+29. Fixed in Subtask 14: the adapter passes `num_ctx` to every
+    `ollama/*` call, from `llms.context_window` (default 16384), and
+    the reply's `decoding` records it. Before: no `num_ctx` was set,
+    and Ollama 0.40.11 cut a long prompt silently. A prompt of 8,354
+    tokens with a code in its first line came back as 2,050 prompt
+    tokens and a wrong code; with `num_ctx` 16384, all 8,354 were read
+    and the code was right. A 3,154-token prompt was read whole either
+    way. The pilot's largest Qwen prompt was 456 tokens, never cut.
 30. Fixed in Subtask 10: `chromadb==1.5.9` is pinned in both repos.
 31. Fixed in Subtask 11 (AIOS `d3370f4`): an id longer than the limit
     keeps its head plus a 10-character SHA-256 digest. The sanitizer

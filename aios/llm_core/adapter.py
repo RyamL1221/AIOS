@@ -5,7 +5,7 @@ from aios.utils.id_generator import generator_tool_call_id
 from cerebrum.llm.apis import LLMQuery, LLMResponse
 from litellm import completion
 import json
-from aios.llm_core.decoding import decoding_for
+from aios.llm_core.decoding import decoding_for, ollama_num_ctx
 from .utils import merge_messages_with_tools, merge_messages_with_response_format, slash_to_double_underscore, double_underscore_to_slash, decode_litellm_tool_calls, decode_hf_tool_calls
 from typing import Dict, Optional, Any, List, Union
 import time
@@ -713,6 +713,11 @@ class LLMAdapter:
                 llm_syscall.decoding = {
                     "temperature": temperature, "seed": seed,
                 }
+                # Ollama's context window (known issue 29), recorded
+                # with the decoding it ran at.
+                num_ctx = ollama_num_ctx(model_identifier)
+                if num_ctx is not None:
+                    llm_syscall.decoding["num_ctx"] = num_ctx
 
                 # Basic validation
                 if not messages or not isinstance(messages, list):
@@ -763,6 +768,7 @@ class LLMAdapter:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     seed=seed,
+                    num_ctx=num_ctx,
                 )
             except Exception as e:
                 # Handle errors specifically from _get_model_response (API errors, timeouts etc.)
@@ -826,6 +832,7 @@ class LLMAdapter:
         temperature: float = 1.0,
         max_tokens: int = 1000,
         seed: Optional[int] = None,
+        num_ctx: Optional[int] = None,
     ) -> tuple[Union[str, List, Dict], bool, Optional[object]]: # (response, finished, usage)
         """
         Get response from the specific model backend. Handles API calls and context management.
@@ -845,6 +852,8 @@ class LLMAdapter:
             seed: Sampling seed, passed to LiteLLM and OpenAI-compatible
                 calls when set (not to the context manager or the local
                 HuggingFace backend).
+            num_ctx: Ollama's context window (``ollama_num_ctx``), passed
+                to LiteLLM Ollama calls when set.
 
         Returns:
             Tuple of (model_response, finished_flag, usage). Model response
@@ -896,6 +905,8 @@ class LLMAdapter:
                 }
                 if seed is not None:
                     completion_kwargs["seed"] = seed
+                if num_ctx is not None and isinstance(model, str):
+                    completion_kwargs["num_ctx"] = num_ctx
 
                 # Add tools if provided (use processed tool names)
                 if tools:

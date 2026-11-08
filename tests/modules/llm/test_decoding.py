@@ -12,7 +12,13 @@ from unittest.mock import MagicMock, patch
 from cerebrum.llm.apis import LLMQuery
 
 from aios.llm_core.adapter import LLMAdapter
-from aios.llm_core.decoding import decoding_for
+from aios.llm_core.decoding import (
+    DEFAULT_CONTEXT_WINDOW,
+    decoding_for,
+    ollama_num_ctx,
+)
+
+LLMS_CONFIG = "aios.config.config_manager.config.get_llms_config"
 
 
 def test_decoding_for_reads_the_matching_entry():
@@ -55,12 +61,13 @@ def _completion(content="ok"):
     )
 
 
-def _run(adapter, llms, temperature=1.0):
+def _run(adapter, llms, temperature=1.0, llms_config=None):
     query = LLMQuery(messages=[{"role": "user", "content": "hi"}],
                      llms=llms, temperature=temperature)
     syscall = _Syscall(query=query)
     with patch("aios.llm_core.adapter.litellm.completion",
-               MagicMock(return_value=_completion())) as completion:
+               MagicMock(return_value=_completion())) as completion, \
+            patch(LLMS_CONFIG, return_value=llms_config or {}):
         _, response = adapter.execute_llm_syscall(0, syscall)
     assert response.response_message == "ok", response
     return completion.call_args.kwargs, syscall
@@ -75,7 +82,8 @@ def test_temperature_and_seed_from_the_llms_entry_reach_ollama():
     assert kwargs["model"] == "ollama/qwen2.5:7b"
     assert kwargs["temperature"] == 0.0
     assert kwargs["seed"] == 20261105
-    assert syscall.decoding == {"temperature": 0.0, "seed": 20261105}
+    assert syscall.decoding == {"temperature": 0.0, "seed": 20261105,
+                                "num_ctx": DEFAULT_CONTEXT_WINDOW}
 
 
 def test_temperature_and_seed_reach_azure():
@@ -93,7 +101,39 @@ def test_without_decoding_the_query_temperature_and_no_seed_apply():
     )
     assert kwargs["temperature"] == 1.0
     assert "seed" not in kwargs
-    assert syscall.decoding == {"temperature": 1.0, "seed": None}
+    assert syscall.decoding == {"temperature": 1.0, "seed": None,
+                                "num_ctx": DEFAULT_CONTEXT_WINDOW}
+
+
+def test_ollama_num_ctx_reads_the_context_window():
+    """Known issue 29: without num_ctx Ollama runs at its own default and
+    drops the start of a longer prompt, where the block is."""
+    model = "ollama/qwen2.5:7b"
+    assert ollama_num_ctx(model, {"context_window": 8192}) == 8192
+    assert ollama_num_ctx(model, {}) == DEFAULT_CONTEXT_WINDOW == 16384
+    assert ollama_num_ctx("ollama_chat/llama3.1:8b", {}) == 16384
+    assert ollama_num_ctx("azure/gpt-4o", {"context_window": 8192}) is None
+    for off in (0, -1, None, True, "16384"):
+        assert ollama_num_ctx(model, {"context_window": off}) is None
+
+
+def test_num_ctx_reaches_ollama_and_is_recorded():
+    adapter = _adapter("qwen2.5:7b", "ollama/qwen2.5:7b")
+    kwargs, syscall = _run(adapter, [{
+        "name": "qwen2.5:7b", "backend": "ollama",
+        "temperature": 0.0, "seed": 1,
+    }], llms_config={"context_window": 8192})
+    assert kwargs["num_ctx"] == 8192
+    assert syscall.decoding == {"temperature": 0.0, "seed": 1,
+                                "num_ctx": 8192}
+
+
+def test_other_backends_get_no_num_ctx():
+    adapter = _adapter("gpt-4o", "azure/gpt-4o")
+    kwargs, syscall = _run(adapter, [{"name": "gpt-4o", "backend": "azure"}],
+                           llms_config={"context_window": 8192})
+    assert "num_ctx" not in kwargs
+    assert "num_ctx" not in syscall.decoding
 
 
 def test_the_envelope_carries_the_decoding():

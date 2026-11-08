@@ -60,6 +60,10 @@ llms:
 
   log_mode: "console" # choose from [console, file]
   use_context_manager: false
+  # Ollama's context window, passed as num_ctx to every ollama/* model
+  # call (known issue 29). Ollama otherwise runs at its own default and
+  # drops the start of a longer prompt silently. Other backends ignore it.
+  context_window: 16384
 
 memory:
   log_mode: "console" # choose from [console, file]
