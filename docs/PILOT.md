@@ -155,3 +155,124 @@ Operational reading, fixed before the runs:
   headline-figure draft (the kernel − replicated gap vs. H, one line per
   backend, per model, with CIs). The analysis code is written during the
   runs and does not touch run code.
+
+## Result
+
+Run 2026-11-07 17:23 to 2026-11-08 02:45 (EST), at `pilot-v1-code`
+(Cerebrum `7fc5769`, AIOS `ef05d66`). Full tables:
+`Cerebrum/results/pilot_v1_hetero/analysis.md`; provenance and the one
+re-run: `Cerebrum/results/pilot_v1_hetero/PROVENANCE.md`. Figure:
+`Cerebrum/results/pilot_v1_hetero/gap_vs_h.svg`.
+
+- **Completeness:**
+  - 36 cells, 1,080 trials, 0 failed;
+  - every cell at the tagged commit pair, never `-dirty`;
+  - every cell on schedule `f4f2c8fe…`, with the same inputs and
+    variants per user across cells;
+  - 0 kernel memory operations in every agent-phase kernel log.
+- **Re-run:** one cell, `qwen/agent/h0_native_mem0`, was re-run whole.
+  Azure refused connections during trial 5, Mem0 stored nothing, and
+  the Subtask 10 guard failed the trial. The re-run used run id
+  `…-h0-r1`, so it could not see the first attempt's rows.
+
+### Primary measure: kernel − replicated, pooled over backends (n = 30)
+
+Mean [95% CI].
+
+| model | dimension | H = 0 | H = 1 | H = 2 | DiD H2 − H0 |
+|---|---|---|---|---|---|
+| Qwen | Profile | −0.02 [−0.20, +0.17] | +0.53 [+0.17, +0.90] | +0.73 [+0.26, +1.20] | +0.75 [+0.24, +1.26] |
+| Qwen | Integration | +0.05 [−0.08, +0.18] | +0.67 [+0.31, +1.02] | +0.82 [+0.43, +1.21] | +0.77 [+0.34, +1.20] |
+| GPT-4o | Profile | +0.05 [−0.07, +0.17] | +0.90 [+0.34, +1.46] | +1.15 [+0.62, +1.68] | +1.10 [+0.57, +1.63] |
+| GPT-4o | Integration | +0.03 [−0.12, +0.19] | +1.02 [+0.43, +1.61] | +1.18 [+0.63, +1.74] | +1.15 [+0.59, +1.71] |
+
+Each backend alone gives the same picture. At H = 2 on each model, both
+backends' gaps lie between +0.70 and +1.23 with the CI above 0. Their
+DiDs lie between +0.73 and +1.30, also with the CI above 0.
+
+### Judge-free
+
+- **Kernel leak rate: 0** over all 180 of its trials on each model.
+  Replicated: 0. Native: 0.10 at H = 2 on both backends and both models.
+  These are exactly the three users whose V3 consumer is paired with a
+  private V1 or V3 writer (users 5, 15, 25), the pairing the schedule
+  placed to expose it. The replicated library enforces visibility
+  itself, so a V3 consumer there does not leak (as specified in
+  `HETEROGENEITY.md`).
+- **`memories_missing` rate, both backends pooled:**
+
+  | H | kernel | replicated | native |
+  |---|---|---|---|
+  | 1 | 0.20 | 0.50 | 0.45 |
+  | 2 | 0.53 | 0.87 | 0.75 |
+  | H ≥ 1 | 0.37 | 0.68 | |
+
+  The figures are identical on both models, because the variants decide
+  them. The kernel's misses are the V1 and V3 private writers, which
+  every locus misses.
+
+### Verdict against the rule
+
+> GO if, for at least one model, pooled over backends: (i) kernel −
+> replicated at H=2 is ≥ +0.25 on Profile or Integration with a 95% CI
+> excluding 0; (ii) the gap grows with H (the H2−H0
+> difference-in-differences has a CI excluding 0); and (iii) kernel leak
+> rate is 0 and kernel memories_missing is below replicated's at H ≥ 1.
+> Condition (iii) must hold on both models regardless.
+
+- (i) holds on both models and both dimensions. The smallest case is
+  Qwen Profile, +0.73 [+0.26, +1.20]: at least +0.25, CI above 0.
+- (ii) holds on the same dimensions. The smallest DiD is Qwen Profile,
+  +0.75 [+0.24, +1.26]: positive, CI above 0.
+- (iii) holds on both models: kernel leak rate 0 (0 of 180 trials per
+  model); kernel `memories_missing` at H ≥ 1 is 0.37 against
+  replicated's 0.68.
+
+**Outcome: GO.** Each condition holds on both models, where the rule
+requires one (and (iii) on both). Under the rule, Phase D proceeds as
+planned.
+
+### Against the pre-stated expectations
+
+- **H = 0 ties:** as expected. Every pooled H = 0 CI includes 0, and
+  the largest mean is +0.05.
+- **V2 and V4:** as expected. At H = 1 these variants carry the gap
+  (pooled kernel − replicated, Profile / Integration, 3 users each):
+
+  | variant and role | Qwen | GPT-4o |
+  |---|---|---|
+  | V2 consumer | +2.50 / +2.50 | +3.67 / +3.50 |
+  | V4 consumer | +1.50 / +1.50 | +3.17 / +3.17 |
+  | V2 writer | Integration +1.33 | Integration +3.17 |
+
+  Replicated misses memories in every V2 and V4-consumer trial, the
+  kernel in none.
+- **V1 and V3 private writers:** missed in every locus, as expected.
+  Their gap is about 0 (−0.17 to +0.33).
+- **V3 consumer:** about 0 at H = 1, as expected. It leaks only under
+  native, and only at H = 2 with a private writer.
+- **V5 did not show up** in any gap. The V5 writer's and the V5
+  consumer's gaps are −0.17 to +0.17, and no locus misses a memory under
+  them. Whether V5 lowers every locus by the same amount is not
+  separated here.
+- **Mem0 extraction noise:** not measured in this pilot.
+
+### What the GO rests on
+
+- The gap comes from two mechanisms: identity normalization (V2) and
+  the kernel not taking a consumer's own retrieval settings (V4). The
+  other three variants contribute about 0.
+- The V4 effect holds by construction. The kernel has no channel for a
+  consumer's settings (`variants_not_applied`), so it measures what
+  centralizing the settings buys, not a better retrieval algorithm.
+- The paper should describe the result in those terms. The variant mix
+  is a design choice, and other mixes would give other magnitudes.
+
+### Cost
+
+- Harness-recorded cost, excluding the judge: about 16.4 USD for Qwen
+  and 20.1 USD for GPT-4o.
+- Mem0 extraction is 0.05-0.07 USD per Mem0 trial in every locus, and
+  most of the Qwen cost.
+- In-house Qwen cells cost 0.
+- Per-cell cost is in `analysis.md`.

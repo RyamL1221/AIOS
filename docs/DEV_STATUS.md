@@ -34,6 +34,7 @@ do not describe this branch.
 | 9c | Explain the `kernel_shared` deficit (investigation) | Done |
 | 9d | Shared compact block; fixed decoding; mem0ai pinned; greedy judge; re-baseline | Done |
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
+| 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 
 ### Subtask 1
 
@@ -871,6 +872,51 @@ Spec: `docs/HETEROGENEITY.md`, written before the variant code (AIOS
     `test_extraction_guard.py` (14), and extraction-seed tests in
     `test_fixed_decoding.py`.
 
+### Subtask 11
+
+Pre-registration, design, rule and result: `docs/PILOT.md`. The design
+was committed and tagged `pilot-v1-code` (AIOS `ef05d66`, Cerebrum
+`7fc5769`) before the first scored trial.
+
+- **Before the pilot**, each its own commit:
+  - Known issue 31 fixed (AIOS `d3370f4`): long user ids are hashed
+    into the kernel's Mem0 collection names.
+  - Balanced variant schedule (`pilot_schedule.py`,
+    `data/pilot_v1_schedule.json`, SHA-256 `f4f2c8fe…`). It replaces
+    the seeded cycle, which closes issue 34. `--schedule` is required
+    for a scored run at H > 0.
+  - The driver `scripts/run_pilot_v1.sh` refuses to start unless both
+    repos are at the tag with no tracked changes. A cell is done only
+    if every trial completed at exactly the tagged commits
+    (`pilot_cell_done.py --strict --commit --kernel-commit`).
+- **Run** (2026-11-07 17:23 to 2026-11-08 02:45):
+  - 36 cells, 1,080 trials, 0 failed, 0 kernel leaks, one commit pair
+    and one schedule across all cells.
+  - One cell (Qwen `native_mem0` H0) was re-run whole after the Subtask
+    10 guard caught an Azure connection drop. Mem0 had stored nothing
+    for trial 5. The re-run used a distinct run id (`…-h0-r1`), because
+    the native store is shared and never reset. Recorded in the results'
+    PROVENANCE; the failed attempt is in `repo-artifacts`.
+- **Analysis**: `benchmarks/shared_memory/pilot_analysis.py` (cells,
+  paired gaps per backend and pooled, DiD, judge-free rates, H = 1 by
+  variant, verdict) and `pilot_figure.py` (SVG gap vs. H). Results are
+  in `Cerebrum/results/pilot_v1_hetero/`.
+- **Verdict: GO.** Pooled kernel − replicated at H = 2:
+  - Qwen: Profile +0.73 [+0.26, +1.20], Integration +0.82 [+0.43, +1.21].
+  - GPT-4o: Profile +1.15 [+0.62, +1.68], Integration +1.18 [+0.63, +1.74].
+
+  The H2 − H0 DiDs are +0.75 to +1.15, all with the CI above 0. Kernel
+  leak rate is 0. Kernel `memories_missing` at H ≥ 1 is 0.37, against
+  replicated's 0.68. H = 0 ties.
+- **What drives it**: V2 (identity) and the V4 consumer, the latter by
+  construction, since the kernel has no channel for a consumer's
+  settings. V1, V3 and V5 add about 0. V5 showed no effect on any gap.
+  Native leaks (0.10 at H = 2) only for a V3 consumer paired with a
+  private writer.
+- **Tests**:
+  - AIOS: `test_mem0_collection_names.py` (4), `test_pilot_cell_done.py`.
+  - Cerebrum: `test_pilot_schedule.py`, `test_pilot_analysis.py` (7).
+
 ## Open decisions
 
 None.
@@ -891,7 +937,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
   no kernel listening, see known issue 25) and `neurips-subtask-10`
   (AIOS 373 passed; Cerebrum `tests/test_live_kernel_guard.py
   tests/agents` 412 passed, 4 skipped, the same 19 failures and 2
-  errors). The names
+  errors) and `neurips-subtask-11` (AIOS `tests/modules/memory`
+  without `test_memory.py`, `tests/modules/syscall`,
+  `tests/modules/llm/test_decoding.py`, `tests/environment`: 379
+  passed, the 14 errors; Cerebrum 428 passed, 4 skipped, the same 19
+  failures and 2 errors). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -1012,7 +1062,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
     pilot_v1 prompts are short, but a longer accumulating benchmark
     needs it checked.
 30. Fixed in Subtask 10: `chromadb==1.5.9` is pinned in both repos.
-31. The kernel's Mem0 per-user collection names keep only the first 49
+31. Fixed in Subtask 11 (AIOS `d3370f4`): an id longer than the limit
+    keeps its head plus a 10-character SHA-256 digest. The sanitizer
+    still maps characters it drops to `_`, so ids differing only there
+    (`a.b`, `a_b`) share a collection. The user filter keeps them
+    apart, as before. Before: the kernel's Mem0 per-user collection names keep only the first 49
     characters of the user id (`_collection_name_for_user`, prefix
     `mem0_memories`), with no hash, so two long ids can share a
     collection. The user filter and the partition check keep their
@@ -1028,11 +1082,21 @@ These fail on `workshop-postrun` too and are not caused by later work.
     Both are in `repo-artifacts/Cerebrum/heterogeneity_check_interrupted/`.
     The resumed driver also overwrote the first `kernel_agent.log`; the
     log from the 2026-11-07 resume was archived before the second run.
-34. The heterogeneity schedule's first 5 users never pair a V3 consumer
+34. Fixed in Subtask 11 by the balanced schedule
+    (`pilot_v1_schedule.json`). Before: the heterogeneity schedule's first 5 users never pair a V3 consumer
     with a V1 or V3 writer, so they give no native leak opportunity,
     and they place V5 writers outside the kernel only next to a V2 or
     V4 consumer. A scored heterogeneity run needs more users, or a
     schedule that guarantees those pairings.
+
+35. `test_summary_props.py::test_kernel_shared_delta_is_zero` sometimes
+    hits Hypothesis's deadline (timing, not logic); it is the flaky test
+    that makes the Cerebrum failure count 19 or 20.
+36. Nothing resets the native and replicated stores
+    (`.native_memory/<prefix>`, `.replicated_memory/<prefix>`) between
+    runs. Isolation rests on run ids in user ids, so re-running a cell
+    under the same run id sees the earlier attempt's rows. Give a
+    re-run its own run id (as Subtask 11 did) or a fresh store.
 
 ## Fixed
 
