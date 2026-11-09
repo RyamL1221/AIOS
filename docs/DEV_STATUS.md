@@ -966,6 +966,155 @@ Subtasks 12 and 13 are not started; 14 comes first.
   the kernel, rows are lost to the V2 writer and consumer (identity)
   and the V4 consumer (threshold 0.5).
 
+Spec: `docs/BENCHMARK_V2.md`. It was committed before the generator
+code (AIOS `a0ebe26`) and revised after a four-lens review. Amendment 1
+(a 500-token budget) was committed before the functional check
+(`51bd5f9`).
+
+- **Known issue 29 fixed** (AIOS `50567bf`, its own commit): the
+  adapter passes Ollama `num_ctx` from `llms.context_window` (default
+  16384) and records it in the reply's `decoding`. Ollama 0.40.11 had
+  cut an 8,354-token prompt to 2,050 tokens, from the end, with no
+  error. This is the project's fourth silent failure, after:
+  - the keyword judge fallback (4b);
+  - stored writer status payloads (9);
+  - Mem0 swallowing Azure errors (10).
+- **Dataset** `users_v2` (Cerebrum `data/users_v2.jsonl`, seed
+  20261108, SHA-256 `768a37ac…`); `pilot_v2` is its first 30 users.
+  - 150 users built on `users_v1`'s base users. Each has 15 to 23
+    events (mean 18.4) and 14 to 22 writer rows (mean 17.4).
+  - Sessions hold 2, 3 or 4 events, 252 / 330 / 318 times. 12 users
+    needed a script redraw.
+  - Each writer owns each role for exactly 50 users, and 50 users are
+    echo users.
+  - GPT-4o (temperature 0.0, seeded) paraphrased 2,466 utterances. All
+    were accepted on the first attempt, with 0 fallbacks.
+    `synth_v2.py check users_v2` reports 0 problems.
+- **Kernel and library** (AIOS `828fde0`):
+  - Session ages (`memory.block_recency_unit: session`, "(N sessions
+    ago)"). The current session is threaded from `LLMQuery.session`
+    through `/query`, the executor, the injector and the conversation
+    write.
+  - Owner-only `MemoryPipeline.list_own` and `delete`, the kernel's
+    `list_memory` operation, and `remove_memory` through the library.
+    Every new branch returns a failure instead of raising.
+  - Injected rows carry their text, `fact_key`, `session` and
+    `provenance_event`. Calendar rows print before conversation rows.
+  - `PIPELINE_VERSION` is now `521a05c9…`.
+- **Harness and agents** (Cerebrum `b5c43fe`):
+  - New modules: `synth_v2.py`, `probes.py` (the matcher and the
+    scorer) and `history.py` (the v2 trial).
+  - `run_evaluation.py --dataset users_v2|pilot_v2 [--control]
+    [--no-recency]`, with a pre-flight check of the kernel's settings.
+  - v2 writers in all three loci: no LLM, one row per event; a revoke
+    lists the writer's own rows and deletes by `fact_key`.
+  - A `calendar_agent` in each locus, and session-aware consumers.
+  - SDK: `list_memories` and `LLMQuery.session`.
+  - The driver is `scripts/run_bench_v2.sh` (`MODE=functional` or
+    `smoke`).
+- **Found by the functional check** (fixed, Cerebrum `7d759ec`): V5
+  replaced a base row with the event's fact-less stub, from which Mem0
+  extracted nothing, so the extraction guard failed two H = 2 users.
+  Base events now carry their fields, and V5 writes them as JSON, as in
+  v1. The stopped attempt is in
+  `repo-artifacts/Cerebrum/bench_v2_functional/failed_attempts/f14`.
+  The check was re-run whole under run prefix `f14b`.
+- **Functional check: passes.** `pilot_v2` users 0 to 4, Qwen, no
+  judge. 21 cells and 105 user-trials, 0 failed (Cerebrum
+  `results/bench_v2_functional/`). All nine pass conditions hold.
+  Passes over users (recency and contradiction: lenient in brackets,
+  the new value named, stale or not):
+
+  | Locus | Backend | Condition | Deletion, no echo | Deletion, echo | Privacy | Recall | Recency | Contradiction |
+  |---|---|---|---|---|---|---|---|---|
+  | kernel | mem0 | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 0/5 (5/5) | 1/5 (2/5) |
+  | kernel | mem0 | H = 2 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (4/5) | 2/5 (3/5) |
+  | kernel | mem0 | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 3/5 (3/5) |
+  | kernel | inhouse | H = 0 | 3/3 | 0/2 | 5/5 | 5/5 | 3/5 (5/5) | 4/5 (4/5) |
+  | kernel | inhouse | H = 2 | 3/3 | 1/2 | 5/5 | 5/5 | 4/5 (4/5) | 3/5 (3/5) |
+  | kernel | inhouse | no_memory | 3/3 | 2/2 | 5/5 | 0/5 | 0/5 (0/5) | 0/5 (0/5) |
+  | kernel | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 4/5 (4/5) |
+  | replicated | mem0 | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 0/5 (5/5) | 3/5 (5/5) |
+  | replicated | mem0 | H = 2 | 3/3 | 1/2 | 5/5 | 4/5 | 1/5 (3/5) | 1/5 (2/5) |
+  | replicated | mem0 | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 1/5 (5/5) | 2/5 (3/5) |
+  | replicated | inhouse | H = 0 | 3/3 | 0/2 | 5/5 | 5/5 | 3/5 (5/5) | 4/5 (4/5) |
+  | replicated | inhouse | H = 2 | 3/3 | 1/2 | 5/5 | 4/5 | 2/5 (3/5) | 1/5 (1/5) |
+  | replicated | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 4/5 (4/5) |
+  | native | mem0 | H = 0 | 3/3 | 2/2 | 5/5 | 1/5 | 0/5 (0/5) | 1/5 (1/5) |
+  | native | mem0 | H = 2 | 3/3 | 2/2 | 5/5 | 1/5 | 0/5 (0/5) | 1/5 (1/5) |
+  | native | mem0 | no_delete | 3/3 | 2/2 | 5/5 | 0/5 | 0/5 (0/5) | 1/5 (1/5) |
+  | native | mem0 | no_visibility | 3/3 | 2/2 | 3/5 | 0/5 | 0/5 (0/5) | 2/5 (2/5) |
+  | native | inhouse | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (5/5) | 3/5 (4/5) |
+  | native | inhouse | H = 2 | 3/3 | 1/2 | 4/5 | 4/5 | 2/5 (3/5) | 1/5 (1/5) |
+  | native | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 3/5 (4/5) | 2/5 (2/5) |
+  | native | inhouse | no_visibility | 3/3 | 1/2 | 0/5 | 5/5 | 3/5 (5/5) | 2/5 (2/5) |
+
+  The full matrix (Wilson intervals, where the forbidden value
+  appeared, cap and budget counts) is in that directory's
+  `analysis.md`. With n = 5 per cell (known issue 37), the per-cell
+  rates are not comparisons.
+  - **Privacy.** The kernel never failed (0 of 35 probes, block or
+    answer). The one failure in a real condition is the one the spec
+    predicted: native in-house, H = 2, user 4, whose V3 consumer
+    ignores visibility. `calendar_agent`'s private row reached the
+    block; Qwen did not name it, and the probe fails on the block.
+    Under `no_visibility`, the private value reached the block for 5 of
+    5 native in-house users and 2 of 5 native Mem0 users.
+  - **Deletion.** No deleted row came back in any cell.
+    - Every deletion failure outside `no_delete` is an echo user: the
+      value came back through the echo row in another writer's rows (13
+      of 13; deletion is writer-scoped, known issue 38).
+    - Non-echo users pass in every in-house cell (18 of 18).
+    - Under `no_delete`, every kernel, replicated and native in-house
+      user fails. Native Mem0 passes 5 of 5 because it never surfaced
+      the value.
+  - **Native Mem0 shows little.** At H = 0 it passes recall 1/5 and
+    recency 0/5. In every failure the value was missing from the block,
+    and the one recall pass got it only from the consumer's own earlier
+    answer. Its search
+    keeps Mem0's inverted score, which ranks the most relevant rows
+    last; this is known and kept by design (`docs/NATIVE_USAGE.md`).
+    So its deletion and privacy passes are not evidence of anything.
+  - **Recency fails mostly by naming both values**, as the spec
+    expected. Outside native Mem0, at H = 0 and H = 2:
+    - 19 of 50 pass strictly, and 42 of 50 name the new value;
+    - 23 answers name both values, and 9 of those name the stale one
+      as past;
+    - some answers reverse the two ("we currently deploy to tern-02 …
+      previously relocated to bittern-06").
+  - **Contradiction fails differently.** Outside native Mem0, 23 of 50
+    pass and 29 of 50 name the new value. Only 6 name both: the
+    consumer usually keeps the stale value from the first writer.
+  - **Kernel against replicated, H = 0.**
+    - In-house: the blocks are identical in 30 of 30 probes, with no
+      discordant pair.
+    - Mem0: they differ only on contradiction, with 2 discordant pairs,
+      both favoring replicated (p = 0.50). Every user's block held both
+      the new and the stale value in both cells, and gpt-4o's extraction
+      differs from run to run.
+  - **Cap and budget**, over H = 0 and H = 2:
+    - The cap bound in 54 of 60 probes for kernel in-house, 54 of 60
+      for kernel Mem0, 42 for replicated in-house and 43 for replicated
+      Mem0.
+    - The budget bound in 41 in-house probes and never in Mem0, whose
+      blocks reach at most 434 estimated tokens. This is as Amendment 1
+      expected.
+  - **Contamination.** In 9 of 525 probes, a value reached the block
+    only through the consumer's own earlier conversation rows.
+    - One case shows a laundering path, in a control (native Mem0,
+      `no_visibility`, user 4): the deletion probe's answer named the
+      private value, and its conversation row carried it into the
+      privacy probe's block.
+    - The kernel cannot take that path. Its visibility rule keeps the
+      private row out of every probe's block.
+- **Analysis changes after the run** (Cerebrum `65cdc52`, `bench_v2_analysis.py`,
+  with tests that fail without them). No score changed.
+  - The cap criterion had treated each condition as its own cell, so it
+    also checked `no_memory`, whose store is empty by design. The spec's
+    cells are locus × backend, over H = 0 and H = 2, and the criterion
+    now follows it.
+  - The matrix gained `contaminated` and `named_as_past`.
+
 ## Open decisions
 
 None.
@@ -1150,6 +1299,22 @@ These fail on `workshop-postrun` too and are not caused by later work.
     runs. Isolation rests on run ids in user ids, so re-running a cell
     under the same run id sees the earlier attempt's rows. Give a
     re-run its own run id (as Subtask 11 did) or a fresh store.
+37. Every v2 user has one probe of each type, so a cell's per-probe
+    rate rests on n = 30 users in the smoke and 5 in the functional
+    check. Report Wilson intervals and compare cells paired over users.
+38. Deletion is writer-scoped (Subtask 15 completes it). In every
+    locus, a revoke leaves two things in place:
+    - an echo of the value in another writer's rows;
+    - any assistant conversation row that quoted the value.
+39. `config.yaml` keeps `max_memory_tokens: 2000` for v1. v2 runs set
+    500 through the driver (`BENCHMARK_V2.md`, Amendment 1), and the
+    pre-flight check refuses anything else.
+40. The kernel's conversation rows carry their `session` but not
+    `provenance_event` (the probe that wrote them). The replicated and
+    native assistants stamp both. Scoring does not read it, since
+    conversation rows are classified by owner and type, and the
+    in-house blocks are identical. In kernel cells, though,
+    contamination cannot be traced back to the probe that caused it.
 
 ## Fixed
 
