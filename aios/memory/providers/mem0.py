@@ -4,11 +4,15 @@ Mem0Provider - Memory provider using Mem0 for AI-native memory management.
 Kernel mode stores in one Mem0 store per user. With ``memory.mem0.infer``
 (Subtask 9) Mem0's own LLM, pinned to ``memory.backend_llm``, extracts
 facts from each write as it does for the native agents; without it the
-content is stored verbatim (``infer=False``). ``search`` scores through Mem0's own vector store: Mem0's
-``search()`` cannot be used for that, because its Chroma adapter returns
-the raw L2 distance as ``score`` and ``score_and_rank`` treats it as a
-similarity, so results come back least similar first, clamped at 1.0
-(docs/PROVIDER_CONTRACT.md, "Mem0").
+content is stored verbatim (``infer=False``). ``search`` scores through
+Mem0's own vector store. Mem0's ``search()`` cannot be used for that:
+its Chroma adapter returns the squared L2 distance as ``score``, and
+``score_and_rank`` treats it as a similarity, clamps it at 1.0 and keeps
+the top k. With no BM25 or entity boost (Chroma has no keyword search;
+spaCy is not installed), every row at cosine 0.5 or below ties at 1.0
+in Chroma's nearest-first order; the rows above 0.5, the relevant ones,
+follow from the least similar up, so the top-k cut drops them whenever
+k rows lie at 0.5 or below (docs/PROVIDER_CONTRACT.md, "Mem0").
 """
 import copy
 import hashlib
@@ -567,8 +571,10 @@ class Mem0Provider(MemoryProvider):
         callbacks and their tokens are counted per trial
         (``cerebrum.utils.usage``). LiteLLM reads the provider's
         credentials (``AZURE_API_*`` and so on) from the environment, as
-        it does for the kernel's calls. In kernel mode Mem0 writes with
-        ``infer=False`` and never calls this LLM.
+        it does for the kernel's calls. With ``memory.mem0.infer`` on
+        (the benchmarks' setting) the LLM is pinned to
+        ``memory.backend_llm`` and this returns at once; with it off,
+        Mem0 stores the content verbatim and never calls this LLM.
 
         Idempotent: if the requested model is already active, it returns
         without rebuilding the LLM.

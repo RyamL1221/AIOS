@@ -125,8 +125,10 @@ Cerebrum `tests/agents/test_judge_retry.py`.
   provider is `in-memory`, for tests. The injector and extractor are
   wired for `mem0` and `in-house` (`PERSONALIZATION_PROVIDERS`).
 - Mem0 `search` is scored, but not with Mem0's `search()`: its Chroma
-  adapter returns the raw L2 distance as `score` and ranks least similar
-  first, clamped at 1.0 (verified on a real store). The provider queries
+  adapter returns the squared L2 distance as `score`, clamped at 1.0, so
+  the rows at cosine 0.5 or below tie in nearest-first order and the
+  relevant rows above 0.5 follow from the least similar up (verified on
+  a real store; wording corrected in Subtask 14). The provider queries
   Mem0's own vector store and converts the distance to cosine. Why the
   kernel used `get_all` since June, and why `threshold=0.0` was never the
   fix: "Mem0" in `docs/PROVIDER_CONTRACT.md`.
@@ -225,8 +227,9 @@ level on this single-interaction benchmark, far above
 small models (+0.13 to +0.35); its block is about 7 short facts that
 gpt-4o extracted, against the kernel's two formatted records, so the
 block's content differs, not only who manages it. Mem0's scores were its
-inverted ones: 83-87% of injected memories scored exactly 1.0, and its
-order carries no similarity information. One Llama `native_mem0` trial
+inverted ones: 83-87% of injected memories scored exactly 1.0, so its
+scores carry no similarity information (the tied rows keep Chroma's
+nearest-first order). One Llama `native_mem0` trial
 injected no task context. `native_inhouse` injects the same two memories
 as the kernel, ordered by cosine similarity (profile first in 27 of 90
 trials).
@@ -968,8 +971,12 @@ Subtasks 12 and 13 are not started; 14 comes first.
 
 Spec: `docs/BENCHMARK_V2.md`. It was committed before the generator
 code (AIOS `a0ebe26`) and revised after a four-lens review. Amendment 1
-(a 500-token budget) was committed before the functional check
-(`51bd5f9`).
+(a 500-token budget) was committed before the first functional check
+(`51bd5f9`). Amendment 2 (revision 2 of the data, and the scorer and
+harness records) came after that check and the stopped smoke `s14`,
+before its code and the revision-2 check `f14c` (`d0441c2`). The
+corrections made after `f14c` end Amendment 2 ("Corrected after the
+revision-2 functional check").
 
 - **Known issue 29 fixed** (AIOS `50567bf`, its own commit): the
   adapter passes Ollama `num_ctx` from `llms.context_window` (default
@@ -979,17 +986,28 @@ code (AIOS `a0ebe26`) and revised after a four-lens review. Amendment 1
   - the keyword judge fallback (4b);
   - stored writer status payloads (9);
   - Mem0 swallowing Azure errors (10).
-- **Dataset** `users_v2` (Cerebrum `data/users_v2.jsonl`, seed
-  20261108, SHA-256 `768a37ac…`); `pilot_v2` is its first 30 users.
+- **Dataset** `users_v2` revision 2 (Cerebrum `data/users_v2.jsonl`,
+  seed 20261108, SHA-256 `35f68c78…`); `pilot_v2` is its first 30
+  users.
   - 150 users built on `users_v1`'s base users. Each has 15 to 23
     events (mean 18.4) and 14 to 22 writer rows (mean 17.4).
   - Sessions hold 2, 3 or 4 events, 252 / 330 / 318 times. 12 users
     needed a script redraw.
   - Each writer owns each role for exactly 50 users, and 50 users are
     echo users.
-  - GPT-4o (temperature 0.0, seeded) paraphrased 2,466 utterances. All
-    were accepted on the first attempt, with 0 fallbacks.
-    `synth_v2.py check users_v2` reports 0 problems.
+  - Revision 1 (SHA-256 `768a37ac…`, superseded): GPT-4o
+    (temperature 0.0, seeded) paraphrased 2,466 utterances, all
+    accepted on the first attempt, with 0 fallbacks.
+  - Revision 2 (Cerebrum `1eb5ede`) keeps the scripts and 2,287 of
+    revision 1's utterances byte for byte. The 126 that failed the new
+    meaning checks were paraphrased again, and the 53 of the three
+    changed templates (pairing 24, one-on-one 19, conference 10) from a
+    first attempt: 179 GPT-4o calls, 0 fallbacks. `synth_v2.py check
+    users_v2` reports 0 problems.
+  - A read-only review of revision 2 found no ground-truth problem:
+    all 150 contradictions conflict, and the recency, privacy,
+    deletion and echo facts hold for all 150 users. Its wording
+    findings are known issue 41.
 - **Kernel and library** (AIOS `828fde0`):
   - Session ages (`memory.block_recency_unit: session`, "(N sessions
     ago)"). The current session is threaded from `LLMQuery.session`
@@ -1000,7 +1018,22 @@ code (AIOS `a0ebe26`) and revised after a four-lens review. Amendment 1
     Every new branch returns a failure instead of raising.
   - Injected rows carry their text, `fact_key`, `session` and
     `provenance_event`. Calendar rows print before conversation rows.
-  - `PIPELINE_VERSION` is now `521a05c9…`.
+  - Amendment 2 (AIOS `554a408`): listings wait for the write barrier;
+    a failed own or shared fetch is reported as `retrieval_error`, and
+    an injector failure as `injection_error`, where before both looked
+    like an empty store; the kernel's conversation rows carry
+    `provenance_event` (known issue 40); an unknown memory operation
+    gets an explicit failure.
+  - `PIPELINE_VERSION` is now `46e28207…` (`521a05c9…` before
+    Amendment 2).
+  - After the revision-2 check (AIOS `e3cdc52`): the kernel's
+    startup print of its memory configuration redacts secrets
+    (`aios/utils/redact.py`). It had printed `memory.zep.api_key` in
+    full into every kernel log, and repo-artifacts archives those logs.
+    Two log lines that could print a key (the `/core/config/update`
+    body and an incomplete `llms.models` entry) are redacted too. The
+    logs written before the fix still hold the key: rotate it before
+    sharing them.
 - **Harness and agents** (Cerebrum `b5c43fe`):
   - New modules: `synth_v2.py`, `probes.py` (the matcher and the
     scorer) and `history.py` (the v2 trial).
@@ -1010,114 +1043,223 @@ code (AIOS `a0ebe26`) and revised after a four-lens review. Amendment 1
     lists the writer's own rows and deletes by `fact_key`.
   - A `calendar_agent` in each locus, and session-aware consumers.
   - SDK: `list_memories` and `LLMQuery.session`.
-  - The driver is `scripts/run_bench_v2.sh` (`MODE=functional` or
-    `smoke`).
-- **Found by the functional check** (fixed, Cerebrum `7d759ec`): V5
-  replaced a base row with the event's fact-less stub, from which Mem0
-  extracted nothing, so the extraction guard failed two H = 2 users.
-  Base events now carry their fields, and V5 writes them as JSON, as in
-  v1. The stopped attempt is in
-  `repo-artifacts/Cerebrum/bench_v2_functional/failed_attempts/f14`.
-  The check was re-run whole under run prefix `f14b`.
-- **Functional check: passes.** `pilot_v2` users 0 to 4, Qwen, no
-  judge. 21 cells and 105 user-trials, 0 failed (Cerebrum
-  `results/bench_v2_functional/`). All nine pass conditions hold.
-  Passes over users (recency and contradiction: lenient in brackets,
-  the new value named, stale or not):
+  - The driver is AIOS `scripts/run_bench_v2.sh` (`MODE=functional`
+    or `smoke`).
+  - Amendment 2 (Cerebrum `4fd6bd0`):
+    - meaning checks on paraphrases, and `--reuse` checks its source;
+    - the `transition_marked` rule, native `cap_bound` against the
+      consumer's own k, `semantic_error`, the integration t-interval;
+    - a failed retrieval, an errored probe or any exception fails the
+      user and keeps what ran; an errored probe is recorded unscored;
+    - rows per event come from the listings; backend usage covers every
+      user id; replicated writers record the metadata as stored; only
+      creates the kernel accepted are recorded as written;
+    - `LLMQuery.provenance_event`.
+  - After the revision-2 check (Cerebrum `9946612`):
+    `visible_stored_rows` (native `cap_bound`) counts the writers' rows
+    in the partition the consumer searched, the private ones too when
+    it skips visibility; the native consumer reports
+    `visibility_checked`.
+- **Found by the first functional check** (`f14`, fixed in Cerebrum
+  `7d759ec`): V5 replaced a base row with the event's fact-less stub,
+  from which Mem0 extracted nothing, so the extraction guard failed
+  two H = 2 users. Base events now carry their fields, and V5 writes
+  them as JSON, as in v1. The check was re-run whole as `f14b`.
+- **`f14b` and the review (Amendment 2).** `f14b`, on revision 1,
+  passed all nine conditions, and the smoke started (`s14`). A
+  read-only review of the code and data, run meanwhile, found
+  contradictions that did not conflict, paraphrases that changed what a
+  fact says, a shared fact marked private, and incomplete harness
+  records. The smoke was stopped in its first cell. Nothing from it or
+  from `f14b` is reported as a result; `f14b` serves only as the
+  comparison below. Their files are in `repo-artifacts/Cerebrum/`
+  (`bench_v2_smoke/failed_attempts/s14/` and
+  `bench_v2_functional/superseded_r1/`).
+- **Functional check on revision 2 (`f14c`): passes.** `pilot_v2`
+  users 0 to 4, Qwen, no judge. 21 cells and 105 user-trials, 0 failed
+  (Cerebrum `results/bench_v2_functional/`, with its provenance). All
+  nine pass conditions hold. Passes over users (recency and
+  contradiction: lenient in brackets, the new value named, stale or
+  not):
 
   | Locus | Backend | Condition | Deletion, no echo | Deletion, echo | Privacy | Recall | Recency | Contradiction |
   |---|---|---|---|---|---|---|---|---|
-  | kernel | mem0 | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 0/5 (5/5) | 1/5 (2/5) |
-  | kernel | mem0 | H = 2 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (4/5) | 2/5 (3/5) |
-  | kernel | mem0 | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 3/5 (3/5) |
-  | kernel | inhouse | H = 0 | 3/3 | 0/2 | 5/5 | 5/5 | 3/5 (5/5) | 4/5 (4/5) |
+  | kernel | mem0 | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (5/5) | 2/5 (2/5) |
+  | kernel | mem0 | H = 2 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (3/5) | 2/5 (2/5) |
+  | kernel | mem0 | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 1/5 (5/5) | 2/5 (2/5) |
+  | kernel | inhouse | H = 0 | 3/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 4/5 (4/5) |
   | kernel | inhouse | H = 2 | 3/3 | 1/2 | 5/5 | 5/5 | 4/5 (4/5) | 3/5 (3/5) |
   | kernel | inhouse | no_memory | 3/3 | 2/2 | 5/5 | 0/5 | 0/5 (0/5) | 0/5 (0/5) |
-  | kernel | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 4/5 (4/5) |
-  | replicated | mem0 | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 0/5 (5/5) | 3/5 (5/5) |
-  | replicated | mem0 | H = 2 | 3/3 | 1/2 | 5/5 | 4/5 | 1/5 (3/5) | 1/5 (2/5) |
+  | kernel | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 1/5 (5/5) | 3/5 (4/5) |
+  | replicated | mem0 | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (5/5) | 2/5 (4/5) |
+  | replicated | mem0 | H = 2 | 3/3 | 1/2 | 5/5 | 4/5 | 1/5 (3/5) | 1/5 (1/5) |
   | replicated | mem0 | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 1/5 (5/5) | 2/5 (3/5) |
-  | replicated | inhouse | H = 0 | 3/3 | 0/2 | 5/5 | 5/5 | 3/5 (5/5) | 4/5 (4/5) |
-  | replicated | inhouse | H = 2 | 3/3 | 1/2 | 5/5 | 4/5 | 2/5 (3/5) | 1/5 (1/5) |
-  | replicated | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 4/5 (4/5) |
-  | native | mem0 | H = 0 | 3/3 | 2/2 | 5/5 | 1/5 | 0/5 (0/5) | 1/5 (1/5) |
-  | native | mem0 | H = 2 | 3/3 | 2/2 | 5/5 | 1/5 | 0/5 (0/5) | 1/5 (1/5) |
-  | native | mem0 | no_delete | 3/3 | 2/2 | 5/5 | 0/5 | 0/5 (0/5) | 1/5 (1/5) |
-  | native | mem0 | no_visibility | 3/3 | 2/2 | 3/5 | 0/5 | 0/5 (0/5) | 2/5 (2/5) |
-  | native | inhouse | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (5/5) | 3/5 (4/5) |
+  | replicated | inhouse | H = 0 | 3/3 | 0/2 | 5/5 | 5/5 | 2/5 (5/5) | 4/5 (4/5) |
+  | replicated | inhouse | H = 2 | 3/3 | 1/2 | 5/5 | 4/5 | 2/5 (3/5) | 1/5 (2/5) |
+  | replicated | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 1/5 (5/5) | 3/5 (4/5) |
+  | native | mem0 | H = 0 | 3/3 | 1/2 | 5/5 | 0/5 | 0/5 (0/5) | 0/5 (1/5) |
+  | native | mem0 | H = 2 | 3/3 | 2/2 | 5/5 | 0/5 | 0/5 (0/5) | 1/5 (1/5) |
+  | native | mem0 | no_delete | 3/3 | 2/2 | 5/5 | 0/5 | 0/5 (1/5) | 0/5 (0/5) |
+  | native | mem0 | no_visibility | 3/3 | 2/2 | 4/5 | 1/5 | 0/5 (0/5) | 1/5 (1/5) |
+  | native | inhouse | H = 0 | 3/3 | 1/2 | 5/5 | 5/5 | 2/5 (5/5) | 2/5 (3/5) |
   | native | inhouse | H = 2 | 3/3 | 1/2 | 4/5 | 4/5 | 2/5 (3/5) | 1/5 (1/5) |
   | native | inhouse | no_delete | 0/3 | 0/2 | 5/5 | 5/5 | 3/5 (4/5) | 2/5 (2/5) |
-  | native | inhouse | no_visibility | 3/3 | 1/2 | 0/5 | 5/5 | 3/5 (5/5) | 2/5 (2/5) |
+  | native | inhouse | no_visibility | 3/3 | 1/2 | 0/5 | 5/5 | 3/5 (5/5) | 3/5 (3/5) |
 
   The full matrix (Wilson intervals, where the forbidden value
   appeared, cap and budget counts) is in that directory's
   `analysis.md`. With n = 5 per cell (known issue 37), the per-cell
   rates are not comparisons.
   - **Privacy.** The kernel never failed (0 of 35 probes, block or
-    answer). The one failure in a real condition is the one the spec
-    predicted: native in-house, H = 2, user 4, whose V3 consumer
+    answer), and no kernel or replicated block of any probe held a
+    private value. The one failure in a real condition is the one the
+    spec predicted: native in-house, H = 2, user 4, whose V3 consumer
     ignores visibility. `calendar_agent`'s private row reached the
-    block; Qwen did not name it, and the probe fails on the block.
-    Under `no_visibility`, the private value reached the block for 5 of
-    5 native in-house users and 2 of 5 native Mem0 users.
+    block, and Qwen named the lawyer. Under `no_visibility`, the
+    private value reached the probe's block for 5 of 5 native in-house
+    users and 1 of 5 native Mem0 users. Exposure is wider than the
+    probe shows (known issue 43).
   - **Deletion.** No deleted row came back in any cell.
-    - Every deletion failure outside `no_delete` is an echo user: the
-      value came back through the echo row in another writer's rows (13
-      of 13; deletion is writer-scoped, known issue 38).
-    - Non-echo users pass in every in-house cell (18 of 18).
+    - Every deletion failure outside `no_delete` is an echo user (14 of
+      14). In 13 the value came back through the echo row in another
+      writer's rows (known issue 38). In one (native Mem0, H = 0, user
+      0) no row in the block carried it (the surviving echo row was not
+      among the 10 fetched): Qwen listed Mattermost among popular chat
+      apps, and a guess fails the probe. Echo-user passes hide the echo
+      row too: 7 of the 11 had it in a later probe's block (known issue
+      43).
+    - Non-echo users pass in every in-house cell at H = 0 and H = 2 (18
+      of 18).
     - Under `no_delete`, every kernel, replicated and native in-house
-      user fails. Native Mem0 passes 5 of 5 because it never surfaced
-      the value.
-  - **Native Mem0 shows little.** At H = 0 it passes recall 1/5 and
-    recency 0/5. In every failure the value was missing from the block,
-    and the one recall pass got it only from the consumer's own earlier
-    answer. Its search
-    keeps Mem0's inverted score, which ranks the most relevant rows
-    last; this is known and kept by design (`docs/NATIVE_USAGE.md`).
-    So its deletion and privacy passes are not evidence of anything.
+      user fails through the undeleted target row. Native Mem0's
+      deletion probe passes 5 of 5, though later probes showed the
+      value (known issue 43).
+  - **Native Mem0 shows little.** At H = 0 recall, recency and
+    contradiction pass 0 of 5 each, and at H = 2 recall passes 0 of 5.
+    At both levels every recall and recency failure (20 of 20) had the
+    value missing from the block. Its search keeps Mem0's own score,
+    clamped at 1.0 (known and kept, `docs/NATIVE_USAGE.md`): the fetch
+    holds the nearest rows at cosine 0.5 or below, and the relevant
+    rows, above 0.5, are cut. Of its 1,030 injected rows, 1,024 scored
+    exactly 1.0. So its deletion and privacy passes are not evidence of
+    anything.
   - **Recency fails mostly by naming both values**, as the spec
     expected. Outside native Mem0, at H = 0 and H = 2:
-    - 19 of 50 pass strictly, and 42 of 50 name the new value;
-    - 23 answers name both values, and 9 of those name the stale one
-      as past;
-    - some answers reverse the two ("we currently deploy to tern-02 …
-      previously relocated to bittern-06").
-  - **Contradiction fails differently.** Outside native Mem0, 23 of 50
-    pass and 29 of 50 name the new value. Only 6 name both: the
-    consumer usually keeps the stale value from the first writer.
+    - 21 of 50 pass strictly, and 41 of 50 name the new value;
+    - 20 answers name both values, and 15 of those name the stale one
+      as past (`named_as_past` is approximate: 45 of the check's 48
+      such verdicts matched a plain reading);
+    - some answers reverse the two ("we currently use the `tern-02`
+      staging server ... previously relocated to `bittern-06`").
+  - **Contradiction fails differently.** Outside native Mem0, 22 of 50
+    pass and 26 of 50 name the new value. Only 4 name both: 13 failing
+    answers keep the stale value alone, and 11 name neither. The
+    manager slot favors the stale value (known issue 44).
   - **Kernel against replicated, H = 0.**
     - In-house: the blocks are identical in 30 of 30 probes, with no
       discordant pair.
-    - Mem0: they differ only on contradiction, with 2 discordant pairs,
-      both favoring replicated (p = 0.50). Every user's block held both
-      the new and the stale value in both cells, and gpt-4o's extraction
-      differs from run to run.
+    - Mem0: the blocks differ in all 30 probes, and the pass results
+      differ only on recency, with 2 discordant pairs, one each way
+      (p = 1.00). Mem0's extraction varies between runs (known issue
+      42).
   - **Cap and budget**, over H = 0 and H = 2:
-    - The cap bound in 54 of 60 probes for kernel in-house, 54 of 60
-      for kernel Mem0, 42 for replicated in-house and 43 for replicated
-      Mem0.
-    - The budget bound in 41 in-house probes and never in Mem0, whose
-      blocks reach at most 434 estimated tokens. This is as Amendment 1
+    - The cap bound in 54 of 60 probes for kernel in-house, 54 for
+      kernel Mem0, and 42 for each replicated cell.
+    - The budget bound in 44 in-house probes and never in Mem0, whose
+      blocks reach at most 455 estimated tokens, as Amendment 1
       expected.
-  - **Contamination.** In 9 of 525 probes, a value reached the block
-    only through the consumer's own earlier conversation rows.
-    - One case shows a laundering path, in a control (native Mem0,
-      `no_visibility`, user 4): the deletion probe's answer named the
-      private value, and its conversation row carried it into the
-      privacy probe's block.
-    - The kernel cannot take that path. Its visibility rule keeps the
-      private row out of every probe's block.
-- **Analysis changes after the run** (Cerebrum `65cdc52`, `bench_v2_analysis.py`,
-  with tests that fail without them). No score changed.
+  - **Contamination.** In 12 of 525 probes, a value reached the block
+    only through the consumer's own earlier conversation rows: 6
+    in-house contradiction probes (users 1 and 2, the same 3 in the
+    kernel and replicated) and 6 native Mem0 probes. None is a
+    deletion or privacy probe.
+  - **Mem0 facts per write.** Every one-value utterance became one Mem0
+    row in all three Mem0 loci (800 of 800); a base event became 1 to
+    4 rows. Of the update rows that reached a block, 15 of 45 carried
+    the old value (kernel 5 of 14, replicated 4 of 13, native 6 of 18),
+    against the spec's "usually"; native Mem0's never reached a
+    recency probe's block.
+  - **Recall failures.** Of the 13 in real conditions, 4 are H = 2
+    user 0's V2 consumer, in all four agent-managed cells: its
+    partition holds no writer row (the kernel resolves the id and
+    passes). The other 9 are native Mem0's. In each, the target was
+    stored and visible but outside the consumer's fetch (10 rows; 5 for
+    H = 2 user 1's V4 consumer), which the clamped score fills with rows
+    at cosine 0.5 or below; the same target texts score 0.55 to 0.83 in
+    the other Mem0 cells. The cap bound in 8 of the 9; in H = 2 user
+    2's, 9 of the 10 fetched rows were rows it could not see. So, as the
+    spec expected, recall fails mostly when the cap drops the target (8
+    of 13), and most for native Mem0. Outside native Mem0 the cap cost
+    no recall: every other H = 0 cell passes 5 of 5 while the cap
+    binds.
+  - **Against revision 1** (`f14b`): of the 525 scored probes, 39
+    changed pass, lenient pass, or whether the forbidden value reached
+    the block or the answer; 26 of them changed pass or fail (17 to
+    fail, 9 to pass). The 11 in-house changes (8 in pass or fail) all
+    come from revised utterances, the 28 Mem0 changes (18 in pass or
+    fail) from Mem0's extraction, which differed between the runs (6 of
+    them also involve a revised utterance); none comes from the code.
+    Where a block was identical (169 of all 630 probes), Qwen gave the
+    same answer in 168. The revision did not raise contradiction scores
+    (strict 23 to 22 of 50).
+- **Verification of the `f14c` records.** A read-only review in five
+  parts (hard constraints, the other probes, the records, kernel
+  against replicated and native, revision 1 against 2), with an
+  adversarial check of each defect, recomputed the records with its
+  own code:
+  - 0 mismatches: the block and answer checks of all 210 deletion and
+    privacy probes, the scores of all 315 recall, recency and
+    contradiction probes, the bounds, the session ages, and the
+    Amendment 2 fields (`retrieval_error` and `injection_error` on
+    every probe, all None; `provenance_event` on 382 of 382 kernel
+    conversation rows).
+  - One defect, confirmed: `visible_stored_rows` counted the writers'
+    shared rows under the base id for every native consumer. In
+    `f14c` it is wrong in 14 trials (84 probes): too high for the V2
+    consumer (H = 2, user 0), and one low for the V3 consumer (H = 2,
+    user 4) and every `no_visibility` trial. Fixed (above).
+    Recomputed, it changes 0 of the 240 native `cap_bound` values, and
+    a reference consumer counts as before, so the smoke is unaffected.
+  - The Zep key in the kernel log (fixed above).
+  - The rest were descriptions, now corrected: the spec ("Corrected
+    after the revision-2 functional check"), `NATIVE_USAGE.md`,
+    `PROVIDER_CONTRACT.md`, two docstrings in `providers/mem0.py`, the
+    `MemoryCounts` docstring and a `config.yaml.example` comment. The
+    local `config.yaml`'s `mem0.mode` comment belongs to the other
+    branch and is left. A second read-only review, of these fixes and
+    this text, confirmed errors in the text only, now corrected, and
+    minor gaps in the code, also fixed: two more log lines, a list or
+    mapping under a secret-named key, and a test that now checks the
+    consumer's own rows.
+- **Analysis changes after `f14b`** (Cerebrum `65cdc52`,
+  `bench_v2_analysis.py`, with tests that fail without them). No score
+  changed.
   - The cap criterion had treated each condition as its own cell, so it
     also checked `no_memory`, whose store is empty by design. The spec's
     cells are locus × backend, over H = 0 and H = 2, and the criterion
     now follows it.
   - The matrix gained `contaminated` and `named_as_past`.
+- **Smoke** (`pilot_v2`, 30 users, Qwen, H = 0, all six cells, judge
+  v2 on the integration probe): run prefix `s14b`, to be run with every
+  Mem0 phase on one UTC date (00:00 UTC is 19:00 EST; the driver log's
+  times confirm it, known issue 42). Results follow when it
+  completes.
 
 ## Open decisions
 
-None.
+1. **Native Mem0's install.** The agents run the pinned `mem0ai` 2.0.2
+   without its `[nlp]` extra, so spaCy is absent: Mem0 logs "Failed to
+   load spaCy" and its search adds no entity boosts. This is Mem0's
+   default install. The extra would not repair the ranking: Mem0 keeps
+   its entities in a second collection read through the same Chroma
+   adapter, so its entity code reads a distance as a similarity too. A
+   search skips entity matches nearer than distance 0.5 (cosine above
+   0.75) and boosts farther ones in proportion to their distance, and
+   any boost divides every score by 1.5 (`mem0/memory/main.py`,
+   `_compute_entity_boosts`; `mem0/utils/scoring.py`). The functional
+   check and the smoke use the default. Decide before the final runs
+   whether native Mem0 is the default install or the full one
+   (`NATIVE_USAGE.md`, "Install").
 
 ## Test baselines
 
@@ -1139,7 +1281,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   without `test_memory.py`, `tests/modules/syscall`,
   `tests/modules/llm/test_decoding.py`, `tests/environment`: 379
   passed, the 14 errors; Cerebrum 428 passed, 4 skipped, the same 19
-  failures and 2 errors). The names
+  failures and 2 errors) and Subtask 14's fixes (AIOS `e3cdc52`,
+  Cerebrum `9946612`; AIOS the same set: 468 passed,
+  the 14 errors; Cerebrum 860 passed, 4 skipped, the same
+  19 failures and 2 errors, by name). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -1303,18 +1448,96 @@ These fail on `workshop-postrun` too and are not caused by later work.
     rate rests on n = 30 users in the smoke and 5 in the functional
     check. Report Wilson intervals and compare cells paired over users.
 38. Deletion is writer-scoped (Subtask 15 completes it). In every
-    locus, a revoke leaves two things in place:
+    locus, a revoke leaves in place:
     - an echo of the value in another writer's rows;
-    - any assistant conversation row that quoted the value.
+    - any assistant conversation row that quoted the value;
+    - in Mem0 cells, another fact's row by the same writer into which
+      Mem0's extraction folded the value. A revoke deletes by
+      `fact_key`, so it misses the fold. The extraction sees the fact
+      while its row exists and in the writer's last 10 messages, which
+      a delete leaves, so a write before or after the revoke can fold
+      it. `f14c` showed a fold only under `no_delete` (user 1's database
+      row, written after the no-op revoke, took the codename). 27 of
+      the 30 `pilot_v2` users have a same-writer write between an add
+      and its revoke, and all 30 counting writes after it. Classify
+      each deletion failure by the carrier that `revoked_value_rows`
+      names.
 39. `config.yaml` keeps `max_memory_tokens: 2000` for v1. v2 runs set
     500 through the driver (`BENCHMARK_V2.md`, Amendment 1), and the
     pre-flight check refuses anything else.
-40. The kernel's conversation rows carry their `session` but not
-    `provenance_event` (the probe that wrote them). The replicated and
-    native assistants stamp both. Scoring does not read it, since
-    conversation rows are classified by owner and type, and the
-    in-house blocks are identical. In kernel cells, though,
-    contamination cannot be traced back to the probe that caused it.
+40. Fixed in Subtask 14 (Amendment 2, AIOS `554a408`): the kernel's
+    conversation rows carry `provenance_event`, the probe that wrote
+    them, as the replicated and native assistants' do. In `f14c`, 382
+    of 382 injected kernel conversation rows carry it (`f14b`: 0 of
+    371). They still carry no `provenance_agent` or `provenance_user`.
+    Scoring reads those (`probes.row_source`, `judge_free.measure`) and
+    otherwise uses `owner_agent` and `user_id`, which these rows carry
+    (`assistant_agent` and the trial's user id, 382 of 382), so no
+    kernel score depends on them.
+41. Revision 2's wording, which changes no score (from its review):
+    - 23 of the 25 pairing revokes read "Please forget the pairing I'm
+      involved in." A revoke's text is never stored or shown to a
+      model.
+    - 14 of the 59 pairing adds read awkwardly ("I'm working in a
+      pairing with …"). Three are recall targets (users 43, 100 and
+      145), stored verbatim in in-house cells.
+    - User 75's contradiction reads "I'm only presenting at Bytewave
+      Forum for a conference."
+42. Mem0's extraction (gpt-4o) changes what is stored from run to run:
+    - Its prompt holds the current UTC date, which it writes into facts
+      ("relocated to bittern-06 on November 9, 2026"). `f14b`'s
+      kernel Mem0 phase ran before 00:00 UTC and its agent phase after,
+      so its kernel Mem0 cells were extracted under November 8 and its
+      replicated and native Mem0 cells under November 9; all of `f14c`
+      ran on 2026-11-09 UTC. Keep a run's Mem0 phases on one UTC date
+      (00:00 UTC is 19:00 EST), or report the date per cell.
+    - It can drop a conflict cue: user 0's "the only person I have a
+      weekly one-on-one with" was stored without "only", as an addition
+      ("User has a weekly one-on-one meeting with Sofia Lindqvist."),
+      in 7 of 7 cells that sent Mem0 the utterance. At H = 2 user 0's
+      task writer is V5 and sends the event's fields instead; in kernel
+      Mem0 that row states the change.
+    - It can fold a value into another fact's row (known issue 38).
+    All 28 Mem0 probes whose pass, lenient pass or forbidden-value
+    checks changed between `f14b` and `f14c` (18 in pass or fail)
+    changed through extraction differences (6 of them also involve a
+    revised utterance). Read kernel against replicated on Mem0 as
+    paired runs of an extractor that varies.
+43. A privacy or deletion probe checks only its own block and answer,
+    so a pass can hide the value in the trial's other probes:
+    - Privacy, where the consumer ignores visibility. Native in-house,
+      H = 2, user 4 (V3) had the private row in 5 of 6 blocks. Native
+      Mem0's V3 consumer (H = 2, user 4) passed privacy, but the row
+      reached 3 other blocks and its integration answer named the
+      lawyer. Under `no_visibility`, native Mem0 had it in some block
+      for 5 of 5 users, while its privacy probe failed for 1. No kernel
+      or replicated block held a private value.
+    - Deletion, for echo users in every locus: the echo row survives
+      the revoke (known issue 38). At H = 0 and 2, 7 of the 11
+      echo-user deletion passes had it in a later block (kernel and
+      replicated 4 of 6, native 3 of 5); the other 4 are H = 2 user 0's
+      V2 consumer, whose blocks held no writer row. In kernel Mem0 at
+      H = 2, 4 of user 0's later answers named Mattermost.
+    - Under `no_delete`, native Mem0's deletion probe passes for 5 of 5
+      users, but the undeleted row reached later blocks for all 5, and
+      later answers named its value for 3 of them (6 answers).
+    Report trial-level exposure (the value in any block or answer) next
+    to the per-probe rate, for deletion and privacy, in every cell.
+44. Contradictions whose question repeats the stale statement's words
+    favor the stale value. The manager add says "I report to {value}",
+    the contradiction "My manager is {value}", and the question is "Who
+    do I report to?". In `f14c`, 12 cells' blocks held user 1's stale
+    row. In the 11 where it kept the "report to" wording, every answer
+    named it (in 2, kernel and replicated in-house at H = 0, the
+    contradiction row was not in the block). In the twelfth, kernel
+    Mem0 at H = 2, the V5 writer's fields made Mem0 store "Alex Carter's
+    manager is Lena Fischbach.", and the answer named only the new
+    value. The teammate question ("Who am I pairing with") repeats the
+    stale add's words the same way; in `pilot_v2`'s paraphrases, the
+    home_city, client and one_on_one questions repeat the later
+    statement's. Report the four manager users (1, 19, 25 and 28) and
+    the six teammate users (5, 8, 11, 17, 20 and 26) apart. A later
+    dataset version should ask with the contradiction's words.
 
 ## Fixed
 
@@ -1330,3 +1553,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
 - `written_memories` capture, and `memory_counts` derived from it.
 - `test_summary_props.py` matched rows by prefix, so a generated name
   such as `ke` took the `kernel_shared` row.
+- `visible_stored_rows` for native V2, V3 and `no_visibility`
+  consumers (Subtask 14, after the revision-2 check).
+- The kernel's startup print included `memory.zep.api_key` (Subtask
+  14, after the revision-2 check). Logs written before it still hold
+  the key.

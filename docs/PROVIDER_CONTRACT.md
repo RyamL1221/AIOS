@@ -133,13 +133,23 @@ Mem0's own vector store and embedder, and converts the raw distance to a
 cosine similarity (`1 - d/2`: Mem0's collections use Chroma's default
 squared L2, and the pinned model returns unit vectors).
 
-It does not use Mem0's `search()`. Mem0 2.0.0's Chroma adapter puts the
-raw distance in the `score` field, and `score_and_rank` treats that as a
-similarity: results come back least similar first, the fused score is
-clamped at 1.0, and `threshold` (default 0.1) drops the closest
-matches, whose distance is below it. Measured on a real store with
-the pinned model: the most relevant of four memories ranked last, at
-0.647, and two unrelated ones ranked first, at 1.0.
+It does not use Mem0's `search()`. Mem0 2.0's Chroma adapter (2.0.0,
+and the pinned 2.0.2) puts the raw distance in the `score` field, and
+`score_and_rank` treats that as a similarity, sorts it high to low and
+keeps the top k. As installed, the fused score is the distance alone:
+Chroma has no keyword search, so no BM25, and without Mem0's `[nlp]`
+extra no entity boost (`NATIVE_USAGE.md`, "Install"). The fused score
+is clamped at 1.0, so every row at
+cosine 0.5 or below (distance 1 or more) ties at 1.0 and keeps Chroma's
+nearest-first order, and the rows above 0.5, the relevant ones, follow
+from the least similar up. `threshold` (default 0.1) drops the closest
+matches, whose distance is below it (cosine above 0.95). Measured on a
+real store with the pinned model: the most relevant of four memories
+ranked last, at 0.647, and two unrelated ones ranked first, at 1.0.
+With k or more rows at cosine 0.5 or below, the top-k cut drops every
+row above it: in the benchmark v2 functional check, 1,024 of the 1,030
+rows native Mem0 injected scored exactly 1.0, and the other 6 (cosine
+0.50 to 0.53) came after them in their blocks.
 
 Why the kernel used `get_all` until Subtask 5: on 2026-06-28 commit
 `7793943` set Mem0's search `threshold` to 0.0 after retrieval counts fell

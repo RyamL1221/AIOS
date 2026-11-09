@@ -112,7 +112,11 @@ fetch), `after_partition` (rows whose `user_id` matches),
 `k`: equal to `after_visibility`), `scores_present`, `threshold_used`
 (`None`: no agent threshold), `top_k_used`, `after_budget`,
 `injected_count`, `tokens_estimated` and `injected_memories`
-(`owner_agent`, `memory_type`, `match_score`).
+(`owner_agent`, `memory_type`, `match_score`). It also records
+`visibility_checked`, which is not a kernel key: False when it skips the
+sharing convention (a V3 consumer, the `no_visibility` control). The
+harness's native `visible_stored_rows` reads it (`history.visible_rows`);
+the kernel and the library do not send it.
 
 **Cost parity (Subtask 7).** The AssistantAgent also records the
 kernel's latency keys: `barrier_wait_ms` (0: no barrier), `search_ms`
@@ -170,7 +174,20 @@ What the agents do:
   order and with its default `threshold`. That includes the inverted
   score found in Subtask 5 (Mem0's Chroma adapter reports the raw L2
   distance as a similarity), because that is what a user of Mem0 gets.
-  `scores_present` records whether Mem0 returned scores.
+  `scores_present` records whether Mem0 returned scores. The score is
+  clamped at 1.0, so every row at cosine 0.5 or below ties at 1.0 in
+  Chroma's nearest-first order, and the rows above 0.5 follow from the
+  least similar up (`PROVIDER_CONTRACT.md`, "Mem0"). Once the store
+  holds k rows at 0.5 or below, Mem0 returns the k nearest of those and
+  every more relevant row is cut. The block is the part of those k rows
+  the sharing convention keeps, so a hidden row still takes a slot.
+- **Install.** The agents run the pinned `mem0ai` without its `[nlp]`
+  extra, so spaCy is absent: Mem0 logs "Failed to load spaCy" and its
+  search adds no entity boosts (BM25 is off either way, since Chroma has
+  no keyword search). This is Mem0's default install; whether the
+  native baseline should run with the extra is an open decision
+  (`DEV_STATUS.md`). The extra would not fix the ranking above: Mem0's
+  entity code reads Chroma distances as similarities too.
 - **Conversation.** `memory.add([user turn, assistant turn],
   user_id=<user>, agent_id="assistant_agent", metadata={..., memory_type:
   "conversation", sharing_policy: "private"}, infer=True)`.

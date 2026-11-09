@@ -310,6 +310,8 @@ ago". The assistant's earlier probes read "this session".
 - **Checked per probe.** Every locus reports `session` and
   `block_recency_unit` in its diagnostics. In a v2 run, a probe whose
   diagnostics do not show session 7 with unit `session` fails the user.
+  A probe with an empty block is exempt: the library reports no session
+  for it, and no row in it carries an age.
 
 ## Revoke and deletion
 
@@ -377,8 +379,12 @@ run:
 - **Native** fetches k rows from the backend and applies visibility
   afterwards, so other agents' private rows and the assistant's own
   conversations take slots. It has no budget. Native Mem0 ranks by
-  Mem0's own `search()` score, which puts the least similar first
-  (NATIVE_USAGE.md, "Scores").
+  Mem0's own `search()` score, which as installed is the squared L2
+  distance alone (Chroma has no keyword search, and without the
+  `[nlp]` extra there is no entity boost), clamped at 1.0. Every row at
+  cosine 0.5 or below ties at 1.0 in Chroma's nearest-first order, and
+  the rows above 0.5 follow from the least similar up, so they are cut
+  whenever k rows lie at 0.5 or below (NATIVE_USAGE.md, "Scores").
 - **Mem0 cells store extracted facts**, in-house cells the utterances
   verbatim. How many facts a one-value utterance becomes is not yet
   measured; the functional check measures it.
@@ -512,6 +518,16 @@ Each value is recorded with the results.
 - `deleted_memory_ids`, `reappeared_memory_ids` and
   `revoked_value_rows`.
 
+Three v1 summary fields stay unset in v2: `writer_stored_rows` is `{}`
+(each writer's stored rows are in `sessions[]`, from the listings),
+every field of `latency_breakdown` is null (each probe keeps its own
+latency), and `retrieval_log` is null (the integration probe's
+diagnostics are mirrored as `injection_diagnostics`). The v1 tools that
+read `retrieval_log` do not apply to v2: `assert_injection_rate.py`
+reports a missing log for every trial, and `--csv` writes 0 and False
+in `shared_memory_count` and `cross_agent_found`. `memory_counts`
+counts creates, one per write event, not stored rows.
+
 For the tools that read v1 fields, the integration probe is mirrored
 into the top level:
 - `follow_up_query`, `assistant_response`, `injection_diagnostics` and
@@ -527,7 +543,8 @@ into the top level:
   or was empty or an "Error:" text. Such a probe is never scored, so an
   error cannot pass a hard constraint.
 - **A listing** that returned its limit, or a probe whose diagnostics
-  do not show session 7 in a v2 run.
+  do not show session 7 in a v2 run (a probe with an empty block is
+  exempt; see "Recency").
 - **A judge failure** after retries.
 - **A v2 extraction failure.** With backend extraction, every write
   event must store at least one row, counted from the listings by
@@ -569,7 +586,9 @@ probe.
   `memory.write_barrier.timeout_ms` to 60,000, and every probe records
   its barrier waits.
 - Any edit to `aios/memory/pipeline/` changes `PIPELINE_VERSION`. Every
-  v2 trial records it.
+  kernel and replicated v2 trial records it. Native trials, which do
+  not run the library, record None; their file records the kernel's
+  version in `run_settings`.
 
 ## Functional check and smoke
 
@@ -695,8 +714,8 @@ smoke run again on it, with the changes below.
   - weekly one-on-ones, 16 of 19;
   - client, 12 of 26 ("The company I'm working with on my project
     is …", which no longer says client).
-  - Pilot users 0, 3, 9, 12, 18 and 27 had a contradiction that did not
-    conflict.
+  - Pilot users 0, 3, 9, 12, 14, 18, 27 and 29 had a contradiction that
+    did not conflict (14 and 29: client).
 - **Lost topics.** Paraphrases dropped what the fact is about:
   - every teammate add said "collaborating" (59 of 59), and every
     teammate revoke said "teaming up" (25 of 25), not "pairing";
@@ -788,12 +807,38 @@ smoke run again on it, with the changes below.
   consumer error.
 - **Rows that were never listed.** A write event's `memory_ids` and
   `stored_rows`, and its session's `stored_rows`, are None when no
-  listing followed: the writer failed or raised, or the listing raised.
-  They are `[]` and 0 when the listing ran and held no row of the
-  event, which is the Mem0 "stored nothing" case.
+  listing followed: the writer failed, or the listing raised. A writer
+  that raised records its session with the error and no events, and the
+  session's `stored_rows` None. They are `[]` and 0 when the listing
+  ran and held no row of the event, which is the Mem0 "stored nothing"
+  case.
 - **Reuse is checked.** `--reuse` accepts only a whole version 2 file
   with at least the users to build, drawn with the run's seed and
   paraphrased by its model. A limited name such as `pilot_v2` names
   part of a file, so it is refused too.
 - **Recorded writes.** A create the kernel refused is not recorded as
   written, as in the agent-managed loci.
+
+**Corrected after the revision-2 functional check** (2026-11-09, before
+the smoke). A read-only review of the check's records found these. None
+changes a design decision or a score:
+- **Pilot users.** The list of pilot users whose revision-1
+  contradiction did not conflict now has 14 and 29, whose client
+  contradictions read "The company I'm working with on my project is …".
+- **Native Mem0's order** ("Loci and backends"). The clamped score
+  puts the rows at cosine 0.5 or below first, nearest first, not the
+  least similar first. The relevant rows are cut all the same.
+- **Empty blocks** are exempt from the session check ("Recency",
+  "Harness"), as the harness already had them: no row in them carries
+  an age.
+- **`PIPELINE_VERSION`** is recorded by kernel and replicated trials;
+  native trials record None ("Before any v2 run").
+- **Unset v1 fields** are named ("Harness"), and a writer that raised
+  records no events ("Rows that were never listed").
+- **`visible_stored_rows`** (native `cap_bound`, "Scoring") counted the
+  writers' shared rows under the base user id for every consumer. It
+  now counts the writers' rows in the partition the consumer searched,
+  the private ones too when it skips visibility (V3, `no_visibility`),
+  which the native consumer reports as `visibility_checked`. In the
+  check this changed no `cap_bound` (0 of 240 native probes), and a
+  reference consumer's count is unchanged.
