@@ -16,6 +16,14 @@ do not describe this branch.
    `.venv/bin/python -m pip install ../Cerebrum --no-deps --force-reinstall`.
    The venv is shared across branches, so reinstall after switching too.
 5. Never run the Cerebrum suite while a kernel listens on port 8000.
+6. From Subtask 15 on, at most two review passes per subtask: one
+   adversarial review of the code and the write-up, then one
+   verification pass of the fixes. A third pass only if the second
+   found an error (a wrong value, a wrong claim, a bug), not an
+   imprecision. Mutation testing runs once per subtask, on the final
+   code, not per reviewer. This file states what the tests pin and no
+   more: where a claim outruns the tests, weaken the claim rather than
+   add tests, unless the untested rule affects a reported number.
 
 ## Subtasks
 
@@ -35,7 +43,7 @@ do not describe this branch.
 | 9d | Shared compact block; fixed decoding; mem0ai pinned; greedy judge; re-baseline | Done |
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
-| 14 | Accumulating multi-session benchmark (v2) | In progress |
+| 14 | Accumulating multi-session benchmark (v2) | Done |
 
 ### Subtask 1
 
@@ -1239,11 +1247,374 @@ revision-2 functional check").
     cells are locus × backend, over H = 0 and H = 2, and the criterion
     now follows it.
   - The matrix gained `contaminated` and `named_as_past`.
-- **Smoke** (`pilot_v2`, 30 users, Qwen, H = 0, all six cells, judge
-  v2 on the integration probe): run prefix `s14b`, to be run with every
-  Mem0 phase on one UTC date (00:00 UTC is 19:00 EST; the driver log's
-  times confirm it, known issue 42). Results follow when it
-  completes.
+- **Smoke (`s14b`): complete.** `pilot_v2`, 30 users, Qwen, H = 0,
+  the six cells, judge v2 (gpt-5.4) on the integration probe. 180
+  user-trials, 0 failed (Cerebrum `results/bench_v2_smoke/`, with its
+  provenance). It ran 2026-11-09 08:31 to 12:51 UTC, so every Mem0
+  phase saw one date (known issue 42). Passes over users (recency and
+  contradiction: lenient in brackets, the new value named, stale or
+  not):
+
+  | Locus | Backend | Deletion, no echo | Deletion, echo | Privacy | Recall | Recency | Contradiction | Integration, mean [95% CI] | Share ≥ 4 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | kernel | mem0 | 18/20 | 4/10 | 30/30 | 29/30 | 9/30 (29/30) | 15/30 (21/30) | 3.33 [2.98, 3.69] | 0.63 |
+  | kernel | inhouse | 20/20 | 1/10 | 30/30 | 30/30 | 8/30 (30/30) | 14/30 (17/30) | 1.77 [1.48, 2.06] | 0.07 |
+  | replicated | mem0 | 18/20 | 4/10 | 30/30 | 30/30 | 9/30 (28/30) | 14/30 (22/30) | 3.13 [2.76, 3.51] | 0.53 |
+  | replicated | inhouse | 20/20 | 1/10 | 30/30 | 30/30 | 8/30 (30/30) | 14/30 (17/30) | 1.80 [1.50, 2.10] | 0.07 |
+  | native | mem0 | 20/20 | 8/10 | 30/30 | 5/30 | 0/30 (2/30) | 1/30 (2/30) | 2.93 [2.59, 3.27] | 0.37 |
+  | native | inhouse | 20/20 | 2/10 | 30/30 | 30/30 | 13/30 (30/30) | 11/30 (14/30) | 2.90 [2.50, 3.30] | 0.43 |
+
+  The full matrix (Wilson intervals, cap and budget counts), the
+  integration means, kernel against replicated paired over users on the
+  judge-free probes, and the per-cell readings (exposure, carriers, what
+  the store kept, where the expected value was, contradiction per slot,
+  earlier answers with a stale value, the integration block and its
+  score by base rows) are in that directory's `analysis.md`. Not there:
+  the users, quotes and rows named below; the wording groups (their
+  pass counts are sums of its slot rows), and the earlier-answer split
+  by wording and within users, with its odds ratios other than the
+  pooled 0.29; the block-order and rank counts; the store reproduction;
+  when the rows that kept a revoked value were written, and which
+  selection stage left a stored row out; the integration comparisons
+  paired over users (kernel and replicated against native Mem0, native
+  Mem0 against native in-house);
+  the base task rows per Mem0 block and the scores by their number;
+  native Mem0's recall by session, its recency answers that name
+  neither value and how often its later answers named the deleted
+  value; and that the in-house answers are identical, with the one the
+  judge scored differently. A smoke, not a verdict: n = 30 per cell
+  (known issue 37).
+  - **Privacy.** 180 of 180 probes pass, and no private value reached
+    any block or answer of any probe, in any cell. The kernel's privacy
+    probe never failed.
+  - **Deletion.** No deleted row came back.
+    - In-house, every failure is an echo user's, through the echo row:
+      9 of 10 echo users in kernel and replicated, 8 in native.
+      Non-echo users pass 20 of 20 in every in-house cell.
+    - In Mem0, a fold carries 3 failures in kernel and in replicated
+      Mem0 (users 13, 19 and 25) and 1 in native Mem0 (user 13): the
+      same writer's next row took the value, and a revoke by `fact_key`
+      leaves it (known issue 38). Native Mem0 also kept user 25's fold,
+      but its fetch missed it at the deletion probe. These are the
+      first folds outside `no_delete`; users 19 and 25 are not echo
+      users.
+    - Some passes had the value in another probe's block or answer:
+      kernel and replicated Mem0 3 of 22, native in-house 2 of 22,
+      native Mem0 8 of 28 (7 echo users, and user 25 through its fold;
+      later answers named the value 9 times, 2 of them user 25's),
+      in-house kernel and replicated 0 of 21 (known issue 43). Native
+      Mem0's 28 of 30 says little: in 9 of its passes the store still
+      held the value (the echo row for 8 echo users, the fold for user
+      25), and its fetch missed it at the deletion probe. In every cell
+      the store kept the echo row of all 10 echo users.
+  - **Recall.** Native Mem0 passes 5 of 30, and all 25 misses had the
+    value outside the block (its clamped score, `NATIVE_USAGE.md`).
+    Every other cell passes 29 or 30 of 30, though the cap binds in
+    every probe. The one kernel Mem0 miss (user 24) had "Emily Carter's
+    home is in Bologna." in the block; Qwen answered with the stale
+    offsite city, Tartu, which the privacy probe's stored answer had
+    restated as current ("User's team is currently in Tartu for an
+    offsite.", this session; known issue 45). Earlier answers also
+    carried three passes whose writer row was not in the block: user
+    13 in in-house kernel and replicated (the budget left only the
+    privacy answer) and user 0 in native Mem0.
+  - **Recency fails by naming both values**, as the spec expected.
+    Outside native Mem0, 47 of 150 pass and 147 of 150 name the new
+    value; 100 of the 103 failures name both values. In in-house kernel
+    and replicated (identical answers), each cell's 22 failures all
+    name both, 19 of them with the old one as past (`named_as_past`
+    counts 18: user 13's "initially planned for Lausanne but has since
+    been relocated to Galway" has no listed marker). Native Mem0's
+    failures name neither value in 26 of 30, with neither in the block.
+  - **Contradiction goes with the question's wording** (known issue 44).
+    Outside native Mem0, 68 of 150 pass. Of `pilot_v2`'s 30
+    contradiction questions, 10 share more content words (function
+    words dropped, word forms as written) with the earlier statement
+    than with the later one (the four manager and six teammate users),
+    16 with the later one (the home_city, client, one_on_one and
+    conference users), and 4 tie (offsite_city, whose two statements
+    differ only in the city). Pooled over those five cells, they pass 9
+    of 50, 59 of 80 and 0 of 20; in kernel in-house, 1 of 10, 13 of 16
+    and 0 of 4. Each group is whole slots, and the pool counts the same
+    30 users five times (in-house kernel and replicated are
+    identical). Counting every word gives 9, 13 and 8 (the conference
+    questions and user 5's tie), Porter stemming makes the teammate
+    questions tie ("pairing", "paired") and Snowball stemming the
+    one_on_one questions too ("weekly", "week"), but under every count
+    the later-leaning questions pass far more often (50 of 65 to 59 of
+    80, against 9 of 70 to 18 of 85 for the other questions, the
+    earlier-leaning ones and the ties together). Within a slot the
+    rows' words may count too: in kernel and replicated Mem0, where
+    Mem0 reworded a teammate's stale row without "pairing" (all 7 from
+    known issue 41's awkward adds, users 8, 17, 20 and 26), 5 of 7
+    passed and all 7 named the new value, against 0 of 5 and 1 of 5
+    where the row kept it. These are 12 probes of 6 users: 17, 20 and
+    26 reworded in both cells, 5 and 11 kept in both, and user 8
+    reworded in kernel only, failing both times and naming the new
+    value only there; the stale row also outscored the new one in 3 of
+    the 5 kept and 1 of the 7 reworded.
+    - Block order does not explain it. Kernel and replicated print rows
+      by writer type (profile first), so the order is the writers'. Of
+      the 13 kernel in-house failures that named only the earlier value,
+      12 held both rows (user 1's later row was not in the block), and
+      in 9 of them the later value's row was listed above the earlier
+      one, against 3 of the 10 passes that held both; the six home_city
+      users, whose earlier (profile) row is listed first, passed 6 of 6.
+      By retrieval score, the later row ranked higher in all 10 of those
+      passes and in 8 of the 12 failures; in the other 4 (users 11, 19,
+      25 and 28) the earlier row outscored it. Each of these 4 questions
+      and user 1's leans to the earlier statement.
+  - **Earlier answers restate stale values** (known issue 45). Each
+    probe's answer is stored, and later probes read it as "(this
+    session)". Qwen's answers restate other facts, stale ones included.
+    User 27's contradiction question ("Who do I have a weekly
+    one-on-one with?") leans to the later statement. In kernel Mem0 the
+    deletion answer pointed to Sofia Lindqvist, the stale value, "whom
+    you meet with one-on-one every week", and Mem0 stored it ("User has
+    weekly one-on-one meetings with Sofia Lindqvist, who may be able to
+    provide guidance or direct them to the appropriate person …", this
+    session). The contradiction answer named Sofia Lindqvist first,
+    then Nadia Farouk ("Additionally, you also have a weekly one-on-one
+    meeting with Nadia Farouk, though that was 2 sessions ago."), and
+    repeated the stored row ("Sofia Lindqvist may be able to provide
+    guidance or direct you to the appropriate person …"). Replicated
+    Mem0 went the same way: it stored "… suggesting she might be a key
+    stakeholder or mentor for the project", and the answer named both
+    and said "Sofia Lindqvist might be a key stakeholder or mentor for
+    your project". In in-house kernel and replicated, whose deletion
+    answer named Nadia Farouk, the contradiction answer named only Nadia
+    Farouk and passed. Native in-house had the same two verbatim rows,
+    but its stored deletion and privacy answers named Sofia Lindqvist,
+    and its contradiction answer named only her. The stale writer row
+    was in all five blocks, but Mem0 also stored the later statement
+    without "only" ("Natalie Green has a weekly one-on-one meeting with
+    Nadia Farouk.", known issue 42). User 12, with the same question,
+    went the other way: kernel and replicated Mem0 passed, though its
+    later statement also lost "only", and in-house kernel and
+    replicated failed, naming only the stale value, though their block
+    held a stored deletion answer that named the new one (native
+    in-house failed too, without such an answer). So the example shows
+    answers repeating a stored answer, not what decided the outcome.
+    - Outside native Mem0, such an answer sat in 66 of 150
+      contradiction blocks, which passed 19 of 66, against 49 of 84
+      without one. By the question's wording: leaning to the later
+      statement, 14 of 28 against 45 of 52 (within client, conference
+      and one_on_one, 14 of 28 against 18 of 22; home_city never had
+      one); to the earlier statement, 5 of 20 against 4 of 30, four of
+      the five passes user 20's, whose stored answers name both values
+      (without user 20, 1 of 15 against 4 of 30); ties, 0 of 18 against
+      0 of 2. Nearly every tie has such an answer (18 of 20, against 20
+      of the 50 earlier-leaning and 28 of the 80 later-leaning), and no
+      tie passed: without the ties, 19 of 48 against 49 of 82 (odds
+      ratio 0.44, against 0.29 pooled), but compared within each user
+      across the cells it is 0.26 (from the 9 users whose cells differ
+      both in having such an answer and in passing). These are 30 users
+      in five cells, and in-house kernel and replicated are identical.
+      Recency: 1 of 16 with one, 46 of 134 without. No run yet scores
+      the probes without the stored answers (open decision 2).
+  - **Integration.** Mem0 cells score 2.93 to 3.33 and native in-house
+    2.90, but in-house kernel and replicated 1.77 and 1.80. Their
+    integration block, the last probe's, holds 4.6 rows, 2.8 of them
+    earlier answers stored verbatim, and the 500-token budget binds in
+    27 of 30. The judge scores the answer against the base profile and
+    the base task context (its keyword half is the lower of the two).
+    The base task row reached the block for 9 of 30 users (mean score
+    2.11 in both cells, against 1.62 without in kernel and 1.67 in
+    replicated) and the base profile row for 5, both for 1 (user 25,
+    score 4). In kernel in-house the score rises with the base rows in
+    the block: 1.53, 1.92 and 4 for 0, 1 and 2 of them (n = 17, 12 and
+    1).
+    - Reproduced on a copy of the kernel's store (the reproduction
+      matches all 30 blocks), the budget cut the base task row for 14
+      users and the cap for 7, and the base profile row for 17 and 8;
+      all five earlier answers ranked above the base task row for 15
+      users and above the base profile row for 22. With the earlier
+      answers removed, the same selection keeps the base profile row
+      for all 30 users and the base task row for 28 (blocks of 196 to
+      314 tokens); with the budget removed instead, it keeps the base
+      task row for the same 23 users as native in-house.
+    - Native in-house has no budget: its blocks hold 9.6 rows, 4.7 of
+      them earlier answers, the base task row for 23 users and both
+      base rows for 13 (mean score 2.35 and 3.62 with 1 and 2 base
+      rows, n = 17 and 13). Mem0 splits each base event into short
+      rows; a base task row reached 28 to 30 of 30 blocks and rows of
+      both base events 22 to 24, and the budget never binds there.
+      Without a budget the backends' means are close (native Mem0 2.93,
+      native in-house 2.90), but the paired data do not show a tie:
+      Mem0 minus in-house is 0.03 (95% CI -0.54 to 0.61), and 22 of 30
+      users scored differently.
+    - So the in-house kernel and replicated blocks mostly lack the base
+      rows, which the earlier answers, stored verbatim, displace under
+      the budget (the base task row for 14 users, the base profile row
+      for 17) and past the cap (5 and 8 more users, who get them back
+      without the answers) (known issue 45); no judged run yet scores
+      the probe without them (open decision 2).
+    - Kernel against native on Mem0 (3.33 and 2.93; paired t p = 0.05,
+      Wilcoxon p = 0.07) is not a budget effect: the budget never binds
+      there. Native Mem0's blocks, ranked by its clamped score, also
+      hold fewer base task rows (1.3 per block against 2.3). Paired by
+      user, the score difference goes with the direction of the row
+      difference: 0.64 where the kernel's block held more (22 users; 13
+      higher, 2 lower), 0 where it held as many (4 users, all tied),
+      -0.50 where it held fewer (4 users; 2 lower). It does not go with
+      its size (0.86, 0.20 and 0.33 for 1, 2 and 3 more rows; n = 14, 5
+      and 3); within each Mem0 cell the score hardly changes with their
+      number (across users, at equal counts native scores lower: one
+      row 2.95 against 3.17, n = 19 and 6; two rows 2.71 against 3.38,
+      n = 7 and 13); and replicated against native, with the same
+      difference in rows (2.3 against 1.3), does not show it (of the
+      users where both differ, the signs agree for 10 of 16, against 15
+      of 17). An association in one pair of cells; the smoke does not
+      explain this gap. Kernel against replicated is unaffected: one
+      library, one order.
+  - **Kernel against replicated.** In-house: identical blocks and
+    identical answers in 180 of 180 probes, no discordant pair. The
+    judge scored one of the 30 identical integration answers
+    differently (2 and 3; known issue 24). Mem0: discordant pairs on
+    recall (0 and 1), recency (3 and 3) and contradiction (2 and 1),
+    all p = 1.00; Mem0's extraction varies between runs (known issue
+    42).
+  - **Cap and budget.** The cap bound in all 180 probes of every cell.
+    The budget bound in 82 of 180 probes of in-house kernel and
+    replicated (by probe, in order: 0, 3, 15, 16, 21 and 27 of 30) and
+    never in Mem0 (at most 475 estimated tokens). Native in-house
+    blocks reach 1,164 tokens (no budget, by design).
+  - **Against the pre-stated expectations.** Kernel and replicated tie
+    on in-house.
+    - Recall fails most for native Mem0 (25 of 30, the value never in
+      the block) and elsewhere once (kernel Mem0, user 24, with the
+      value in the block). Outside native Mem0 the cap binds in every
+      probe but dropped no recall target; the budget cut one (user 13,
+      in in-house kernel and replicated), whose value reached the block
+      through the stored privacy answer. The spec expected more
+      failures for targets written early; native Mem0 shows the
+      reverse: it passed 5 of the 10 targets written in session 1 and
+      none of the 20 written in sessions 2 and 3. The session need not
+      be the cause: the target's row reached the recall block for 4 of
+      the 6 home_city targets (all six written in session 1) and none of
+      the other 24, and the fifth pass, user 0, came through the stored
+      privacy answer.
+    - Recency fails by naming both values outside native Mem0 (100 of
+      103 failures); native Mem0's failures name neither (26 of 30).
+    - Deletion fails through the echo row where that row reaches the
+      block: the store kept it for all 10 echo users in every cell, and
+      it reached the deletion block for 9 of 10 in in-house kernel and
+      replicated, 8 in native in-house, 5 in kernel and replicated Mem0
+      and 1 in native Mem0. On Mem0, folds failed 3, 3 and 1 users,
+      each made by the writer's next write before the revoke; no writer
+      row written after a revoke holds the value, so no failure came
+      from Mem0's history after a delete. Privacy holds.
+    - The budget binds in in-house kernel and replicated from the
+      second probe on, more often later (above).
+    - Contradiction does not fail by block order. By score, the stale
+      row outranked the new one, or the new one was not in the block,
+      in 26 of the 59 failures outside native Mem0 that named only the
+      stale value, each with a question that leans to the stale
+      statement or ties, so rank and wording go together (in kernel
+      Mem0 the stale row outscored the new one in 7 of its 9 such
+      failures, against 1 of 15 passes). Where the question leans to
+      the later statement, contradiction also passes less often with a
+      stale earlier answer in the block (14 of 28 against 45 of 52);
+      where it leans to the earlier one, the split turns on one user,
+      and no tie passed (above).
+  - **Verification.** An independent re-score of the records found no
+    wrong value (ground truth, block and answer checks, passes, bounds,
+    judge scores, and the pass counts and integration means in
+    `analysis.json`; the provenance lists them). A read-only review in
+    six parts, each of its 36 error or imprecise findings checked by an
+    adversarial verifier (its two style findings were not), then
+    recounted all 991 values `analysis.json` held before its fixes, the
+    readings included, with its own code and found none wrong; the 121
+    values its fixes added (1,112 in all) match its counts, and an
+    independent recount of them found none wrong. It found errors and
+    overstatements in this write-up, now corrected (the stale-answer
+    example quoted user 6's deletion answer as its recall answer;
+    recall failed once outside native Mem0, not never; native Mem0 kept
+    a second fold), gaps in the analysis's descriptions and tests, now
+    fixed (below), and the Zep key in the earlier attempt's kernel log,
+    which predates the redaction (the provenance says so). A second
+    review, in five parts with the same checks, read the corrected text
+    and code. It found overstatements and gaps, now corrected: user
+    27's contradiction answers in kernel and replicated Mem0 named both
+    values, and the example did not show what decided the outcome; the
+    stored answers split by wording; what the smoke shows about the
+    integration gap and the wording, known issue 41's "changes no
+    score" included; open decision 2's bounds held only at H = 0, and
+    it left out that a budget on writer rows alone, below about 293
+    tokens, brings back part of the difference between the loci on
+    integration; and smaller points (the recency answers that name the
+    old value as past, native Mem0's recall by session, what
+    `analysis.md` holds, the count of values the first review
+    recounted, the test baseline at the end of the subtask). It also
+    found a note that held only for native cells, and tests that missed
+    some mutants or caught one only on some hash seeds, now fixed. A
+    third review, in three parts, of the second round's corrections
+    found no error. It found imprecisions, now corrected (what
+    `analysis.md` holds, the summary of the second review, the
+    stemmer, the split within users, kernel against native Mem0 paired
+    by user), and tests that still missed a few mutants, now fixed. A
+    fourth review, in two parts, of the third round's corrections found
+    no error. It found that the list of what `analysis.md` does not hold
+    left out replicated against native Mem0 paired by user and the split
+    within users, now added, and that the tests did not pin every rule
+    this file said they did, nor two rules this file did not state, each
+    behind values in the readings (an integration probe without a score
+    still counts; a probe type with no failure in a cell gets no misses
+    row), now pinned (below). A fifth review, in three parts, found no
+    error either. It found rules behind values in the readings that the
+    tests did not pin, now pinned (below): in the earlier-answer split,
+    recency, an earlier answer beside a writer row, and strict passes;
+    the slots' lenient count; calendar rows as writer rows; the deletion
+    probes of users with and without an echo event; sources joined from
+    a set that does not hold them in reverse sorted order; a
+    probes-listing row on a failure; and mean integration scores, not
+    medians (two of its mutants showed this one when run on the
+    corrected tests). It also found that this file claimed more than the
+    tests pin of the rows' order, the headings and the notes' text, and
+    the tests' comments more than they check of the notes, now narrowed.
+    It was the last review (rule 6).
+    None of this run's results files or logs holds the Zep or the Azure
+    key, so the redaction (AIOS `e3cdc52`) holds in a live run.
+- **Analysis readings after the smoke** (Cerebrum `8dbea1e`,
+  with tests that fail without them). `bench_v2_analysis.py` also
+  reports trial-level exposure for deletion and privacy, each deletion
+  failure's carrier and what the store kept behind each deletion probe
+  (`revoked_value_rows`, passes included), where the expected value was
+  in each failure, contradiction per slot, recency and contradiction
+  split by an earlier answer with the stale value, and the integration
+  probe's block with its score by the base rows it holds (known issues
+  38 and 43 to 45). After the reviews: a failure whose value is in the
+  block text but in no row is its own class (it was filed under
+  `conversation_only`; no `s14b` or `f14c` probe is one), `named`
+  counts the failures that named the expected value too (it was
+  described as a miss), the carrier labels and the note on what the
+  store kept say what the code does, and the tests pin these rules of
+  the readings: the failed trials, unscored probes and trials without
+  the probe that they skip; rows only for what occurs, and a cell's
+  labels, slots and base-row counts in sorted order; every label
+  (`unknown` included; sources join in sorted order whether a set holds
+  them in that order, in its reverse or in neither, checked on three
+  pairs and a triple); what `named` counts; a probe's own block and
+  answer, and an earlier probe's block; the deletion probes of users
+  with and without an echo event alike; in the earlier-answer split,
+  recency as well as contradiction, an earlier answer with the stale
+  value beside a writer row that has it too, and strict passes only;
+  the slots' lenient count (passes and answers that name both values,
+  not answers that name only the earlier value or neither); calendar
+  rows as writer rows; base events in a later session; later task and
+  profile rows (beside a base task row too); integration probes without
+  a score (all 105 of `f14c`'s); an integration probe's own score
+  before the trial's, and its own budget, not another probe's; mean
+  integration scores, not medians; and the report `main` writes, with
+  each reading's title and columns, in order, the phrases of its note
+  that give its definitions, and nothing for a reading without rows.
+  On the final tests, of 309 mutants of the module (the author's 52,
+  the fourth review's 71, 3 more and the fifth review's 183), 199 fail
+  the tests under each of ten hash seeds and the other 110 pass under
+  each. Of those 110, 62 only reorder rows, 16 change only a heading's
+  level or a note's text outside its pinned phrases, and 32 change no
+  output on `s14b` or `f14c` (two of them are equivalent). The sections
+  it reported before are unchanged, byte for byte on `f14c` and `s14b`.
 
 ## Open decisions
 
@@ -1260,6 +1631,100 @@ revision-2 functional check").
    check and the smoke use the default. Decide before the final runs
    whether native Mem0 is the default install or the full one
    (`NATIVE_USAGE.md`, "Install").
+2. **The probes' stored answers** (known issue 45). The options:
+   - (a) keep them, as the spec does ("This is accumulation too"), and
+     compare integration, recency and contradiction only between
+     kernel and replicated within a backend;
+   - (b) store no probe answer, so each probe reads what the writers
+     stored: kernel `auto_extract` off in v2, whose history has no
+     consumer turn, and the replicated and native assistants skip their
+     probe writes;
+   - (c) ask integration first, which mends integration's block but
+     not the stale answers, and gives up the spec's reason for the
+     order ("no earlier answer can bring their values back"): the
+     integration answer, the longest in 160 of 180 trials, would be
+     stored before the hard constraints. In the smoke the second probe
+     read the first one's answer for 22 to 28 of 30 users per cell,
+     and the integration answer named the revoked value for 4 to 8 of
+     30 users per cell (never a private value), including 5 native
+     users whose deletion probe passed (4 Mem0, 1 in-house).
+
+   (b) ends contamination (19 probes in the smoke) and the effect,
+   which differs by backend (verbatim or extracted rows) and by locus
+   (a budget or none). But the stored answers are what make the
+   500-token budget bind: every budget-bound probe of in-house kernel
+   and replicated (82 of 180 each) had an earlier answer among its
+   capped rows, and without them no `users_v2` user's kernel or
+   replicated in-house block can exceed 336 estimated tokens at H = 0
+   (the header and the user's ten longest writer rows). At H = 0 the
+   cap would still bind (every user has at least 12 visible writer
+   rows). At H = 2 fewer rows are visible: V1 and V3 writers' rows are
+   private, and only the kernel maps a V2 id to the user, so in the
+   functional check user 2 sees 2 writer rows in in-house kernel and
+   replicated, and user 0's replicated V2 consumer none; a replicated
+   V1 consumer prints the longer legacy block, up to 366 estimated
+   tokens on `users_v2` under the seeded cycle (the check has no V1
+   consumer).
+   The task and the functional check require the budget to bind
+   (Amendment 1), so (b) also needs a new budget and a spec amendment
+   (the Probes "Order" paragraph, the pre-flight list, Amendment 1's
+   500). It changes the pre-flight check, `set_memory_mode.py` (which
+   sets `auto_inject` and `auto_extract` together), the driver's
+   `--budget 500` and both assistants (which store every probe turn),
+   and the functional check would be re-run.
+
+   Recommended: (b), with a budget chosen to bind on writer rows alone.
+   Without the answers a budget binds first, and most often, in the
+   integration probe, whose block holds each user's longest writer
+   row, the base task row (28 of 30 users; 4 to 9 in the other
+   probes). On the copy of the kernel in-house store, writer-only
+   blocks reach 314 tokens there and 299 elsewhere. 300 binds in 6 of
+   180 probes, all integration, and keeps the base rows as no budget
+   does; 290 binds in 19 (11 integration) and drops the base task row
+   for 2 more users; 250 binds in 61 (28 integration) and keeps both
+   base rows for 21 of 30 users, against 28 without a budget. Native
+   has no budget (on the same rows, native in-house's fetch keeps both
+   for 27), so a budget below about 293 brings back part of the
+   difference between the loci on integration: choose one that binds
+   only there (299 to 313 here), or report integration with and
+   without it. The paper compares backends, and the kernel with
+   native, and only (b) removes an effect that differs between them.
+   Decide before the full v2 run.
+3. **Contradiction wording** (known issue 44). In revision 2, how a
+   contradiction question's content words lean between the two
+   statements goes with the smoke's outcome: outside native Mem0, 9 of
+   50 pass when the question leans to the earlier statement and 59 of
+   80 when it leans to the later one. In `pilot_v2` every question of
+   a slot leans the same way, so the smoke can hardly tell the wording
+   from the slot; only Mem0's reworded rows vary it (in kernel and
+   replicated Mem0, teammate passed 5 of 7 when the stale row lost
+   "pairing" and 0 of 5 when it kept it, mostly different users).
+   The one balanced slot, offsite_city, passed 0 of 20, 18 of them
+   with a stale earlier answer in the block (known issue 45). The
+   options:
+   - (a) a revision 3 with new contradiction templates, whose add and
+     contradiction share equally many content words with the slot's
+     question (or a new question), and a generator that rejects a
+     paraphrase that breaks this. A check alone cannot guarantee it:
+     questions are never paraphrased, a paraphrase that fails its
+     three retries falls back to its template, and at least 4 of the 7
+     templates lean today (in content words, home_city and manager to
+     the earlier statement, client and conference to the later one).
+     In `pilot_v2` the paraphrases changed the lean of three slots:
+     teammate and one_on_one, whose templates tie, and home_city, whose
+     templates lean the other way. Fix the word rule first (function
+     words, stemming and which stemmer): `pilot_v2`'s 30 questions
+     split 10, 16 and 4 (earlier, later, tie) in content words, 9, 13
+     and 8 in all words, 4, 16 and 10 with Porter stemming and 4, 13
+     and 13 with Snowball, which also merges "weekly" and "week";
+   - (b) keep revision 2 and report contradiction per slot, as the
+     analysis does.
+
+   Recommended: (a), together with decision 2. Balanced wording alone
+   did not make offsite_city pass, and its 2 probes without a stale
+   earlier answer failed too, so the smoke does not show that (a)
+   suffices, with or without decision 2 (b). Decide before the full v2
+   run.
 
 ## Test baselines
 
@@ -1284,6 +1749,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
   failures and 2 errors) and Subtask 14's fixes (AIOS `e3cdc52`,
   Cerebrum `9946612`; AIOS the same set: 468 passed,
   the 14 errors; Cerebrum 860 passed, 4 skipped, the same
+  19 failures and 2 errors, by name) and the end of Subtask 14
+  (Cerebrum `8dbea1e`, which adds 8 tests; AIOS unchanged:
+  468 passed, the 14 errors; Cerebrum 868 passed, 4 skipped, the same
   19 failures and 2 errors, by name). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
@@ -1459,9 +1927,23 @@ These fail on `workshop-postrun` too and are not caused by later work.
       it. `f14c` showed a fold only under `no_delete` (user 1's database
       row, written after the no-op revoke, took the codename). 27 of
       the 30 `pilot_v2` users have a same-writer write between an add
-      and its revoke, and all 30 counting writes after it. Classify
-      each deletion failure by the carrier that `revoked_value_rows`
-      names.
+      and its revoke, and all 30 counting writes after it.
+      `bench_v2_analysis.py` classifies each deletion failure by the
+      sources of its block's rows that hold the value
+      (`rows_with_forbidden`), and each deletion probe, failed or
+      passed, by what the store kept (`revoked_value_rows`, after the
+      history). The smoke (`s14b`, H = 0) showed folds in real
+      conditions, each in the task writer's next write after the add,
+      before the revoke: users 13, 19 and 25 in kernel and replicated
+      Mem0, all three failing through the fold, and users 13 and 25 in
+      native Mem0, where user 25 passed because its fetch missed the
+      fold; the fold then reached its recency and contradiction
+      blocks, and both answers named the value. User 13's store also
+      kept the echo row, which did not reach its deletion block. The
+      store kept a carrier behind 21 passes: all 20 echo-user passes
+      across the six cells, and native Mem0 user 25's. Native's fetch
+      left the carrier out in 11 of them; in the 10 in kernel and
+      replicated, whose fetch returned every stored row, the cap did.
 39. `config.yaml` keeps `max_memory_tokens: 2000` for v1. v2 runs set
     500 through the driver (`BENCHMARK_V2.md`, Amendment 1), and the
     pre-flight check refuses anything else.
@@ -1474,13 +1956,23 @@ These fail on `workshop-postrun` too and are not caused by later work.
     otherwise uses `owner_agent` and `user_id`, which these rows carry
     (`assistant_agent` and the trial's user id, 382 of 382), so no
     kernel score depends on them.
-41. Revision 2's wording, which changes no score (from its review):
+41. Revision 2's wording (from its review, which found that it changes
+    no score; the smoke suggests the second item can change a
+    contradiction score):
     - 23 of the 25 pairing revokes read "Please forget the pairing I'm
       involved in." A revoke's text is never stored or shown to a
       model.
     - 14 of the 59 pairing adds read awkwardly ("I'm working in a
       pairing with …"). Three are recall targets (users 43, 100 and
-      145), stored verbatim in in-house cells.
+      145), stored verbatim in in-house cells. Seven are a
+      contradiction's earlier statement, four of them in `pilot_v2`
+      (users 8, 17, 20 and 26). In the smoke, kernel and replicated
+      Mem0 stored 7 of those 8 rows without "pairing" ("in
+      collaboration with", "collaborating with"), and those 7
+      contradiction probes passed 5; the other 5 teammate rows kept
+      "pairing" (user 8's in replicated Mem0, and all 4 of users 5 and
+      11, whose adds read "I'm pairing with …") and passed none
+      (Subtask 14, "Smoke").
     - User 75's contradiction reads "I'm only presenting at Bytewave
       Forum for a conference."
 42. Mem0's extraction (gpt-4o) changes what is stored from run to run:
@@ -1522,7 +2014,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
       users, but the undeleted row reached later blocks for all 5, and
       later answers named its value for 3 of them (6 answers).
     Report trial-level exposure (the value in any block or answer) next
-    to the per-probe rate, for deletion and privacy, in every cell.
+    to the per-probe rate, for deletion and privacy, in every cell;
+    `bench_v2_analysis.py` does since the smoke. In the smoke no private
+    value showed anywhere, and deletion passes hid the value in kernel
+    and replicated Mem0 3 of 22, native in-house 2 of 22 and native Mem0
+    8 of 28 times (7 echo users, and user 25 through a fold).
 44. Contradictions whose question repeats the stale statement's words
     favor the stale value. The manager add says "I report to {value}",
     the contradiction "My manager is {value}", and the question is "Who
@@ -1532,12 +2028,68 @@ These fail on `workshop-postrun` too and are not caused by later work.
     contradiction row was not in the block). In the twelfth, kernel
     Mem0 at H = 2, the V5 writer's fields made Mem0 store "Alex Carter's
     manager is Lena Fischbach.", and the answer named only the new
-    value. The teammate question ("Who am I pairing with") repeats the
-    stale add's words the same way; in `pilot_v2`'s paraphrases, the
+    value. The teammate templates tie (both say "pairing"), but every
+    teammate contradiction was paraphrased to "the only person I'm
+    paired with" (6 of 6 in `pilot_v2`, 24 of 24 in `users_v2`), so in
+    `pilot_v2` the teammate question ("Who am I pairing with") shares
+    "pairing" with the stale add only. In `pilot_v2`'s paraphrases, the
     home_city, client and one_on_one questions repeat the later
-    statement's. Report the four manager users (1, 19, 25 and 28) and
-    the six teammate users (5, 8, 11, 17, 20 and 26) apart. A later
-    dataset version should ask with the contradiction's words.
+    statement's words: the home_city templates lean the other way ("I
+    live in" against "I'm based in"), but every add became "My home is
+    in …" and every contradiction "I live in …"; the one_on_one
+    templates tie, but every add became "I meet with … one-on-one every
+    week", without "weekly". The conference question ("Which
+    conference am I presenting at?") shares one content word with the
+    later statement ("conference") and none with the earlier one.
+    Report the four manager users (1,
+    19, 25 and 28) and the six teammate users (5, 8, 11, 17, 20 and
+    26) apart. In the smoke, outside native Mem0, those ten users'
+    questions passed 9 of 50, the 16 that lean to the later statement
+    (home_city, client, one_on_one and conference) 59 of 80
+    (conference 8 of 15), and the 4 offsite_city ties 0 of 20 (18 of
+    them with a stale earlier answer in the block, known issue 45). The
+    lean counts content words (function words dropped, word forms as
+    written); counting every word gives 9, 13 and 8. `pilot_v2` asks
+    one question per slot, so the smoke can hardly tell the lean from
+    the slot; only Mem0's reworded rows vary the wording within one
+    (Subtask 14, "Smoke"). The analysis reports contradiction per slot.
+    Asking with the contradiction's words would only lean the other
+    way: a later dataset version should ask with words that favor
+    neither statement (open decision 3).
+45. The probes' stored answers shape the later probes' blocks. The six
+    probes are asked in session 7 and each answer is stored (kernel
+    `auto_extract`; the replicated and native assistants write
+    theirs), so later probes read the earlier answers as "(this
+    session)". In the smoke:
+    - Integration, the last probe: in in-house kernel and replicated,
+      the earlier answers, stored verbatim, fill most of the 500-token
+      budget (2.8 of 4.6 rows; the budget binds in 27 of 30), and the
+      base task and base profile rows reached the block for 9 and 5 of
+      30 users (both for 1). These cells score below the others (1.77
+      and 1.80 against 2.90 to 3.33). On a copy of the kernel's store,
+      the same selection keeps the base task row for 28 users without
+      the earlier answers, and for native in-house's 23 users without
+      the budget; without a budget the backends' means are close (2.93
+      and 2.90), though the paired data do not show a tie. No judged
+      run yet scores the probe without the stored answers. Kernel
+      against native on Mem0 (3.33 and 2.93) is not a budget effect.
+    - Recency and contradiction: an earlier answer can restate a stale
+      value as current, and a later answer can repeat it (user 27,
+      Subtask 14, "Smoke"). Contradiction passed 19 of 66 with an
+      earlier answer in the block that names the stale value (in 21 of
+      them every such answer names the new value too) and 49 of 84
+      without (outside native Mem0), but nearly every tie has one (18 of
+      20, against 20 of the 50 probes whose question leans to the
+      earlier statement and 28 of the 80 whose question leans to the
+      later one), and no tie passed. Where the wording leans to the
+      later statement, 14 of 28 against 45 of 52 (within client,
+      conference and one_on_one, 14 of 28 against 18 of 22); to the
+      earlier one, 5 of 20 against 4 of 30, four of the five passes
+      user 20's, whose stored answers name both values (without user
+      20, 1 of 15 against 4 of 30). This is an association; no run yet
+      tests it (open decision 2 (b) would).
+    Kernel against replicated is unaffected (one library, one order).
+    `bench_v2_analysis.py` reports both. Open decision 2.
 
 ## Fixed
 
