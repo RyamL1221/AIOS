@@ -781,3 +781,19 @@ smoke run again on it, with the changes below.
 - **Unknown operations.** `execute_request` returns an explicit failure
   for a memory operation it does not dispatch, as "Before any v2 run"
   requires.
+
+**Settled during implementation** (each with a test):
+- **Unscored probes.** A probe whose block fails the session-7 check is
+  recorded unscored too, with that problem as its error, like a
+  consumer error.
+- **Rows that were never listed.** A write event's `memory_ids` and
+  `stored_rows`, and its session's `stored_rows`, are None when no
+  listing followed: the writer failed or raised, or the listing raised.
+  They are `[]` and 0 when the listing ran and held no row of the
+  event, which is the Mem0 "stored nothing" case.
+- **Reuse is checked.** `--reuse` accepts only a whole version 2 file
+  with at least the users to build, drawn with the run's seed and
+  paraphrased by its model. A limited name such as `pilot_v2` names
+  part of a file, so it is refused too.
+- **Recorded writes.** A create the kernel refused is not recorded as
+  written, as in the agent-managed loci.

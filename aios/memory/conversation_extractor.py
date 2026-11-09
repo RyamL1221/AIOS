@@ -53,6 +53,7 @@ class ConversationExtractor:
         assistant_message: str,
         user_id: str | None = None,
         session: int | None = None,
+        provenance_event: str | None = None,
     ) -> None:
         """Store a conversation pair in a background daemon thread.
 
@@ -73,6 +74,11 @@ class ConversationExtractor:
                 stamped on the stored turn as ``metadata.session``
                 so the block can give it an age in sessions. None
                 stamps nothing.
+            provenance_event: The event the turn answers (benchmark
+                v2: the probe id, ``LLMQuery.provenance_event``),
+                stamped on the stored turn as
+                ``metadata.provenance_event``, as the replicated and
+                native assistants stamp theirs. None stamps nothing.
         """
         if not self.enabled:
             return
@@ -81,7 +87,7 @@ class ConversationExtractor:
         try:
             syscall = self._build_syscall(
                 agent_name, user_message, assistant_message, user_id,
-                session,
+                session, provenance_event,
             )
             # Stamp here, on the request thread, and not in the
             # background: the chat response must not return before the
@@ -112,6 +118,7 @@ class ConversationExtractor:
         assistant_message: str,
         user_id: str | None = None,
         session: int | None = None,
+        provenance_event: str | None = None,
     ) -> "MemorySyscall":
         """Build the write, as a syscall that only carries data: it goes
         straight to ``address_request`` and is never started or queued.
@@ -119,17 +126,20 @@ class ConversationExtractor:
         Uses the resolved user_id when available so the memory lands in
         the same Mem0 scope as profile/task memories written by other
         agents for this user. Falls back to agent_name. A ``session``
-        is stamped in the metadata.
+        and a ``provenance_event`` are stamped in the metadata.
         """
         from aios.syscall.memory import MemorySyscall
 
+        stamps = {}
+        if session is not None:
+            stamps["session"] = session
+        if provenance_event is not None:
+            stamps["provenance_event"] = provenance_event
         query = MemoryQuery(
             operation_type="add_memory",
             params=conversation_request(
                 agent_name, user_message, assistant_message, user_id,
-                extra_metadata=(
-                    None if session is None else {"session": session}
-                ),
+                extra_metadata=stamps or None,
             ),
         )
         return MemorySyscall(agent_name, query)

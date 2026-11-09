@@ -749,6 +749,13 @@ class SyscallExecutor:
                 # block's session ages count from it, and the stored
                 # conversation turn is stamped with it.
                 request_session = getattr(query, "_request_session", None)
+                # The event the turn answers (LLMQuery.provenance_event,
+                # benchmark v2: the probe id), attached by the request
+                # handler like the session: the stored conversation
+                # turn is stamped with it.
+                request_provenance_event = getattr(
+                    query, "_request_provenance_event", None
+                )
 
                 # Context injection (before LLM call)
                 injection_diag = None
@@ -807,6 +814,7 @@ class SyscallExecutor:
                             str(assistant_msg),
                             user_id=resolved_uid,
                             session=request_session,
+                            provenance_event=request_provenance_event,
                         )
 
                 return llm_response
@@ -865,6 +873,18 @@ class SyscallExecutor:
                 # Owner-only listing (benchmark v2): a writer finds its
                 # own rows to delete on a revoke.
                 return self.execute_memory_syscall(agent_name, query)
+            # Never fall through to None: over HTTP that is a 200 with
+            # body ``null``, which callers read as "no result".
+            error = (
+                f"Unsupported memory operation_type "
+                f"{query.operation_type!r}"
+            )
+            logger.warning(
+                "execute_request: %s (agent=%s)", error, agent_name
+            )
+            return {
+                "response": MemoryResponse(success=False, error=error)
+            }
         elif isinstance(query, StorageQuery):
             return self.execute_storage_syscall(agent_name, query)
 

@@ -272,7 +272,8 @@ class MemoryManager:
         writes never delay it. ``add_agentic_memory`` is included
         because this can run before ``execute_request`` rewrites it. An
         update is stamped like a write, so a retrieval accepted after it
-        reads the new content.
+        reads the new content. A listing is stamped like a retrieval, so
+        it includes a conversation turn still being written.
         """
         query = memory_syscall.query
         operation = query.operation_type
@@ -287,7 +288,9 @@ class MemoryManager:
             user_id = self._update_user_id(query)
             if user_id:
                 memory_syscall.barrier_seq = self.barrier.acquire(user_id)
-        elif operation in ("retrieve_memory", "retrieve_memory_raw"):
+        elif operation in (
+            "retrieve_memory", "retrieve_memory_raw", "list_memory",
+        ):
             user_id = query.params.get("user_id")
             if user_id:
                 memory_syscall.barrier_snapshot = self.barrier.snapshot(
@@ -373,7 +376,9 @@ class MemoryManager:
 
         Returns:
             ``(candidates, diagnostics)``. ``diagnostics["error"]`` is
-            the provider's error when own retrieval failed, else None.
+            the provider's error when own retrieval failed, else None;
+            ``diagnostics["shared_error"]`` the same for the shared
+            fetch, which SDK search does not fail on.
         """
         return self.memory_pipeline().retrieve(
             agent_name, user_id, query_text,
@@ -643,7 +648,9 @@ class MemoryManager:
         """Owner-only listing (``MemoryPipeline.list_own``): the rows the
         agent owns for ``params.user_id``, unranked, in
         ``search_results``. ``params.k`` caps them; by default every row
-        is listed."""
+        is listed. Waits on the write barrier like a retrieval: a
+        listing right after the last probe would otherwise miss that
+        probe's conversation turn, written in the background."""
         query = memory_syscall.query
         params = query.params or {}
         try:
@@ -651,6 +658,12 @@ class MemoryManager:
                 memory_syscall.agent_name,
                 params.get("user_id"),
                 top_k=params.get("k"),
+                # Stamped at acceptance (``stamp_syscall``); the
+                # sentinel ``0`` (no user_id, or no executor) skips the
+                # wait.
+                barrier_snapshot=getattr(
+                    memory_syscall, "barrier_snapshot", 0
+                ),
             )
         except Exception as e:
             return self._failure("list_memory", memory_syscall, e)

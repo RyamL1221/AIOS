@@ -110,6 +110,20 @@ def serialize_messages(messages: List[dict]) -> str:
     return " ".join(m.get("content", "") for m in messages)
 
 
+def retrieval_error(
+    own_error: Optional[str], shared_error: Optional[str]
+) -> Optional[str]:
+    """A selection's failed fetches as one string, or None when both
+    succeeded: ``"own: <error>"`` and/or ``"shared: <error>"``, joined
+    by ``"; "``."""
+    failed = [
+        f"{fetch}: {error}"
+        for fetch, error in (("own", own_error), ("shared", shared_error))
+        if error
+    ]
+    return "; ".join(failed) or None
+
+
 class MemoryPipeline:
     """One agent's memory logic over one provider.
 
@@ -268,6 +282,7 @@ class MemoryPipeline:
     def list_own(
         self, agent_name: str, user_id: Optional[str], *,
         top_k: Optional[int] = None,
+        barrier_snapshot: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Every memory ``agent_name`` owns in ``user_id``'s scope (the
         agent's own scope without a user), as rows (``Candidate
@@ -279,9 +294,17 @@ class MemoryPipeline:
         outside the user's partition. ``top_k`` caps the rows returned;
         the provider is asked for at least ``LIST_TOP_K``, so the cap
         applies to the agent's own rows. Raises ``ProviderError``.
+
+        Waits for the scope's writes accepted before it, as a retrieval
+        does (``Selector.await_pending_writes``), so a listing made right
+        after a chat turn includes the turn the kernel writes in the
+        background. ``barrier_snapshot`` is the high-water mark stamped
+        when the listing was accepted: ``None`` takes one now, ``0``
+        skips the wait.
         """
         scope = self.resolver.canonical(user_id) or agent_name
         limit = LIST_TOP_K if top_k is None else top_k
+        self.selector.await_pending_writes(scope, barrier_snapshot)
         with tagged(scope):
             found = self.provider.list(scope, max(limit, LIST_TOP_K))
         rows = [
@@ -350,7 +373,13 @@ class MemoryPipeline:
         a system message. Returns the new message list and the
         injection diagnostics. Messages come back unchanged when there
         is no user message or nothing to inject. ``session`` is the
-        caller's current session (``build_block``)."""
+        caller's current session (``build_block``).
+
+        ``diagnostics["retrieval_error"]`` is None when both fetches
+        succeeded, else which failed and why (``retrieval_error``). The
+        block is still built from whatever was fetched; a caller that
+        scores it must check this key, since a failed fetch otherwise
+        looks like an empty store."""
         diagnostics: Dict[str, Any] = {
             "auto_inject_enabled": True,
             "candidate_count": 0,
@@ -368,6 +397,7 @@ class MemoryPipeline:
             "injected_memories": [],
             "block_text": "",
             "format_ms": 0.0,
+            "retrieval_error": None,
         }
         unchanged = diagnostics["prompt_tokens_before"]
         user_text = latest_user_message(messages)
@@ -379,7 +409,12 @@ class MemoryPipeline:
             agent_name, agent_name, user_text,
             k=k, include_shared=True, request_user_id=user_id,
         )
-        retrieval.pop("error", None)
+        # Reported, not dropped: a failed fetch left an empty block that
+        # passed deletion and privacy probes (BENCHMARK_V2.md, Amendment
+        # 2). The selector's two keys become this one.
+        diagnostics["retrieval_error"] = retrieval_error(
+            retrieval.pop("error", None), retrieval.pop("shared_error", None)
+        )
         diagnostics.update(retrieval)
         diagnostics["candidate_count"] = retrieval["after_dedupe"]
         if not candidates:

@@ -377,7 +377,7 @@ def test_injector_budget_helper_uses_the_kernel_recency_unit():
     assert injector._truncate_by_token_budget(rows) == rows
 
 
-# --- the conversation turn carries the session ------------------------
+# --- the conversation turn carries the session and the probe ----------
 
 
 def test_conversation_request_merges_extra_metadata():
@@ -425,3 +425,34 @@ def test_kernel_conversation_turn_is_stamped_with_the_session():
     assert stamped.metadata["session"] == 7
     assert stamped.metadata["memory_type"] == "conversation"
     assert "session" not in unstamped.metadata
+
+
+def test_kernel_conversation_turn_is_stamped_with_the_provenance_event():
+    """The probe a kernel turn answers is on its row, as the replicated
+    and native assistants stamp theirs (BENCHMARK_V2.md, Amendment 2):
+    the harness finds each event's rows in a listing by it."""
+    manager = _manager({"provider": "in-memory"})
+    extractor = ConversationExtractor(manager, {"auto_extract": True})
+    with patch(
+        "aios.memory.conversation_extractor.threading.Thread",
+        InlineThread,
+    ):
+        extractor.extract_async(
+            AGENT, "who is my lawyer?", "Greta Sandvik.", user_id=USER,
+            session=7, provenance_event="u004-p6-integration",
+        )
+        extractor.extract_async(
+            AGENT, "and the offsite?", "Lisbon.", user_id=USER,
+        )
+    listing = MemorySyscall(AGENT, MemoryQuery(
+        operation_type="list_memory", params={"user_id": USER},
+    ))
+    manager.stamp_syscall(listing)
+    rows = manager.address_request(listing).search_results
+    assert [r["metadata"].get("provenance_event") for r in rows] == [
+        "u004-p6-integration", None,
+    ]
+    assert rows[0]["metadata"]["session"] == 7
+    assert rows[0]["content"] == (
+        "User: who is my lawyer?\nAssistant: Greta Sandvik."
+    )

@@ -6,8 +6,10 @@ deleting every row whose ``metadata.fact_key`` is the revoked slot.
 ``MemoryPipeline.list_own`` and ``MemoryPipeline.delete`` do both, for
 the kernel (``list_memory`` and ``remove_memory``) and the replicated
 agents alike. Every failure in those kernel branches is a response:
-an exception would leave the FIFO scheduler's syscall unanswered.
+an exception would leave the FIFO scheduler's syscall unanswered. A
+listing waits on the write barrier like a retrieval (Amendment 2).
 """
+import threading
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +17,7 @@ import pytest
 
 from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 
+from aios.memory.conversation_extractor import ConversationExtractor
 from aios.memory.manager import MemoryManager
 from aios.memory.note import MemoryNote
 from aios.memory.pipeline import (
@@ -272,8 +275,11 @@ def test_kernel_list_memory_is_the_librarys_list_own():
         response = request(manager, WRITER, "list_memory", user_id=USER)
     assert isinstance(response, MemoryResponse) and response.success
     _, agent, user = list_own.call_args.args
+    # The snapshot stamped at acceptance, after the three writes.
+    snapshot = manager.barrier.snapshot(USER)
+    assert snapshot == 3
     assert (agent, user, list_own.call_args.kwargs) == (
-        WRITER, USER, {"top_k": None},
+        WRITER, USER, {"top_k": None, "barrier_snapshot": snapshot},
     )
     library = MemoryPipeline(manager.provider)
     assert response.search_results == library.list_own(WRITER, USER)
@@ -383,3 +389,118 @@ def test_a_failing_list_still_answers_the_scheduler():
     assert syscall.event.is_set()
     assert syscall.get_status() == "done"
     assert syscall.get_response().success is False
+
+
+# --- listings wait for writes (BENCHMARK_V2.md, Amendment 2) ----------
+
+WAIT = 5  # seconds: the barrier's default timeout
+ASSISTANT = "assistant_agent"
+
+
+class GatedStore(InHouseProvider):
+    """The in-memory store, but ``add`` waits for ``gate``, like a
+    commit still in flight. Not synchronous, so the barrier applies, as
+    for Mem0 and the Chroma in-house store."""
+
+    synchronous_commit = False
+
+    def __init__(self):
+        super().__init__()
+        self.gate = threading.Event()
+        self.gate.set()
+
+    def add(self, memory_note):
+        assert self.gate.wait(WAIT)
+        return super().add(memory_note)
+
+
+class Background:
+    """Runs ``call(*args, **kwargs)`` on a daemon thread and keeps what
+    it returned."""
+
+    def __init__(self, call, *args, **kwargs):
+        self.result = None
+        self.thread = threading.Thread(
+            target=self._run, args=(call, args, kwargs), daemon=True,
+        )
+        self.thread.start()
+
+    def _run(self, call, args, kwargs):
+        self.result = call(*args, **kwargs)
+
+    def done(self, timeout: float) -> bool:
+        """True once the call returned, waiting up to ``timeout``."""
+        self.thread.join(timeout)
+        return not self.thread.is_alive()
+
+
+def test_list_memory_is_stamped_like_a_retrieval():
+    manager = kernel({"identity": {"casefold": True}})
+    pending = manager.barrier.acquire("alice")  # an accepted write
+    listing = MemorySyscall(WRITER, MemoryQuery(
+        operation_type="list_memory", params={"user_id": "ALICE"},
+    ))
+    manager.stamp_syscall(listing)
+    # Canonical, so the wait keys on the user the write was stamped for.
+    assert listing.query.params["user_id"] == "alice"
+    assert listing.barrier_snapshot == pending
+    # Without a user, nothing to wait for: the sentinel, as for search.
+    unscoped = MemorySyscall(WRITER, MemoryQuery(
+        operation_type="list_memory", params={},
+    ))
+    manager.stamp_syscall(unscoped)
+    assert getattr(unscoped, "barrier_snapshot", 0) == 0
+    manager.barrier.release("alice", pending, success=True)
+
+
+def test_list_own_waits_for_a_write_accepted_before_it():
+    provider = GatedStore()
+    pipeline = MemoryPipeline(provider)
+    note = note_from_request({"content": "My lawyer is Greta Sandvik.",
+                              "metadata": {"owner_agent": WRITER,
+                                           "user_id": USER}})
+    # Accepted (stamped) before the listing; its commit in flight.
+    seq = pipeline.barrier.acquire(USER)
+    provider.gate.clear()
+    writer = Background(pipeline.write, WRITER, USER, note,
+                        barrier_seq=seq)
+    listing = Background(pipeline.list_own, WRITER, USER)
+    # Another user's listing, and one told to skip the wait, return at
+    # once.
+    elsewhere = Background(pipeline.list_own, WRITER, "bob")
+    skipped = Background(pipeline.list_own, WRITER, USER,
+                         barrier_snapshot=0)
+    assert elsewhere.done(1) and elsewhere.result == []
+    assert skipped.done(1) and skipped.result == []
+    assert not listing.done(0.3)
+    provider.gate.set()
+    assert writer.done(WAIT) and listing.done(WAIT)
+    assert ids(listing.result) == [writer.result]
+
+
+def test_kernel_listing_right_after_a_chat_turn_includes_the_turn():
+    """The harness lists every agent right after the last probe, while
+    the kernel still writes that probe's conversation turn in the
+    background: the listing used to miss it, and with it a revoked
+    value the answer quoted."""
+    manager = kernel()
+    provider = manager.provider = GatedStore()
+    bobs = kernel_write(manager, ASSISTANT, "User: hi\nAssistant: hello",
+                        user="bob")
+    provider.gate.clear()
+    ConversationExtractor(manager, {"auto_extract": True}).extract_async(
+        ASSISTANT, "Who is my lawyer?", "Greta Sandvik.", user_id=USER,
+    )
+    listing = Background(request, manager, ASSISTANT, "list_memory",
+                         user_id=USER)
+    elsewhere = Background(request, manager, ASSISTANT, "list_memory",
+                           user_id="bob")
+    assert elsewhere.done(1)
+    assert ids(elsewhere.result.search_results) == [bobs]
+    assert not listing.done(0.3)  # waiting on the turn
+    provider.gate.set()
+    assert listing.done(WAIT) and listing.result.success
+    assert [r["content"] for r in listing.result.search_results] == [
+        "User: Who is my lawyer?\nAssistant: Greta Sandvik.",
+    ]
+    assert manager.barrier.stats()["total_pending"] == 0

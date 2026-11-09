@@ -139,7 +139,11 @@ class Selector:
 
         Returns:
             ``(candidates, diagnostics)``. ``diagnostics["error"]`` is
-            the provider's error when own retrieval failed, else None.
+            the provider's error when own retrieval failed, else None;
+            ``diagnostics["shared_error"]`` is the same for the shared
+            fetch. Either fetch's rows are then missing, and the caller
+            decides what that means: SDK search fails on the own error,
+            injection reports both (``MemoryPipeline.inject``).
             ``barrier_wait_ms``, ``search_ms`` (the provider calls) and
             ``select_ms`` (partition through cap) time the stages.
         """
@@ -167,6 +171,7 @@ class Selector:
             "top_k_used": top_k_used,
             "barrier_waits": [],
             "error": None,
+            "shared_error": None,
         }
 
         outcome = self.await_pending_writes(scope_user_id, barrier_snapshot)
@@ -187,14 +192,17 @@ class Selector:
 
             shared: list = []
             if fetch_shared:
-                shared, error = self.fetch(
+                # Kept in the diagnostics, not only logged: a failed
+                # shared fetch must not read as a store with no shared
+                # rows (docs/BENCHMARK_V2.md, Amendment 2).
+                shared, diagnostics["shared_error"] = self.fetch(
                     scope_user_id, query_text, top_k_used["shared"]
                 )
-                if error:
+                if diagnostics["shared_error"]:
                     logger.debug(
                         "Shared memory retrieval failed for user_id=%s: %s",
                         scope_user_id,
-                        error,
+                        diagnostics["shared_error"],
                     )
         searched = time.perf_counter()
         diagnostics["own_fetched"] = len(own)

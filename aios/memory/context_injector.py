@@ -98,8 +98,10 @@ class ContextInjector:
 
         - **disabled**: ``auto_inject_enabled=False``, counts
           at 0, empty lists, tokens unchanged.
-        - **happy path**: fully populated diagnostics.
+        - **happy path**: fully populated diagnostics, with the
+          library's ``retrieval_error`` (None unless a fetch failed).
         - **exception**: ``injected_count`` forced to 0,
+          ``injection_error`` set to ``"<ExceptionType>: <message>"``,
           partially-filled diagnostics.
         """
         if not self.enabled:
@@ -121,6 +123,7 @@ class ContextInjector:
                 "injected_memories": [],
                 "block_text": "",
                 "format_ms": 0.0,
+                "retrieval_error": None,
             })
 
         diagnostics: dict = {
@@ -147,6 +150,16 @@ class ContextInjector:
                 )
             )
             resolved_user_id = diagnostics["resolved_user_id"]
+            if diagnostics.get("retrieval_error"):
+                # Otherwise the log shows only "No memories selected",
+                # as for an empty store.
+                logger.warning(
+                    "Memory retrieval failed for agent=%s "
+                    "(resolved_user_id=%s): %s",
+                    agent_name,
+                    resolved_user_id,
+                    diagnostics["retrieval_error"],
+                )
             if "after_dedupe" in diagnostics:
                 logger.info(
                     "Injection pipeline for agent=%s: "
@@ -182,7 +195,7 @@ class ContextInjector:
             )
             return (query, diagnostics)
 
-        except Exception:
+        except Exception as e:
             logger.warning(
                 "Context injection failed for agent=%s "
                 "(resolved_user_id=%s)",
@@ -191,6 +204,10 @@ class ContextInjector:
                 exc_info=True,
             )
             diagnostics["injected_count"] = 0
+            # Reported, not only logged: the caller must not take a
+            # failed injection for an empty store (BENCHMARK_V2.md,
+            # Amendment 2).
+            diagnostics["injection_error"] = f"{type(e).__name__}: {e}"
             # If prompt_tokens_after was never set, match
             # prompt_tokens_before (query was not modified).
             if diagnostics["prompt_tokens_after"] == 0:

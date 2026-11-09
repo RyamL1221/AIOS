@@ -835,6 +835,14 @@ async def handle_query(request: QueryRequest):
             query._request_session = getattr(
                 request.query_data, "session", None
             )
+            # The event the turn answers (LLMQuery.provenance_event,
+            # benchmark v2: the probe id), which the rebuilt query would
+            # drop too: the stored conversation turn is stamped with it.
+            # Read with getattr: an SDK copy from before the field has
+            # none.
+            query._request_provenance_event = getattr(
+                request.query_data, "provenance_event", None
+            )
             result_dict = await asyncio.to_thread(
                 execute_request, # The method to call
                 request.agent_name,               # First arg to execute_request
