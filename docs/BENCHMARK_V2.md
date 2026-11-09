@@ -676,3 +676,108 @@ pre-flight checks it.
 - The v1 runs keep 2,000; v2's numbers are not comparable with v1's on
   this account either.
 
+
+## Amendment 2 (2026-11-08, after the functional check, before the smoke)
+
+**Why.** A read-only review of this subtask's code and data ran while
+the first smoke started. It found facts whose paraphrase changed what
+they say, and incomplete harness records. The smoke was stopped in its
+first cell, and nothing from it is reported. `users_v2` is regenerated
+as revision 2 (the file keeps its name). The functional check and the
+smoke run again on it, with the changes below.
+
+**Revision 1's data problems** (SHA-256 `768a37ac…`, now superseded):
+- **Contradictions that do not conflict.** Some contradicting
+  statements were paraphrased as additions, so the user could hold
+  both values and naming both was not wrong:
+  - conference talks, 10 of 10 ("I'm giving a presentation at
+    Fjordstack.");
+  - weekly one-on-ones, 16 of 19;
+  - client, 12 of 26 ("The company I'm working with on my project
+    is …", which no longer says client).
+  - Pilot users 0, 3, 9, 12, 18 and 27 had a contradiction that did not
+    conflict.
+- **Lost topics.** Paraphrases dropped what the fact is about:
+  - every teammate add said "collaborating" (59 of 59), and every
+    teammate revoke said "teaming up" (25 of 25), not "pairing";
+  - 9 of 31 lawyer rows dropped "lawyer", pilot user 4's included.
+- **A shared fact marked private.** 21 of 35 codename adds began
+  "Privately, …".
+
+**Generation.** Every paraphrase is now also checked for its meaning:
+- **Topic.** Each utterance of a probed or private slot names the
+  slot's topic, from a short word list per slot (for example pairing,
+  client, lawyer). Fillers and echoes are exempt.
+- **Conflict.** A contradiction states what makes it conflict:
+  - the conference, one-on-one and pairing templates say "only" ("The
+    only conference I'm presenting at is …"), and their paraphrases
+    must keep it;
+  - a client contradiction must say client;
+  - home city, manager and offsite city hold one value by nature.
+- **Event cues.** An update keeps a word saying the fact changed, a
+  revoke keeps its request to forget, and a private fact keeps its
+  private marker.
+- **No false privacy.** No shared fact of a probed slot, and no echo,
+  carries a private marker.
+- **Prompt.** The paraphrase prompt asks for all of the above.
+
+**How revision 2 is built.**
+- It keeps every revision-1 utterance that passes the new checks, byte
+  for byte.
+- Each one that fails is paraphrased again under the same seed rule.
+  The rejected utterance counts as the first attempt, and the reason it
+  was rejected is the retry's feedback.
+- The three changed templates are paraphrased from the first attempt.
+- The scripts (slots, values, sessions) are unchanged.
+- The header records the revision and revision 1's SHA-256.
+
+**Scoring.**
+- **`transition_marked`.** The stale value is named as past when every
+  sentence that names it holds a change marker:
+  - "previously", "no longer", "instead of", "used to", "formerly",
+    "originally", a form of "replace", or "anymore";
+  - or "from" right before the stale value, optionally after one
+    determiner ("moved from the Juniper room").
+  - The expected value need not be in the same sentence. Revision 1
+    of the scorer required that, and counted any "from".
+- **Native `cap_bound`** compares the fetch with the consumer's own k
+  (a V4 consumer fetches 5), not the harness's 10.
+- **The semantic diagnostic** records an embedding failure
+  (`semantic_error`) instead of stopping the run. It still decides no
+  pass.
+- **The integration mean** is reported with its 95% t-interval (none
+  for n < 2).
+
+**Harness.**
+- **Failed retrievals.** A consumer probe whose retrieval failed (the
+  own or the shared fetch) fails the user. The library reports
+  `retrieval_error` in its diagnostics instead of dropping it, and the
+  kernel's injector reports `injection_error`. Before, a failed fetch
+  looked like an empty store, so deletion and privacy passed.
+- **Errored probes.** A probe with an error is recorded unscored
+  (`passed` None), so an error cannot pass a hard constraint, even in
+  a failed trial's record.
+- **Any exception** in the history fails the user and keeps what ran,
+  not only the harness's own failures.
+- **Rows per event.** Each event's stored rows and ids come from the
+  listing after its session, by `provenance_event` (see "Recorded per
+  user"). The writer's reply ids are kept as `reported_ids`. Before,
+  the kernel and replicated Mem0 cells recorded only the first fact.
+- **Backend usage** of agent-managed loci includes calls tagged with
+  every user id the trial used, a V2 variant's included.
+- **Stored metadata.** Replicated writers record the metadata as it was
+  stored, so a V3 row is recorded as private.
+
+**Kernel.**
+- **Listings wait for writes.** `list_memory` waits on the write barrier
+  like a retrieval. Before, every kernel user's listing after the last
+  probe missed that probe's conversation, and `revoked_value_rows`
+  missed it too.
+- **Provenance of conversation rows.** The kernel's conversation rows
+  carry `provenance_event`. `LLMQuery.provenance_event` (new, optional)
+  is sent by the kernel assistant with the probe id and stamped on the
+  stored turn, as the replicated and native assistants do. This closes
+  known issue 40.
+- **Unknown operations.** `execute_request` returns an explicit failure
+  for a memory operation it does not dispatch, as "Before any v2 run"
+  requires.
