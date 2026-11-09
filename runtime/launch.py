@@ -24,6 +24,7 @@ from aios.config.config_manager import config
 from aios.memory.context_injector import ContextInjector
 from aios.memory.pipeline import PIPELINE_VERSION
 from aios.memory.conversation_extractor import ConversationExtractor
+from aios.utils.redact import redact_secrets
 
 # Providers that get the context injector and conversation extractor.
 PERSONALIZATION_PROVIDERS = ("mem0", "in-house")
@@ -327,7 +328,8 @@ def initialize_components() -> dict:
         
         if not components["storage"]:
             raise Exception("Storage manager must be initialized first")
-        print(memory_config)
+        # Kernel logs are archived with each run: print no key.
+        print(redact_secrets(memory_config))
         components["memory"] = initialize_memory_manager(memory_config, components["storage"])
         print("memory manager: ", components["memory"])
 
@@ -887,7 +889,9 @@ async def update_config(request: Request):
     """Update configuration and API keys"""
     try:
         data = await request.json()
-        logger.info(f"Received config update request: {data}")
+        # The body carries the provider key being set: log it redacted.
+        logger.info("Received config update request: %s",
+                    redact_secrets(data))
         
         name = data.get("name")
         provider = data.get("provider")

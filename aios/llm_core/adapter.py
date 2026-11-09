@@ -2,6 +2,7 @@ from aios.context.simple_context import SimpleContextManager
 from aios.llm_core.routing import RouterStrategy, SequentialRouting, SmartRouting
 from aios.llm_core.local import HfLocalBackend
 from aios.utils.id_generator import generator_tool_call_id
+from aios.utils.redact import redact_secrets
 from cerebrum.llm.apis import LLMQuery, LLMResponse
 from litellm import completion
 import json
@@ -193,7 +194,9 @@ class LLMAdapter:
                     api_key=config_dict.get("api_key")
                 )
                 if not llm_config.name or not llm_config.backend:
-                    logger.warning(f"Skipping incomplete LLM config: {config_dict}")
+                    # An entry may hold its own api_key: log it redacted.
+                    logger.warning("Skipping incomplete LLM config: %s",
+                                   redact_secrets(config_dict))
                     continue
 
                 initialized_model = self._initialize_single_llm(llm_config)
