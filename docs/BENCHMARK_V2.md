@@ -894,8 +894,9 @@ changes a design decision or a score:
 in revision 2, no `users_v2` kernel or replicated in-house block can
 exceed 336 estimated tokens at H = 0. On a copy of the smoke's kernel
 in-house store (revision 2), blocks of writer rows only reach 314
-tokens in the integration probe and 299 elsewhere. 300 binds in 6 of those 180 probes, all
-integration probes, and keeps the base rows as no budget does.
+tokens in the integration probe and 299 elsewhere. 300 binds in 6 of
+those 180 probes, all integration probes, and keeps the base rows as
+no budget does.
 - v2 runs set `memory.max_memory_tokens` to 300
   (`set_memory_mode.py --budget 300`), and the pre-flight checks it.
 - Native has no budget, as before.
