@@ -231,6 +231,28 @@ class ChromaInHouseProvider(MemoryProvider):
             raise ProviderError(f"Chroma update failed: {e}") from e
         return True
 
+    def update_metadata(
+        self,
+        memory_id: str,
+        user_id: Optional[str],
+        metadata: Dict[str, Any],
+    ) -> bool:
+        """Write the merged metadata alone: neither documents nor
+        embeddings are sent, so Chroma keeps both, and no embedding call
+        is made. The full merged dict is sent, so the result is the same
+        whether Chroma merges or replaces a record's metadata."""
+        current = self.get(memory_id, user_id)
+        if current is None:
+            return False
+        merged = {**current.metadata, **(metadata or {})}
+        try:
+            self._collection(user_id).update(
+                ids=[memory_id], metadatas=[_chroma_metadata(merged)],
+            )
+        except Exception as e:
+            raise ProviderError(f"Chroma metadata update failed: {e}") from e
+        return True
+
     def delete(self, memory_id: str, user_id: Optional[str]) -> bool:
         if self.get(memory_id, user_id) is None:
             return False

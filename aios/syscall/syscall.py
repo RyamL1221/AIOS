@@ -873,6 +873,9 @@ class SyscallExecutor:
                 # Owner-only listing (benchmark v2): a writer finds its
                 # own rows to delete on a revoke.
                 return self.execute_memory_syscall(agent_name, query)
+            elif query.operation_type == "forget_memory":
+                # A user-scoped forget (docs/DELETION_AND_SUPERSESSION.md).
+                return self.execute_memory_syscall(agent_name, query)
             # Never fall through to None: over HTTP that is a 200 with
             # body ``null``, which callers read as "no result".
             error = (

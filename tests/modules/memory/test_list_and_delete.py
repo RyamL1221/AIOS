@@ -269,11 +269,14 @@ def test_kernel_list_memory_is_the_librarys_list_own():
     kernel_write(manager, WRITER, "My cat is Mochi.", fact_key="pet")
     kernel_write(manager, "task_agent", "Client is Halvorsen.")
     kernel_write(manager, WRITER, "I live in Tallinn.", fact_key="city")
-    original = MemoryPipeline.list_own
-    with patch.object(MemoryPipeline, "list_own", autospec=True,
+    # The kernel lists through list_own_report: the rows of list_own and
+    # the ids a tombstone withheld (none here).
+    original = MemoryPipeline.list_own_report
+    with patch.object(MemoryPipeline, "list_own_report", autospec=True,
                       side_effect=original) as list_own:
         response = request(manager, WRITER, "list_memory", user_id=USER)
     assert isinstance(response, MemoryResponse) and response.success
+    assert response.metadata == {"withheld": []}
     _, agent, user = list_own.call_args.args
     # The snapshot stamped at acceptance, after the three writes.
     snapshot = manager.barrier.snapshot(USER)

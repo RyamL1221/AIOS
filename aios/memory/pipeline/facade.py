@@ -6,23 +6,32 @@ replicated agent builds its own (docs/REPLICATED_LOGIC.md). Everything
 that decides what is stored and what an agent sees is here, so both run
 the same code.
 """
+import logging
+from contextlib import nullcontext
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
-
-from cerebrum.utils.usage import tagged
+from typing import (
+    Any, Callable, ContextManager, Dict, List, Optional, Tuple,
+)
 
 from ..note import MemoryNote
 from ..providers.base import Candidate, MemoryProvider
 from .barrier import MemoryWriteBarrier
+from .deletion import LIST_TOP_K, MARKS, after_write, forget_fact
 from .formatter import Formatter, estimate_tokens
 from .identity import IdentityResolver
 from .selector import Selector
 from .settings import PipelineSettings
+from .tombstones import TombstoneStore, carried_form
 from .visibility import Visibility
 
-# An update may not move a memory to another owner or user, or rewrite
-# when it was created.
-UPDATE_PROTECTED_METADATA = ("owner_agent", "user_id", "created_at")
+logger = logging.getLogger(__name__)
+
+# An update may not move a memory to another owner or user, rewrite
+# when it was created, or set or clear a supersession mark (only the
+# library marks a row retired).
+UPDATE_PROTECTED_METADATA = (
+    "owner_agent", "user_id", "created_at", *MARKS,
+)
 
 # MemoryNote fields an SDK request may set directly.
 NOTE_FIELDS = (
@@ -31,11 +40,19 @@ NOTE_FIELDS = (
     "category", "tags",
 )
 
-# ``list_own``'s default size: more rows than any user's store holds, so
-# a listing is complete (a revoke deletes every row it finds).
-LIST_TOP_K = 10_000
-
 _LOCAL = object()
+
+# Tags the provider's own LLM and embedding calls with the user they
+# serve, for cost accounting. The library imports nothing outside the
+# standard library and the provider contract, so the caller passes the
+# tag: the kernel and the replicated agents pass the SDK's
+# ``cerebrum.utils.usage.tagged``.
+UsageTag = Callable[[Optional[str]], ContextManager]
+
+
+def untagged(user_id: Optional[str]) -> ContextManager:
+    """The default usage tag: tags nothing."""
+    return nullcontext()
 
 
 def note_from_request(params: Dict[str, Any]) -> MemoryNote:
@@ -57,6 +74,13 @@ def note_from_request(params: Dict[str, Any]) -> MemoryNote:
     if metadata:
         note.metadata = metadata
     return note
+
+
+def note_metadata_of(note: MemoryNote) -> Dict[str, Any]:
+    """The metadata ``after_write`` reads from a written note: its
+    ``metadata`` dict (fact_key, structured, value_aliases,
+    provenance_event, session)."""
+    return dict(getattr(note, "metadata", None) or {})
 
 
 def conversation_request(
@@ -133,6 +157,16 @@ class MemoryPipeline:
         barrier: The write barrier. Omitted: a new one of the agent's
             own, from ``settings.write_barrier``. ``None``: no barrier.
         resolver: The identity resolver; omitted, a new one.
+        tombstones: The store's tombstones (``TombstoneStore``). Every
+            pipeline over one store must share them: the kernel passes
+            its own to each per-request pipeline, and a replicated
+            store's agents share one file. Omitted: a new in-memory
+            one. ``None``: no tombstones (a forget fails, and the guard
+            and the sweep have nothing to act on).
+        usage_tag: A context manager factory that tags the provider's
+            calls with the user they serve (``cerebrum.utils.usage
+            .tagged`` in the kernel and the replicated agents); omitted,
+            nothing is tagged.
     """
 
     def __init__(
@@ -142,16 +176,23 @@ class MemoryPipeline:
         *,
         barrier: Any = _LOCAL,
         resolver: Optional[IdentityResolver] = None,
+        tombstones: Any = _LOCAL,
+        usage_tag: Optional[UsageTag] = None,
     ):
         self.provider = provider
+        self.usage_tag: UsageTag = usage_tag or untagged
         self.settings = settings or PipelineSettings()
         self.barrier: Optional[MemoryWriteBarrier] = (
             MemoryWriteBarrier(config=self.settings.write_barrier)
             if barrier is _LOCAL else barrier
         )
         self.resolver = resolver or IdentityResolver()
+        self.tombstones: Optional[TombstoneStore] = (
+            TombstoneStore() if tombstones is _LOCAL else tombstones
+        )
         self.selector = Selector(
-            provider, self.settings, self.barrier, self.resolver
+            provider, self.settings, self.barrier, self.resolver,
+            tombstones=self.tombstones, usage_tag=self.usage_tag,
         )
 
     # -- writes --------------------------------------------------------
@@ -159,6 +200,7 @@ class MemoryPipeline:
     def write(
         self, agent_name: str, user_id: Optional[str], note: MemoryNote,
         *, barrier_seq: Optional[int] = None,
+        outcome: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Store one note and return its id; raises ``ProviderError``.
 
@@ -166,13 +208,24 @@ class MemoryPipeline:
         ``user_id``, else the agent; ``owner_agent``; ``memory_type``;
         ``sharing_policy`` private; ``created_at``), registers the user,
         and holds the write barrier for the user until the provider
-        returns. ``barrier_seq`` is a sequence already acquired (the
-        kernel stamps it when the syscall is accepted; ``0`` means
-        none); without it the write acquires its own.
+        returns and ``after_write`` is done (a restatement's lift, the
+        sweep of tombstoned values, supersession). ``barrier_seq`` is a
+        sequence already acquired (the kernel stamps it when the syscall
+        is accepted; ``0`` means none); without it the write acquires
+        its own.
+
+        ``outcome``, when given, gets ``after_write``'s report: the ids
+        swept, retired and lifted, and ``suppressed``. A suppressed
+        write (its own rows carried a forgotten value and were swept)
+        returns ``""``, as a write that stored nothing does.
         """
         if note.metadata is None:
             note.metadata = {}
         metadata = note.metadata
+        # Only the library marks a row retired: a write that carried a
+        # mark would be born retired, never selected.
+        for mark in MARKS:
+            metadata.pop(mark, None)
         if not metadata.get("user_id"):
             metadata["user_id"] = user_id or agent_name
         # Stored under the resolver's canonical id (HETEROGENEITY.md).
@@ -198,10 +251,16 @@ class MemoryPipeline:
             )
         success = False
         try:
-            with tagged(uid):
+            with self.usage_tag(uid):
                 memory_id = self.provider.add(note)
-            success = True
-            return memory_id
+                success = True
+                report = after_write(
+                    self.provider, self.tombstones, self.settings, uid,
+                    note_metadata_of(note), memory_id=memory_id,
+                )
+            if outcome is not None:
+                outcome.update(report)
+            return "" if report["suppressed"] else memory_id
         finally:
             # Waiters are released even when the provider raised.
             if self.barrier:
@@ -229,11 +288,14 @@ class MemoryPipeline:
         content: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         *, barrier_seq: Optional[int] = None,
+        outcome: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Owner-only update; False when the memory is missing or not
         the agent's. Raises ``ProviderError``. Held against the barrier
         like a write, so a retrieval accepted after it reads the new
-        content; released on every path."""
+        content; released on every path. Then, like a write, a
+        restatement lifts its tombstone and tombstoned values are swept
+        (``outcome``); an update retires no other row."""
         user_id = self.resolver.canonical(user_id)
         if barrier_seq is None:
             barrier_seq = (
@@ -252,10 +314,18 @@ class MemoryPipeline:
                 if key not in UPDATE_PROTECTED_METADATA
             }
             owner_user = found.metadata.get("user_id") or None
-            with tagged(owner_user or agent_name):
+            with self.usage_tag(owner_user or agent_name):
                 success = bool(self.provider.update(
                     memory_id, owner_user, content, kept,
                 ))
+                if success and owner_user:
+                    report = after_write(
+                        self.provider, self.tombstones, self.settings,
+                        owner_user, {**found.metadata, **kept},
+                        memory_id=memory_id, supersede=False,
+                    )
+                    if outcome is not None:
+                        outcome.update(report)
             return success
         finally:
             if self.barrier and user_id:
@@ -274,7 +344,7 @@ class MemoryPipeline:
         ):
             return False
         owner_user = found.metadata.get("user_id") or None
-        with tagged(owner_user or agent_name):
+        with self.usage_tag(owner_user or agent_name):
             return bool(self.provider.delete(memory_id, owner_user))
 
     # -- reads ---------------------------------------------------------
@@ -284,6 +354,17 @@ class MemoryPipeline:
         top_k: Optional[int] = None,
         barrier_snapshot: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """The rows of ``list_own_report``."""
+        return self.list_own_report(
+            agent_name, user_id, top_k=top_k,
+            barrier_snapshot=barrier_snapshot,
+        )[0]
+
+    def list_own_report(
+        self, agent_name: str, user_id: Optional[str], *,
+        top_k: Optional[int] = None,
+        barrier_snapshot: Optional[int] = None,
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Every memory ``agent_name`` owns in ``user_id``'s scope (the
         agent's own scope without a user), as rows (``Candidate
         .to_row``), unscored, in storage order.
@@ -301,18 +382,117 @@ class MemoryPipeline:
         background. ``barrier_snapshot`` is the high-water mark stamped
         when the listing was accepted: ``None`` takes one now, ``0``
         skips the wait.
+
+        A row carrying a tombstoned value is never returned
+        (docs/DELETION_AND_SUPERSESSION.md): it is left out with a
+        WARNING, and its id comes back as withheld, the second element
+        of the result, so an audit counts it as a carrier.
         """
         scope = self.resolver.canonical(user_id) or agent_name
         limit = LIST_TOP_K if top_k is None else top_k
         self.selector.await_pending_writes(scope, barrier_snapshot)
-        with tagged(scope):
+        with self.usage_tag(scope):
             found = self.provider.list(scope, max(limit, LIST_TOP_K))
-        rows = [
-            candidate.to_row() for candidate in found
+        owned = [
+            candidate for candidate in found
             if (candidate.metadata or {}).get("user_id", "") == scope
             and Visibility.can_write(agent_name, candidate.metadata)
         ]
-        return rows[:max(limit, 0)]
+        forms = self.tombstoned_forms(scope)
+        rows, withheld = [], []
+        for candidate in owned:
+            if forms and carried_form(
+                candidate.content, candidate.metadata, forms
+            ) is not None:
+                withheld.append(candidate.memory_id)
+                logger.warning(
+                    "Listing withheld memory %s of user_id=%s: it carries "
+                    "a forgotten value, so it escaped the forget",
+                    candidate.memory_id, scope,
+                )
+            else:
+                rows.append(candidate.to_row())
+        return rows[:max(limit, 0)], withheld
+
+    def tombstoned_forms(self, user_id: Optional[str]) -> List[str]:
+        """Every tombstoned form of the user; [] without a store."""
+        if self.tombstones is None or not user_id:
+            return []
+        return self.tombstones.forms(user_id)
+
+    def read(
+        self, agent_name: str, user_id: Optional[str], memory_id: str
+    ) -> Optional[Candidate]:
+        """A memory by id, as ``agent_name`` may read it (``get_memory``):
+        None when it is missing, not readable (another agent's private
+        row) or carries a tombstoned value. The last logs a WARNING: a
+        carrier that escaped the forget is never returned."""
+        found = self.locate(memory_id, user_id, agent_name)
+        if found is None or not Visibility.can_read(
+            agent_name, found.metadata
+        ):
+            return None
+        owner_user = (found.metadata or {}).get("user_id")
+        forms = self.tombstoned_forms(owner_user)
+        if forms and carried_form(
+            found.content, found.metadata, forms
+        ) is not None:
+            logger.warning(
+                "Read withheld memory %s of user_id=%s: it carries a "
+                "forgotten value, so it escaped the forget",
+                memory_id, owner_user,
+            )
+            return None
+        return found
+
+    def forget(
+        self, agent_name: str, user_id: Optional[str], fact_key: str,
+        *, barrier_seq: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Forget ``fact_key`` for the user: the user's request, made by
+        any agent that serves the user (``deletion.forget_fact``, which
+        returns the report). Raises ``ValueError`` without a user or a
+        slot, ``RuntimeError`` without a tombstone store, and whatever
+        the provider raises.
+
+        Holds a barrier sequence until it returns, so a retrieval
+        accepted after it sees no deleted row. ``barrier_seq`` is one
+        already acquired (the kernel stamps it when the request is
+        accepted); without it the forget acquires its own. It first
+        waits for the user's writes accepted before it: those through
+        ``barrier_seq - 1``, never a fresh snapshot, which would hold
+        its own sequence and wait on itself until the timeout.
+        """
+        scope = self.resolver.canonical(user_id) if user_id else None
+        if barrier_seq is None:
+            barrier_seq = (
+                self.barrier.acquire(scope) if self.barrier and scope else 0
+            )
+        success = False
+        try:
+            # Checked inside the hold, so a sequence the kernel stamped
+            # is released on every path (a stuck one would hold every
+            # later retrieval of the user until the barrier's timeout).
+            if not scope:
+                raise ValueError("a forget needs the user's id")
+            if not fact_key:
+                raise ValueError(
+                    "a forget needs the fact's slot (fact_key)"
+                )
+            if self.tombstones is None:
+                raise RuntimeError("this pipeline has no tombstone store")
+            if barrier_seq:
+                self.selector.await_pending_writes(scope, barrier_seq - 1)
+            with self.usage_tag(scope):
+                report = forget_fact(
+                    self.provider, self.tombstones, scope, agent_name,
+                    fact_key,
+                )
+            success = True
+            return report
+        finally:
+            if self.barrier and scope:
+                self.barrier.release(scope, barrier_seq, success=success)
 
     def retrieve(
         self,

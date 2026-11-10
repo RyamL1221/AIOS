@@ -6,6 +6,7 @@ interface to the memory management system. It uses pluggable memory providers
 to enable different storage backends (in-house, Mem0, Zep).
 """
 import logging
+import os
 import time
 from collections import OrderedDict
 from typing import Optional, Dict, Any, Set, Tuple
@@ -16,6 +17,7 @@ from cerebrum.utils.usage import tagged
 from aios.config.config_manager import config as global_config
 from .embedding import EmbeddingConfig
 from .pipeline import (
+    LIST_TOP_K,
     SHARED_FETCH_FACTOR,  # noqa: F401  (re-exported for callers)
     UPDATE_PROTECTED_METADATA,  # noqa: F401
     IdentityResolver,
@@ -27,6 +29,7 @@ from .pipeline import (
     note_from_request,
 )
 from .pipeline.barrier import MemoryWriteBarrier, WaitOutcome
+from .pipeline.tombstones import TombstoneStore
 from .pipeline.selector import commits_synchronously
 from .providers import ProviderFactory, MemoryProvider
 from .providers.base import Candidate, ProviderError
@@ -164,6 +167,22 @@ class MemoryManager:
         self.block_format = _block.block_format
         self.block_recency = _block.block_recency
         self.block_recency_unit = _block.block_recency_unit
+        # Whether a later statement retires the earlier rows of its
+        # slot ("off" or "exclude"; docs/DELETION_AND_SUPERSESSION.md).
+        self.supersession = _block.supersession
+        # The store's tombstones (memory.tombstones_path): one sidecar
+        # file, read on every call, so every per-request pipeline sees
+        # every forget. Not a pipeline setting: a replicated store keeps
+        # its own. Without a path they live in memory and a restart
+        # loses them; the v2 pre-flight refuses that.
+        path = memory_config.get("tombstones_path")
+        self.tombstones_path = os.path.abspath(path) if path else None
+        self.tombstones = TombstoneStore(self.tombstones_path)
+        if self.tombstones_path is None:
+            logger.info(
+                "memory.tombstones_path is not set: tombstones are kept "
+                "in memory and a restart loses them"
+            )
         # Whether the kernel injects and extracts memories: off for the
         # agent-managed (native) conditions (docs/NATIVE_USAGE.md).
         self.auto_inject = bool(memory_config.get("auto_inject", False))
@@ -225,6 +244,7 @@ class MemoryManager:
             block_format=getattr(self, "block_format", "compact"),
             block_recency=getattr(self, "block_recency", False),
             block_recency_unit=getattr(self, "block_recency_unit", "time"),
+            supersession=getattr(self, "supersession", "off"),
         )
 
     def memory_pipeline(self) -> MemoryPipeline:
@@ -238,6 +258,9 @@ class MemoryManager:
             self.pipeline_settings(),
             barrier=getattr(self, "barrier", None),
             resolver=_KernelIdentity(self),
+            tombstones=getattr(self, "tombstones", None),
+            # The provider's calls count to the user they serve.
+            usage_tag=tagged,
         )
 
     def _resolve_user_id(
@@ -273,7 +296,10 @@ class MemoryManager:
         because this can run before ``execute_request`` rewrites it. An
         update is stamped like a write, so a retrieval accepted after it
         reads the new content. A listing is stamped like a retrieval, so
-        it includes a conversation turn still being written.
+        it includes a conversation turn still being written. A forget is
+        stamped like a write, so a retrieval accepted after it waits for
+        it; it waits for the writes accepted before it through its own
+        sequence minus one (``MemoryPipeline.forget``).
         """
         query = memory_syscall.query
         operation = query.operation_type
@@ -286,6 +312,10 @@ class MemoryManager:
                 memory_syscall.barrier_seq = self.barrier.acquire(user_id)
         elif operation == "update_memory":
             user_id = self._update_user_id(query)
+            if user_id:
+                memory_syscall.barrier_seq = self.barrier.acquire(user_id)
+        elif operation == "forget_memory":
+            user_id = query.params.get("user_id")
             if user_id:
                 memory_syscall.barrier_seq = self.barrier.acquire(user_id)
         elif operation in (
@@ -438,7 +468,18 @@ class MemoryManager:
         operation_type = query.operation_type
         
         if operation_type == "add_memory":
-            memory_note = self._analyze_query_to_memory(query)
+            try:
+                memory_note = self._analyze_query_to_memory(query)
+            except Exception as e:
+                # The write never reaches the library, which would release
+                # the sequence stamped at acceptance: release it here, or
+                # every later retrieval of the user waits out the
+                # barrier's timeout.
+                self._release_stamp(
+                    memory_syscall,
+                    (query.params.get("metadata") or {}).get("user_id"),
+                )
+                return self._failure("add_memory", memory_syscall, e)
             metadata = memory_note.metadata or {}
             logger.info(
                 "add_memory: agent=%s, uid_from_metadata=%s, "
@@ -453,18 +494,20 @@ class MemoryManager:
             # call that bypasses the executor) makes the release a no-op.
             # The library fills the required metadata, registers the
             # user and releases the barrier even if the provider raises.
+            # The reply's metadata says what the write swept, retired and
+            # lifted, and whether it was suppressed (Amendment 4).
+            outcome: Dict[str, Any] = {}
             try:
-                resp = MemoryResponse(
-                    success=True,
-                    memory_id=self.memory_pipeline().write(
-                        memory_syscall.agent_name, None, memory_note,
-                        barrier_seq=getattr(
-                            memory_syscall, "barrier_seq", 0
-                        ),
-                    ),
+                memory_id = self.memory_pipeline().write(
+                    memory_syscall.agent_name, None, memory_note,
+                    barrier_seq=getattr(memory_syscall, "barrier_seq", 0),
+                    outcome=outcome,
                 )
-            except ProviderError as e:
-                resp = MemoryResponse(success=False, error=str(e))
+                resp = MemoryResponse(
+                    success=True, memory_id=memory_id, metadata=outcome,
+                )
+            except Exception as e:
+                resp = self._failure("add_memory", memory_syscall, e)
             logger.info(
                 "[MEM0_DEBUG] add_memory result: "
                 "user_id=%s, success=%s, memory_id=%s, "
@@ -484,14 +527,24 @@ class MemoryManager:
 
         elif operation_type == "update_memory":
             return self._update_memory(memory_syscall)
-        
+
+        elif operation_type == "forget_memory":
+            return self._forget_memory(memory_syscall)
+
         elif operation_type == "get_memory":
-            found = self._locate_memory(query, memory_syscall.agent_name)
-            if found is None or not self._can_read(
-                memory_syscall.agent_name, found.metadata
-            ):
-                # Same answer as a missing id, so a read by id does
-                # not reveal that a private memory exists.
+            params = query.params
+            try:
+                found = self.memory_pipeline().read(
+                    memory_syscall.agent_name,
+                    self._caller_user_id(query),
+                    params["memory_id"],
+                )
+            except Exception as e:
+                return self._failure("get_memory", memory_syscall, e)
+            if found is None:
+                # Same answer for a missing id, another agent's private
+                # memory and one that carries a forgotten value, so a
+                # read by id reveals none of them.
                 return MemoryResponse(
                     success=False, error="Memory not found"
                 )
@@ -515,17 +568,20 @@ class MemoryManager:
             # ``SyscallExecutor`` at acceptance; the sentinel ``0``
             # (no user_id, or no executor) skips the wait.
             sharing_policy = query.params.get("sharing_policy")
-            candidates, diagnostics = self.retrieve_for_agent(
-                memory_syscall.agent_name,
-                query.params.get("user_id"),
-                query.params.get("content", ""),
-                k=query.params.get("k", 5),
-                include_shared=sharing_policy == "shared",
-                sharing_policy=sharing_policy,
-                barrier_snapshot=getattr(
-                    memory_syscall, "barrier_snapshot", 0
-                ),
-            )
+            try:
+                candidates, diagnostics = self.retrieve_for_agent(
+                    memory_syscall.agent_name,
+                    query.params.get("user_id"),
+                    query.params.get("content", ""),
+                    k=query.params.get("k", 5),
+                    include_shared=sharing_policy == "shared",
+                    sharing_policy=sharing_policy,
+                    barrier_snapshot=getattr(
+                        memory_syscall, "barrier_snapshot", 0
+                    ),
+                )
+            except Exception as e:
+                return self._failure("retrieve_memory", memory_syscall, e)
             logger.info(
                 "[MEM0_DEBUG] retrieve_memory result: "
                 "user_id=%s, success=%s, result_count=%d",
@@ -579,20 +635,32 @@ class MemoryManager:
         against the write barrier like a write: a retrieval accepted
         after the update waits for it, so it reads the new content."""
         params = memory_syscall.query.params
+        outcome: Dict[str, Any] = {}
+        user_id = self._update_user_id(memory_syscall.query)
+        if not params.get("memory_id"):
+            # Refused before the library runs, which would release the
+            # sequence stamped at acceptance: release it here.
+            self._release_stamp(memory_syscall, user_id)
+            return MemoryResponse(
+                success=False, error="update_memory needs params.memory_id"
+            )
         try:
             updated = self.memory_pipeline().update(
                 memory_syscall.agent_name,
-                self._update_user_id(memory_syscall.query),
+                user_id,
                 params["memory_id"],
                 params.get("content"),
                 params.get("metadata"),
                 barrier_seq=getattr(memory_syscall, "barrier_seq", 0),
+                outcome=outcome,
             )
-        except ProviderError as e:
-            return MemoryResponse(success=False, error=str(e))
+        except Exception as e:
+            return self._failure("update_memory", memory_syscall, e)
         if not updated:
             return MemoryResponse(success=False, error="Memory not found")
-        return MemoryResponse(success=True, memory_id=params["memory_id"])
+        return MemoryResponse(
+            success=True, memory_id=params["memory_id"], metadata=outcome,
+        )
 
     # The by-id and listing operations below answer every failure with a
     # response: an exception would leave the FIFO scheduler's syscall
@@ -607,6 +675,14 @@ class MemoryManager:
             params.get("user_id")
             or (params.get("metadata") or {}).get("user_id")
         )
+
+    def _release_stamp(self, memory_syscall, user_id: Optional[str]) -> None:
+        """Release the barrier sequence stamped on a write syscall that
+        failed before reaching the library (which releases its own)."""
+        seq = getattr(memory_syscall, "barrier_seq", 0)
+        barrier = getattr(self, "barrier", None)
+        if seq and user_id and barrier is not None:
+            barrier.release(user_id, seq, success=False)
 
     @staticmethod
     def _failure(
@@ -654,7 +730,7 @@ class MemoryManager:
         query = memory_syscall.query
         params = query.params or {}
         try:
-            rows = self.memory_pipeline().list_own(
+            rows, withheld = self.memory_pipeline().list_own_report(
                 memory_syscall.agent_name,
                 params.get("user_id"),
                 top_k=params.get("k"),
@@ -668,12 +744,67 @@ class MemoryManager:
         except Exception as e:
             return self._failure("list_memory", memory_syscall, e)
         logger.info(
-            "list_memory: agent=%s, user_id=%s, rows=%d",
+            "list_memory: agent=%s, user_id=%s, rows=%d, withheld=%d",
             memory_syscall.agent_name,
             params.get("user_id"),
             len(rows),
+            len(withheld),
         )
-        return MemoryResponse(success=True, search_results=rows)
+        # A row that carries a forgotten value is never listed; its id is
+        # reported, so an audit counts it as a carrier (Amendment 4).
+        return MemoryResponse(
+            success=True, search_results=rows,
+            metadata={"withheld": withheld},
+        )
+
+    def audit_rows(self, user_id: str) -> Dict[str, Any]:
+        """Every row the store holds for ``user_id``, of every agent,
+        unfiltered: no visibility rule and no tombstone guard
+        (``GET /memory/audit``). The benchmark harness's audit of what a
+        forget left in the store reads this, so a carrier the forget
+        missed shows with its text, whatever the guard hides from the
+        agents (docs/DELETION_AND_SUPERSESSION.md, "The audit reads the
+        store"). Not a retrieval path: no agent and no SDK call uses it.
+        Waits for the user's writes accepted before it, as a listing
+        does. ``at_limit``: the listing reached ``LIST_TOP_K`` and may
+        be partial."""
+        uid = self.canonical_user_id(user_id)
+        self._await_pending_writes(uid)
+        with tagged(uid):
+            found = self.provider.list(uid, LIST_TOP_K)
+        return {
+            "user_id": uid,
+            "rows": [candidate.to_row() for candidate in found],
+            "at_limit": len(found) >= LIST_TOP_K,
+        }
+
+    def _forget_memory(self, memory_syscall) -> MemoryResponse:
+        """A user-scoped forget (``MemoryPipeline.forget``): the user's
+        request, made by any agent that serves the user
+        (docs/DELETION_AND_SUPERSESSION.md). Stamped against the barrier
+        like a write. The report is the reply's ``metadata``: the ids
+        deleted with their owners and reasons, the value and form
+        counts, and the history scrub's counts; never another agent's
+        text."""
+        params = memory_syscall.query.params or {}
+        user_id = params.get("user_id")
+        fact_key = params.get("fact_key")
+        # The library refuses a missing user or slot inside its barrier
+        # hold, so the sequence stamped at acceptance is released.
+        try:
+            report = self.memory_pipeline().forget(
+                memory_syscall.agent_name, user_id, fact_key,
+                barrier_seq=getattr(memory_syscall, "barrier_seq", 0),
+            )
+        except Exception as e:
+            return self._failure("forget_memory", memory_syscall, e)
+        logger.info(
+            "forget_memory: agent=%s, user_id=%s, fact_key=%s, "
+            "values=%d, deleted=%d",
+            memory_syscall.agent_name, user_id, fact_key,
+            report["values_count"], len(report["deleted"]),
+        )
+        return MemoryResponse(success=True, metadata=report)
 
     def close(self) -> None:
         """

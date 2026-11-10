@@ -1,20 +1,24 @@
 """
 Selection: which memories an agent sees for one query.
 
-search -> user partition -> visibility -> dedupe -> threshold -> sort ->
-cap, with diagnostics for every stage and timings for the barrier wait,
-the provider calls and the selection.
+search -> user partition -> visibility -> supersession -> tombstone guard
+-> dedupe -> threshold -> sort -> cap, with diagnostics for every stage
+and timings for the barrier wait, the provider calls and the selection.
+The supersession and tombstone stages come before the threshold and the
+cap (docs/DELETION_AND_SUPERSESSION.md), so a new statement competes for
+the slot a retired one held, and ``cap_bound`` and ``budget_bound`` keep
+their meaning.
 """
 import logging
 import time
+from contextlib import nullcontext
 from typing import Any, Dict, Optional, Tuple
-
-from cerebrum.utils.usage import tagged
 
 from ..providers.base import MemoryProvider
 from .barrier import MemoryWriteBarrier, WaitOutcome
 from .identity import IdentityResolver
 from .settings import PipelineSettings
+from .tombstones import TombstoneStore, carried_form
 from .visibility import apply_sharing_filter
 
 logger = logging.getLogger(__name__)
@@ -40,11 +44,17 @@ class Selector:
         settings: PipelineSettings,
         barrier: Optional[MemoryWriteBarrier],
         resolver: IdentityResolver,
+        tombstones: Optional[TombstoneStore] = None,
+        usage_tag: Any = None,
     ):
         self.provider = provider
+        # Tags the provider's calls with the user (``MemoryPipeline``'s
+        # ``usage_tag``); nothing by default.
+        self.usage_tag = usage_tag or (lambda user_id: nullcontext())
         self.settings = settings
         self.barrier = barrier
         self.resolver = resolver
+        self.tombstones = tombstones
 
     def await_pending_writes(
         self,
@@ -163,6 +173,11 @@ class Selector:
             "shared_fetched": 0,
             "after_partition": 0,
             "after_visibility": 0,
+            "after_supersession": 0,
+            "superseded_rows": [],
+            "after_tombstone": 0,
+            "tombstoned_rows": [],
+            "tombstoned_forms": 0,
             "after_dedupe": 0,
             "scores_present": False,
             "threshold_used": None,
@@ -183,7 +198,7 @@ class Selector:
         waited = time.perf_counter()
 
         # The provider's own LLM and embedding calls count to this user.
-        with tagged(scope_user_id):
+        with self.usage_tag(scope_user_id):
             # Without a resolved user, own memories live in the agent's
             # scope, where a write that names no user is filed.
             own, diagnostics["error"] = self.fetch(
@@ -235,6 +250,56 @@ class Selector:
         own = visible(own)
         shared = visible(shared)
         diagnostics["after_visibility"] = len(own) + len(shared)
+
+        def drop(rows: list, dropping, dropped: dict) -> list:
+            """``rows`` without those ``dropping`` holds for, which are
+            recorded once each in ``dropped`` (own rows are also among
+            the shared fetch's, so a row can come twice)."""
+            kept = []
+            for mem in rows:
+                if dropping(mem):
+                    dropped[str(mem.get("memory_id"))] = mem
+                else:
+                    kept.append(mem)
+            return kept
+
+        # A retired row (an earlier statement of a fact with a later
+        # one) is never selected.
+        superseded: Dict[str, dict] = {}
+        if self.settings.supersession == "exclude":
+            def retired(mem: dict) -> bool:
+                return bool((mem.get("metadata") or {}).get("superseded_by"))
+
+            own = drop(own, retired, superseded)
+            shared = drop(shared, retired, superseded)
+        diagnostics["after_supersession"] = len(own) + len(shared)
+        diagnostics["superseded_rows"] = sorted(superseded)
+
+        # The tombstone guard: no row carrying a forgotten value is
+        # selected. After a complete forget it drops nothing, so a drop
+        # means a carrier escaped the forget and the sweep.
+        forms = (
+            self.tombstones.forms(scope_user_id)
+            if self.tombstones is not None else []
+        )
+        diagnostics["tombstoned_forms"] = len(forms)
+        tombstoned: Dict[str, dict] = {}
+        if forms:
+            def carries(mem: dict) -> bool:
+                return carried_form(
+                    mem.get("content"), mem.get("metadata"), forms
+                ) is not None
+
+            own = drop(own, carries, tombstoned)
+            shared = drop(shared, carries, tombstoned)
+            for memory_id in sorted(tombstoned):
+                logger.warning(
+                    "Selection guard dropped memory %s of user_id=%s: it "
+                    "carries a forgotten value, so it escaped the forget",
+                    memory_id, scope_user_id,
+                )
+        diagnostics["after_tombstone"] = len(own) + len(shared)
+        diagnostics["tombstoned_rows"] = sorted(tombstoned)
 
         results = (
             self.merge_and_deduplicate(own, shared) if shared else own

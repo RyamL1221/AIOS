@@ -185,6 +185,36 @@ class MemoryProvider(ABC):
     def delete(self, memory_id: str, user_id: Optional[str]) -> bool:
         """Delete one memory; False if it does not exist."""
 
+    def update_metadata(
+        self,
+        memory_id: str,
+        user_id: Optional[str],
+        metadata: Dict[str, Any],
+    ) -> bool:
+        """Merge ``metadata`` over the stored metadata, keeping the
+        content and its embedding: a supersession mark
+        (docs/DELETION_AND_SUPERSESSION.md). False if the memory does
+        not exist. The default goes through ``update`` with the content
+        unchanged; a provider that can write metadata alone overrides
+        it, so a mark costs no embedding call."""
+        return self.update(memory_id, user_id, None, metadata)
+
+    def scrub_history(
+        self,
+        user_id: Optional[str],
+        forms: List[str],
+        deleted_ids: List[str] = (),
+        kept_ids: List[str] = (),
+    ) -> Dict[str, int]:
+        """Remove forgotten forms from what the backend keeps besides
+        its rows (Mem0: its stored messages and history records), after
+        a forget or a sweep deleted rows. ``deleted_ids`` are the rows
+        just deleted: their records' text is cleared whatever it holds.
+        ``kept_ids`` are the user's other rows: their records' text is
+        cleared where it carries a form. Returns the counts removed or
+        cleared; the default keeps nothing but rows and returns zeros."""
+        return {"messages": 0, "history": 0}
+
     def close(self) -> None:
         """Release resources. Override if needed."""
 

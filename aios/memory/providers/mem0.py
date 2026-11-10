@@ -82,6 +82,9 @@ class Mem0Provider(MemoryProvider):
         # Used to stamp out per-user Memory instances with only
         # the collection_name changed.
         self._base_mem0_config: Dict[str, Any] = {}
+        # The store's own Mem0 history file (messages and history
+        # records), set during initialize.
+        self.history_db_path: Optional[str] = None
     
     def initialize(self, config: Dict[str, Any]) -> None:
         """Initialize the provider with Mem0 configuration.
@@ -197,6 +200,23 @@ class Mem0Provider(MemoryProvider):
                     self._default_collection_prefix = (
                         configured_name
                     )
+
+            # Each store keeps Mem0's messages and history records in a
+            # file of its own, next to its vectors, not in the
+            # ~/.mem0/history.db every run shared (known issue 46;
+            # docs/DELETION_AND_SUPERSESSION.md, Decision 3). Every
+            # per-user client is a copy of this config, so all get it.
+            history_path = config.get("history_db_path")
+            if not history_path and self._chroma_path:
+                history_path = os.path.join(
+                    os.path.dirname(self._chroma_path), "history.db"
+                )
+            if history_path:
+                history_path = os.path.abspath(history_path)
+                os.makedirs(os.path.dirname(history_path), exist_ok=True)
+                mem0_config["history_db_path"] = history_path
+                logger.info("Mem0 history path: %s", history_path)
+            self.history_db_path = history_path
 
             # Resolve API keys for cloud LLM/embedder providers
             self._resolve_provider_api_keys(mem0_config)
@@ -883,6 +903,132 @@ class Mem0Provider(MemoryProvider):
         except Exception as e:
             raise ProviderError(f"Mem0 update failed: {e}") from e
         return True
+
+    def update_metadata(
+        self,
+        memory_id: str,
+        user_id: Optional[str],
+        metadata: Dict[str, Any],
+    ) -> bool:
+        """Write ``metadata`` into the row's stored payload alone: the
+        text, its hash and its embedding stay, and Mem0's ``update``
+        (which re-embeds the text and records a history UPDATE) is not
+        called. The full payload is written back, so the result is the
+        same whether Chroma merges or replaces a record's metadata."""
+        store = self._get_client_for_user(self._scope(user_id)).vector_store
+        try:
+            found = store.get(vector_id=memory_id)
+        except Exception:
+            return False  # Mem0's Chroma adapter raises for a missing id
+        if found is None:
+            return False
+        payload = {**(found.payload or {}), **(metadata or {})}
+        try:
+            store.update(vector_id=memory_id, vector=None, payload=payload)
+        except Exception as e:
+            raise ProviderError(f"Mem0 metadata update failed: {e}") from e
+        return True
+
+    # Rows per SQLite ``IN (...)`` list, under SQLite's variable limit.
+    _SCRUB_CHUNK = 500
+
+    @staticmethod
+    def _scope_is_user(session_scope: Optional[str], user_id: str) -> bool:
+        """Whether a Mem0 message scope belongs to ``user_id``. Mem0
+        builds it from the sorted ``agent_id``, ``run_id`` and
+        ``user_id`` entries joined by ``&``, so ``user_id`` comes last.
+        Compared exactly, never with SQL ``LIKE``: v2 ids contain
+        ``_``, which ``LIKE`` reads as a wildcard."""
+        scope = session_scope or ""
+        entry = f"user_id={user_id}"
+        return scope == entry or scope.endswith("&" + entry)
+
+    def scrub_history(
+        self,
+        user_id: Optional[str],
+        forms: List[str],
+        deleted_ids: List[str] = (),
+        kept_ids: List[str] = (),
+    ) -> Dict[str, int]:
+        """Remove forgotten forms from the store's Mem0 history file
+        (docs/DELETION_AND_SUPERSESSION.md, Decision 3).
+
+        - ``messages``: every message in one of the user's scopes, of
+          any agent, whose content carries a form is deleted whole.
+          Mem0 reads a scope's last 10 messages into each extraction,
+          verbatim, and a redaction cannot be mapped back through the
+          matcher's normalization.
+        - ``history``: the text (``old_memory``, ``new_memory``) of
+          every record of a deleted row is cleared, and of any record of
+          the user's other rows (``kept_ids``) where it carries a form.
+          The records themselves stay.
+
+        Run after the deletes: Mem0's ``delete`` records the deleted
+        text. Returns how many messages were deleted and how many
+        history records were cleared.
+        """
+        from aios.memory.pipeline.matching import match_forms
+
+        counts = {"messages": 0, "history": 0}
+        # The store's own file; without one (a vector store other than
+        # Chroma and no history_db_path) the file Mem0's clients use.
+        path = self.history_db_path or getattr(
+            getattr(self.client, "db", None), "db_path", None
+        )
+        forms = [form for form in forms if form]
+        if not path or not os.path.exists(path):
+            return counts
+        import sqlite3
+
+        scope_user = self._scope(user_id)
+        deleted = {str(i) for i in deleted_ids}
+        ids = sorted(deleted | {str(i) for i in kept_ids})
+        connection = sqlite3.connect(path, timeout=30)
+        try:
+            with connection:
+                messages = connection.execute(
+                    "SELECT id, session_scope, content FROM messages"
+                ).fetchall()
+                doomed = [
+                    (message_id,)
+                    for message_id, scope, content in messages
+                    if forms and self._scope_is_user(scope, scope_user)
+                    and match_forms(content, forms)
+                ]
+                connection.executemany(
+                    "DELETE FROM messages WHERE id = ?", doomed
+                )
+                counts["messages"] = len(doomed)
+                for start in range(0, len(ids), self._SCRUB_CHUNK):
+                    chunk = ids[start:start + self._SCRUB_CHUNK]
+                    records = connection.execute(
+                        "SELECT id, memory_id, old_memory, new_memory "
+                        "FROM history WHERE memory_id IN ("
+                        + ",".join("?" * len(chunk)) + ")",
+                        chunk,
+                    ).fetchall()
+                    for record_id, memory_id, old, new in records:
+                        gone = memory_id in deleted
+                        clear_old = old is not None and (
+                            gone or bool(match_forms(old, forms))
+                        )
+                        clear_new = new is not None and (
+                            gone or bool(match_forms(new, forms))
+                        )
+                        if not (clear_old or clear_new):
+                            continue
+                        connection.execute(
+                            "UPDATE history SET "
+                            "old_memory = CASE WHEN ? THEN NULL "
+                            "ELSE old_memory END, "
+                            "new_memory = CASE WHEN ? THEN NULL "
+                            "ELSE new_memory END WHERE id = ?",
+                            (int(clear_old), int(clear_new), record_id),
+                        )
+                        counts["history"] += 1
+        finally:
+            connection.close()
+        return counts
 
     def delete(self, memory_id: str, user_id: Optional[str]) -> bool:
         if self.get(memory_id, user_id) is None:

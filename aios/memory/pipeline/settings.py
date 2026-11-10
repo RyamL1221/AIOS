@@ -9,6 +9,10 @@ condition every copy matches the kernel's settings by construction.
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict
 
+# ``memory.supersession``: off, or retire earlier statements and never
+# select them (docs/DELETION_AND_SUPERSESSION.md).
+SUPERSESSION_MODES = ("off", "exclude")
+
 
 @dataclass(frozen=True)
 class PipelineSettings:
@@ -21,7 +25,11 @@ class PipelineSettings:
     relative age per bullet (Subtask 9d). ``block_recency_unit``
     (``memory.block_recency_unit``) is what that age counts: ``"time"``,
     the wall-clock age (the default), or ``"session"``, the sessions
-    since the row's ``metadata.session`` (benchmark v2)."""
+    since the row's ``metadata.session`` (benchmark v2).
+    ``supersession`` (``memory.supersession``) is ``"off"`` (the
+    default) or ``"exclude"``: a later statement of a fact retires the
+    earlier rows of its slot, and selection never picks a retired
+    row."""
 
     relevance_threshold: float = 0.0
     max_injected_memories: int = 5
@@ -30,6 +38,7 @@ class PipelineSettings:
     block_format: str = "compact"
     block_recency: bool = False
     block_recency_unit: str = "time"
+    supersession: str = "off"
 
     def __post_init__(self):
         if self.block_format not in ("compact", "legacy"):
@@ -41,6 +50,11 @@ class PipelineSettings:
             raise ValueError(
                 "memory.block_recency_unit must be 'time' or 'session', "
                 f"got {self.block_recency_unit!r}"
+            )
+        if self.supersession not in SUPERSESSION_MODES:
+            raise ValueError(
+                "memory.supersession must be 'off' or 'exclude', "
+                f"got {self.supersession!r}"
             )
 
     @classmethod
@@ -69,6 +83,9 @@ class PipelineSettings:
             )),
             block_recency_unit=memory_config.get(
                 "block_recency_unit", defaults.block_recency_unit
+            ),
+            supersession=memory_config.get(
+                "supersession", defaults.supersession
             ),
         )
 

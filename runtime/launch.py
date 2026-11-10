@@ -542,7 +542,34 @@ async def get_memory_config():
         # ``pipeline``: replicated agents resolve identity themselves
         # (docs/HETEROGENEITY.md).
         "identity": manager.identity_rules.as_dict(),
+        # Where the kernel's store keeps its tombstones and, for Mem0,
+        # its message history (docs/DELETION_AND_SUPERSESSION.md). Not
+        # part of ``pipeline``: a replicated store keeps its own.
+        "tombstones_path": getattr(manager, "tombstones_path", None),
+        "history_db_path": getattr(
+            manager.provider, "history_db_path", None
+        ),
     }
+
+
+@app.get("/memory/audit")
+async def get_memory_audit(user_id: str):
+    """Every row the kernel's store holds for one user, of every agent,
+    unfiltered: no visibility rule and no tombstone guard. The benchmark
+    harness's audit of what a forget left in the store reads it
+    (docs/DELETION_AND_SUPERSESSION.md, "The audit reads the store").
+    Not a retrieval path: no agent and no SDK call uses it."""
+    manager = active_components.get("memory")
+    if manager is None:
+        raise HTTPException(
+            status_code=400, detail="Memory manager not initialized"
+        )
+    try:
+        return await asyncio.to_thread(manager.audit_rows, user_id)
+    except Exception as e:  # an audit that fails must say so
+        raise HTTPException(
+            status_code=500, detail=f"{type(e).__name__}: {e}"
+        )
 
 
 @app.get("/memory/cost")
