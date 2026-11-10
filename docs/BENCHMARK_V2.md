@@ -97,9 +97,9 @@ the slot's template and then paraphrased (see Generation).
 | Event | The user says | The writer does |
 |---|---|---|
 | `add` | a new fact | writes one row with the utterance as content |
-| `update` | the fact changed, in change words, without the old value ("We moved the team sync to the Birch room.") | writes a new row; the old row stays |
-| `contradict` | the slot's value, flatly, conflicting with an earlier statement by another writer; the later one is true | writes a new row; the old row stays |
-| `revoke` | to forget a fact, named by its slot, not its value ("Please forget my pet's name.") | deletes its own rows of that fact; stores nothing |
+| `update` | the fact changed, in change words, without the old value ("We moved the team sync to the Birch room.") | writes a new row; the old row stays (retired in kernel and replicated, Amendment 4) |
+| `contradict` | the slot's value, flatly, conflicting with an earlier statement by another writer; the later one is true | writes a new row; the old row stays (retired in kernel and replicated, Amendment 4) |
+| `revoke` | to forget a fact, named by its slot, not its value ("Please forget my pet's name.") | deletes its own rows of that fact (kernel and replicated: forgets the fact for the user, Amendment 4); stores nothing |
 | `private` | a fact marked as private ("Just between us: ...") | writes one row with `sharing_policy` private |
 
 - **Base events** are `{type: "base", fact_key: "base_profile" or
@@ -130,6 +130,8 @@ does.
   ages.
 - `structured`: the event as a JSON string (`fact_key`, `value`,
   `event_type`), so V5 can write its raw payload.
+- `value_aliases` (Amendment 4): for an event with a value, its aliases
+  as a JSON string (`'[]'` when it has none), read by the forget.
 - Provenance, read by no memory logic: `provenance_agent`,
   `provenance_user` and the new `provenance_event` (the event id).
 - Native in-house rows also carry `agent_id` (the writer), as Mem0 rows
@@ -138,7 +140,10 @@ does.
 Updates and contradictions are plain writes with a later session. No
 row is updated in place: the store keeps the stale row next to the new
 one, and the consumer has to tell them apart. In-place update rules
-for extracted facts (known issue 23) are not part of v2.
+for extracted facts (known issue 23) are not part of v2. Since
+Amendment 4, in kernel and replicated, the later statement retires the
+earlier rows of its slot: they stay in the store, marked, and are never
+selected. Native keeps both.
 
 ## Sessions
 
@@ -252,7 +257,12 @@ Each probe type is reported separately, as a pass rate with n and a
 
 **Diagnostics per probe**, also judge-free:
 - the consumer's `InjectionDiagnostics`, including the stage counts,
-  `after_cap`, `after_budget`, `tokens_estimated` and `barrier_waits`;
+  `after_cap`, `after_budget`, `tokens_estimated` and `barrier_waits`,
+  and since Amendment 4 `after_supersession`, `superseded_rows`,
+  `after_tombstone`, `tombstoned_rows` and `tombstoned_forms`;
+- `retired_in_block` (Amendment 4): the injected rows whose
+  `provenance_event` is an earlier statement of a fact that has a later
+  one, from the dataset;
 - the block, and each injected row with its text, owner, memory type,
   `fact_key`, `session` and `provenance_event`;
 - whether the expected, stale and forbidden values reached the block,
@@ -318,6 +328,11 @@ session".)
 
 ## Revoke and deletion
 
+Since Amendment 4, the kernel and replicated writers revoke through a
+user-scoped forget, which deletes every carrier of the fact's values
+whoever wrote it (`DELETION_AND_SUPERSESSION.md`). The owner-only
+revoke below is native's, and the `writer_scoped` control's.
+
 A revoke is handled by the writer that owns the fact:
 1. It lists its own rows for the user.
 2. It deletes every row whose `metadata.fact_key` is the revoked slot.
@@ -344,8 +359,9 @@ returns 20 rows unless told otherwise, so a smaller limit could hide
 a writer's own rows. A listing that returns exactly the limit fails the
 user.
 
-This deletion is not complete, and Subtask 15 makes it complete. What
-it leaves behind is recorded, not hidden:
+This deletion is not complete; Subtask 15 makes it complete in kernel
+and replicated (Amendment 4). What it leaves behind is recorded, not
+hidden:
 - copies in other writers' rows (the echo), which a writer cannot
   delete (owner-only);
 - facts Mem0 extracts again from its history of recent messages,
@@ -363,6 +379,9 @@ probes. From these it records:
   later listing or among a probe's injected rows;
 - `revoked_value_rows`: every row, of any agent, that carries a revoked
   value after its revoke, labelled by owner and `provenance_event`.
+  Since Amendment 4 it checks every statement of the revoked slot and
+  adds the ids a listing withheld (a listing never returns a row that
+  carries a forgotten value, so a withheld id is a carrier).
 
 ## Loci and backends
 
@@ -506,7 +525,9 @@ trial per user, trial *i* = user *i*, as v1 does. For each user:
 - `write_barrier.timeout_ms` of at least 60,000 for a kernel method
   (see below);
 - for a kernel method, `auto_inject` on and `auto_extract` off
-  (Amendment 3; before it, both on).
+  (Amendment 3; before it, both on);
+- `supersession` `exclude`, or `off` under the `no_supersession`
+  control (Amendment 4).
 
 Each value is recorded with the results.
 
@@ -522,7 +543,10 @@ Each value is recorded with the results.
   - the consumer's diagnostics, the judge scores (integration only),
     tokens and latency, and any error;
 - `deleted_memory_ids`, `reappeared_memory_ids` and
-  `revoked_value_rows`.
+  `revoked_value_rows`;
+- since Amendment 4, on the session records: each revoke's path and its
+  forget report, each write's swept, retired and lifted ids, and each
+  listing's withheld ids.
 
 Three v1 summary fields stay unset in v2: `writer_stored_rows` is `{}`
 (each writer's stored rows are in `sessions[]`, from the listings),
@@ -573,8 +597,9 @@ probe.
   `llms.context_window` (default 16384) to every Ollama call, and the
   reply's `decoding` records it.
 - **Kernel list and delete paths.**
-  - `execute_request` dispatches `list_memory`, and an unknown memory
-    operation returns an explicit failure, never HTTP 200 `null`.
+  - `execute_request` dispatches `list_memory` (and, since Amendment
+    4, `forget_memory`), and an unknown memory operation returns an
+    explicit failure, never HTTP 200 `null`.
   - Every new or changed memory branch catches every exception and
     returns `success` false. An uncaught exception there leaves the
     syscall waiting forever and blocks the server.
@@ -620,6 +645,9 @@ check reads the five judge-free probes. It runs these conditions:
     should fail. This is native only, because the kernel and the
     library enforce visibility themselves.
 
+  Amendment 4 adds `writer_scoped` and `no_supersession`, in the kernel
+  and replicated cells.
+
 DEV_STATUS gets the per-probe pass matrix (locus × backend × condition
 × probe type), with deletion split into echo and non-echo users. The
 check passes when:
@@ -628,10 +656,10 @@ check passes when:
 - deletion passes among non-echo users in the in-house cells, which
   shows the delete path works, and fails under `no_delete`;
 - the kernel's privacy probe never fails, on the block or the answer;
-- the cap binds in some probes of every kernel and replicated cell, and
-  the budget binds in some probe of a kernel or replicated in-house
-  cell. If the budget never binds, the check fails, and the design
-  changes before the smoke.
+- the cap binds in some probes of every kernel and replicated cell.
+  Whether the budget binds is reported, not required (Amendment 4;
+  before it, a budget that never bound failed the check);
+- the deletion and supersession criteria of Amendment 4.
 
 **Smoke.** `pilot_v2`, all 30 users, Qwen, H = 0, all six cells, with
 judge v2 on the integration probe only. Results:
@@ -660,7 +688,8 @@ These are expectations, not a rule.
   lenient rate shows how common.
 - **Deletion** fails for echo users in every locus, through the echo's
   row. It may fail on Mem0 when its history brings the fact back.
-  Without an echo, in-house cells should pass.
+  Without an echo, in-house cells should pass. (Since Amendment 4,
+  kernel and replicated should pass for every user at H = 0.)
 - **Privacy:** the kernel never fails. Replicated enforces visibility
   in the library, so it should not fail either. Native fails with its
   V3 consumer (H = 2, user 4) and under `no_visibility`.
@@ -672,7 +701,8 @@ These are expectations, not a rule.
 
 - Writers are scripted, not LLM agents. Extraction quality is v1's and
   Mem0's own.
-- Deletion is writer-scoped (Subtask 15 completes it).
+- Deletion is writer-scoped in native, and was in every locus until
+  Amendment 4.
 - Private facts are written last, so Mem0 never gets the chance to
   fold one into a shared fact. Whether it would is a separate question.
 - No concurrent writers: sessions run one at a time.
@@ -901,7 +931,8 @@ no budget does.
   (`set_memory_mode.py --budget 300`), and the pre-flight checks it.
 - Native has no budget, as before.
 - The functional check's budget criterion stands: if 300 never binds
-  there, the design changes before the smoke.
+  there, the design changes before the smoke. (Replaced by Amendment
+  4: its binding is reported, not required.)
 
 **Revision 3 of `users_v2`: contradiction questions of balanced lean.**
 - **Two questions per slot.** Each contradiction slot has two
@@ -997,3 +1028,115 @@ probe answer, the check also confirms that no probe is contaminated.
     questions lean as assigned, and 9 later-leaning ones tie.
 - **The driver** also fails a kernel phase whose log shows a stored
   conversation turn.
+
+## Amendment 4 (2026-11-10, Subtask 15 step 1, before its code)
+
+**Why.** The smoke (`s14b`) and the functional check under Amendment 3
+(`f15a`) measured what writer-scoped deletion and plain-write updates
+leave (`DELETION_AND_SUPERSESSION.md`, "Why" and "Baseline"):
+- echo rows and Mem0 folds survive a revoke, and Mem0's message
+  history can bring the value back;
+- the stale row of every recency and contradiction fact reaches the
+  block next to the new one: in `f15a`, in all 5 recency and all 5
+  contradiction probes of every kernel and replicated cell at H = 0.
+
+Subtask 15 makes deletion complete and retires stale statements, in the
+library that the kernel and the replicated agents run. Native stays the
+agent-managed reference. `f15a` also failed its budget criterion: 300
+bound in no kernel or replicated in-house probe.
+
+**Deletion is complete in kernel and replicated**
+(`DELETION_AND_SUPERSESSION.md`, "Deletion").
+- **The forget.** A revoke goes through a user-scoped forget
+  (`forget_memory`, SDK `forget_memories`, `MemoryPipeline.forget`).
+  It deletes every row of the user whose `fact_key` is the slot, and
+  every row of any agent that carries a form of the fact's values (the
+  value or an alias, under the scorer's matcher). It records a
+  tombstone first.
+- **The tombstone** suppresses a later re-write of the value by any
+  agent until the user states the fact again. No read returns a
+  carrier: not injection, SDK search, `get_memory` or `list_own`.
+- **Mem0's history.** The forget and the sweep scrub every stored
+  message and history record of the user that carries a form. Each
+  kernel and replicated Mem0 store keeps its history in a file of its
+  own.
+- **Native** revokes as before, by its own list and delete.
+
+**Supersession in kernel and replicated.** With `memory.supersession:
+exclude`, a later statement of a fact marks the earlier rows of its
+slot, whoever wrote them, and the selector never selects a marked row
+(`after_supersession`). Native keeps both rows, as before.
+
+**The matcher moves to the SDK** (`cerebrum/utils/matching.py`).
+`probes.py` re-exports it, so scoring is unchanged and the library runs
+the same code.
+
+**Metadata on every write** gains `value_aliases` for an event with a
+value (above, "Metadata on every write").
+
+**Settings and pre-flight.** v2 runs set `memory.supersession:
+exclude` (`set_memory_mode.py --supersession exclude`). The pre-flight
+checks it per control (`off` under `no_supersession`) and records the
+kernel's Mem0 history path, which `/memory/config` reports.
+
+**Two more controls**, at H = 0 in the kernel and replicated cells on
+both backends:
+- **`writer_scoped`.** The writers revoke by their own list and delete
+  (Subtask 14's revoke), with no forget and no tombstone. Deletion
+  should fail for echo users wherever the echo is retrievable.
+- **`no_supersession`.** `supersession: off`, in kernels of its own
+  (the driver's `_ns` phases), since the replicated agents copy the
+  setting from the kernel. Retired rows should return to the blocks.
+
+**Recorded**, each defaulted, so earlier files still load:
+- **per probe:** `after_supersession`, `superseded_rows`,
+  `after_tombstone`, `tombstoned_rows`, `tombstoned_forms`, and
+  `retired_in_block`, in every locus. The last is computed from the
+  dataset, not from the marks: the injected rows whose
+  `provenance_event` is an earlier statement of a fact that has a later
+  one.
+- **per revoke event:** `revoke_path` (`forget` or `owner`) and, for a
+  forget, its ids by owner and reason, its value and form counts and
+  its scrub counts. `deleted_ids` covers every owner's rows, so the
+  reappearance check covers them too.
+- **per write event:** the ids it swept, retired and lifted, and
+  `suppressed`. A suppressed write is not an extraction failure.
+- **per listing:** the ids it withheld. `revoked_value_rows` takes
+  every statement of the revoked slot and the withheld ids.
+
+**The functional check** runs 29 cells: Subtask 14's 21, plus the two
+new controls in four cells each. It passes when, at H = 0, in the
+kernel and replicated cells on both backends:
+- every deletion probe passes, counting an unscored probe or a failed
+  trial as a failure; every trial's `revoked_value_rows` is empty;
+  every revoke went through `forget`; and `writer_scoped` fails some
+  echo user;
+- no block holds a retired row, and `no_supersession` puts one in some
+  block;
+- the guard was armed and dropped nothing:
+  - every probe reports `after_tombstone`;
+  - `tombstoned_forms` is positive in every probe of a user whose
+    forget ran;
+  - no probe dropped a tombstoned row, and no listing withheld one;
+- every Mem0 forget scrubbed at least one message;
+- Subtask 14's criteria still hold, with the budget's changed below.
+
+H = 2 is reported, not required: its replicated V2 identity variant
+writes under another partition, which a forget for the canonical id
+does not reach.
+
+**The budget's binding is reported, not required.** The budget stays
+300 (Amendment 3). Its binding is reported, in the functional check
+and the smoke. 300 was chosen to bind in the largest blocks, the
+integration probe's. If it never binds in the smoke's 30 users, that
+is a finding about v2's row sizes, not a design failure. The cap is the
+limit that matters, and it must still bind. This replaces Amendment
+3's "the functional check's budget criterion stands".
+
+**Not changed.** The scoring rules, the probes, the data (revision 3),
+the budget and the cap, the smoke's design, and native's writers and
+consumer.
+
+**Not covered.** Chroma keeps a deleted row's text in its write-ahead
+log until the log is purged (`DELETION_AND_SUPERSESSION.md`, "What
+this does not show").

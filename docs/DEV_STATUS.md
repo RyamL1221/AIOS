@@ -44,7 +44,7 @@ do not describe this branch.
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
-| 15 | Complete deletion and supersession | In progress (step 1 spec, for review) |
+| 15 | Complete deletion and supersession | In progress (step 1 code) |
 
 ### Subtask 1
 
@@ -1744,8 +1744,11 @@ Step 0 settles two items before the deletion and supersession work.
   - **Reviews.** None yet: rule 6 gives Subtask 15 one review and one
     verification pass, which will cover step 0 with the rest, and one
     mutation run on the final code.
-- **Step 1**: the spec, `DELETION_AND_SUPERSESSION.md`, for review
-  before any code (open decision 5).
+- **Step 1**: the spec, `DELETION_AND_SUPERSESSION.md`, reviewed before
+  any code. Its decisions were settled on 2026-11-10 (open decisions 4
+  and 5), with one change to its proposals: carriers are matched with
+  the scorer's own matcher, aliases included. `BENCHMARK_V2.md`
+  Amendment 4 states the benchmark's side.
 
 ## Open decisions
 
@@ -1767,46 +1770,19 @@ Step 0 settles two items before the deletion and supersession work.
    that led to it is in this file's history (AIOS `78c073c`).
 3. **Contradiction wording** (known issue 44). Resolved in Subtask 15:
    (a), revision 3 of `users_v2` (Amendment 3).
-4. **The v2 budget** (Subtask 15, `f15a`). Under Amendment 3 the
-   functional check fails its budget criterion: 300 bound in no kernel
-   or replicated in-house probe of users 0 to 4 (largest block 291
-   estimated tokens), only in 3 Mem0 probes. Amendment 3 chose 300 on
-   the smoke's 30-user kernel in-house store (revision 2, writer rows
-   only), where it bound in 6 of 180 probes, all integration, and kept
-   the base rows. In-house blocks no longer depend on the consumer's
-   answers, so a lower budget's effect on users 0 to 4 follows from
-   the recorded blocks (112 kernel and replicated in-house probes with
-   a block, H = 0 and 2; "values cut": rows holding a probe's
-   expected or forbidden value):
-
-   | Budget | Probes bound | Rows cut | Base rows cut | Values cut |
-   |---:|---:|---:|---:|---:|
-   | 300 | 0 | 0 | 0 | 0 |
-   | 290 | 3 (recency) | 3 | 0 | 0 |
-   | 280 | 14 | 14 | 0 | 0 |
-   | 270 | 17 | 24 | 3 | 0 |
-   | 250 | 30 | 56 | 10 | 0 |
-
-   On the 30-user store, a budget below about 293 also drops base rows
-   that native, which has no budget, keeps (290 drops the base task row
-   for 2 more users). The options:
-   - (a) keep 300 and move the in-house budget criterion to the smoke,
-     where it is expected to bind in a few integration probes; a
-     writer-only replay of the smoke's 30 in-house stores (embedding
-     calls only, no model) can check this on revision 3 first;
-   - (b) 280: binds in the functional check without cutting a base row
-     or a probe's value row, but binds more often in the smoke and can
-     drop base rows there that native keeps;
-   - (c) drop the criterion: in v2 the cap is the limit that binds.
-
-   Recommended: (a). 300 was chosen to bind only in the largest
-   blocks, integration's, whose base rows are long; these five users
-   have none that large, and the budget step ran end to end here in
-   both loci. Decide before Subtask 15's functional check; it is the
-   spec's Decision 8.
-5. **Deletion and supersession** (Subtask 15, step 1). The decisions in
-   `DELETION_AND_SUPERSESSION.md`, "Decisions for review", before any
-   code.
+4. **The v2 budget** (Subtask 15, `f15a`). Resolved on review
+   (2026-11-10): (a), 300 kept, and its binding is reported, not
+   required, in the functional check and the smoke ("cap binds; budget
+   binding is reported, not required"; Amendment 4). If it never binds
+   in the smoke, that is a finding about v2's row sizes. The analysis
+   that led to it is in this file's history (AIOS `cf7c42f`).
+5. **Deletion and supersession** (Subtask 15, step 1). Resolved on
+   review (2026-11-10): `DELETION_AND_SUPERSESSION.md`, "Decisions".
+   Every proposal was taken except matching, which uses the scorer's
+   own matcher with aliases, so that whatever counts as exposure is
+   what revocation removes. Added on review: a tombstone suppresses a
+   later re-write of the value by any agent until the user states it
+   again, and no read path returns a tombstoned row.
 
 ## Test baselines
 
