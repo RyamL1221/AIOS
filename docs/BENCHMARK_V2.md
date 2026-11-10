@@ -962,3 +962,37 @@ integration probes, and keeps the base rows as no budget does.
 **Not changed.** The scoring rules, the five other probes, the
 controls and the functional check's criteria. Since no block holds a
 probe answer, the check also confirms that no probe is contaminated.
+
+**Settled during implementation** (each with a test):
+- **Meaning rules for the two statements.** Revision 3's first build
+  (Cerebrum `4ac61fe`, SHA-256 `e019ece9…`, not kept) passed every
+  check. A read of its new paraphrases found statements that kept their
+  words but lost what they said:
+  - "My work is based in X": a workplace does not conflict with a home;
+  - "We are building a project for X", in 16 of 26 client earlier
+    statements: not the current project;
+  - "We're creating this building project for X";
+  - "I am under X's report".
+
+  So a contradiction statement also keeps its slot's meaning rules:
+  - no workplace word in a home_city statement;
+  - a client statement names the current project, and "building" is a
+    verb there;
+  - the manager's earlier statement keeps "report to".
+- **The build.** Cerebrum `af078c3` (generator `5b5f0de`), SHA-256
+  `ecd3585f…`:
+  - 2,252 utterances reused byte for byte, 131 paraphrased again, and
+    83 paraphrased from changed templates;
+  - 344 GPT-4o calls, and 22 fallbacks to the template text (21 client
+    earlier statements, 1 home_city contradiction);
+  - only the contradictions' statements changed (214).
+
+  User 73's earlier manager statement reads "I am under Callum Reyes
+  and report to him.", the file's only third-person pronoun.
+- **Cross-checks.**
+  - Both lean questions of every user lean as designed under Porter
+    and Snowball stemming of the content words too (300 of 300 each).
+  - Counting every word, function words included, 141 of the 150 asked
+    questions lean as assigned, and 9 later-leaning ones tie.
+- **The driver** also fails a kernel phase whose log shows a stored
+  conversation turn.
