@@ -370,8 +370,9 @@ hidden:
   Since Amendment 3, v2 probes store none.
 
 **Recorded per user.** The harness lists the rows of all four agents
-(each through the owner-only list) after every session and after the
-probes. From these it records:
+(each through the owner-only list; since Amendment 4, in kernel and
+replicated, the raw store) after every session and after the probes.
+From these it records:
 - each event's stored rows and ids, matched by `provenance_event`.
   This covers Mem0's sibling facts, since the kernel's Mem0 `add`
   returns only the first id;
@@ -379,9 +380,9 @@ probes. From these it records:
   later listing or among a probe's injected rows;
 - `revoked_value_rows`: every row, of any agent, that carries a revoked
   value after its revoke, labelled by owner and `provenance_event`.
-  Since Amendment 4 it checks every statement of the revoked slot and
-  adds the ids a listing withheld (a listing never returns a row that
-  carries a forgotten value, so a withheld id is a carrier).
+  Since Amendment 4 it checks every statement of the revoked slot, and
+  the kernel and replicated listings it reads are the raw store, so a
+  row the tombstone guard hides from the agents still shows here.
 
 ## Loci and backends
 
@@ -545,8 +546,8 @@ Each value is recorded with the results.
 - `deleted_memory_ids`, `reappeared_memory_ids` and
   `revoked_value_rows`;
 - since Amendment 4, on the session records: each revoke's path and its
-  forget report, each write's swept, retired and lifted ids, and each
-  listing's withheld ids.
+  forget report, and each write's swept, retired and lifted ids; and
+  `retired_rows`.
 
 Three v1 summary fields stay unset in v2: `writer_stored_rows` is `{}`
 (each writer's stored rows are in `sessions[]`, from the listings),
@@ -1067,9 +1068,21 @@ exclude`, a later statement of a fact marks the earlier rows of its
 slot, whoever wrote them, and the selector never selects a marked row
 (`after_supersession`). Native keeps both rows, as before.
 
-**The matcher moves to the SDK** (`cerebrum/utils/matching.py`).
-`probes.py` re-exports it, so scoring is unchanged and the library runs
-the same code.
+**The matcher moves to the library**
+(`aios/memory/pipeline/matching.py`). `probes.py` re-exports it, loaded
+from the AIOS checkout, so scoring is unchanged and the library runs the
+same code. The library imports no `cerebrum` module.
+
+**The audit reads the store.** The listings the audits read
+(`revoked_value_rows`, the reappearance check, `probe_writes`, the
+extraction check and the retired rows) are, in kernel and replicated,
+the raw store: every row of the user's partition, of every agent, with
+no visibility rule and no tombstone guard. The kernel serves them at
+`GET /memory/audit` (not an SDK call), the replicated store through its
+provider's `list`; native keeps its owners' listings, which have no
+guard. An owner-only listing now leaves out a row that carries a
+forgotten value, so an audit through it would be blind exactly where a
+carrier escaped the forget.
 
 **Metadata on every write** gains `value_aliases` for an event with a
 value (above, "Metadata on every write").
@@ -1101,8 +1114,8 @@ both backends:
   reappearance check covers them too.
 - **per write event:** the ids it swept, retired and lifted, and
   `suppressed`. A suppressed write is not an extraction failure.
-- **per listing:** the ids it withheld. `revoked_value_rows` takes
-  every statement of the revoked slot and the withheld ids.
+- **per user:** `revoked_value_rows` takes every statement of the
+  revoked slot, from the raw store.
 
 **The functional check** runs 29 cells: Subtask 14's 21, plus the two
 new controls in four cells each. It passes when, at H = 0, in the
@@ -1117,7 +1130,7 @@ kernel and replicated cells on both backends:
   - every probe reports `after_tombstone`;
   - `tombstoned_forms` is positive in every probe of a user whose
     forget ran;
-  - no probe dropped a tombstoned row, and no listing withheld one;
+  - no probe dropped a tombstoned row;
 - every Mem0 forget scrubbed at least one message;
 - Subtask 14's criteria still hold, with the budget's changed below.
 
@@ -1140,3 +1153,32 @@ consumer.
 **Not covered.** Chroma keeps a deleted row's text in its write-ahead
 log until the log is purged (`DELETION_AND_SUPERSESSION.md`, "What
 this does not show").
+
+**Settled during implementation** (each with a test):
+- **The matcher is the library's.** The reviewed draft put it in the
+  SDK. On review, before any commit, it moved to
+  `aios/memory/pipeline/matching.py`, which `probes.py` loads from the
+  AIOS checkout by path. The library imports no `cerebrum` module, and
+  a test scans it for one; the usage tag that counts a provider's calls
+  to a user is passed in by the kernel and the replicated agents.
+- **The audit reads the store**, as above. Added on review: the
+  owner-only listings it read before now leave a carrier out.
+- **The writer chooses the forget.** The reviewed draft's kernel setting
+  `forget_scope` is replaced by the writer's choice, which
+  `writer_scoped` sets and every revoke records (`revoke_path`). The
+  control needs no kernel of its own, and the check reads what each
+  revoke did.
+- **The kernel's tombstone file** is `memory.tombstones_path`. Without
+  it tombstones are kept in memory, and the pre-flight refuses a kernel
+  method.
+- **Barrier sequences.** A forget or an update refused before the
+  library runs, and an add whose note cannot be built, release the
+  sequence stamped when they were accepted.
+- **A forget's report** spells a value only as a row the caller may
+  read spells it, and a restatement's `lifted` names the write's own
+  value: neither repeats another agent's text.
+- **Marks are metadata-only** (`MemoryProvider.update_metadata`): no
+  embedding call and no Mem0 history record.
+- **Mem0's scrub** deletes a carrying message whole and clears a
+  history record's text, keeping the record. A store without a history
+  path of its own scrubs the file its clients use.

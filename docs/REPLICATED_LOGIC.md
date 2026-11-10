@@ -48,7 +48,17 @@ uses the same library.
   from `/memory/config` `backend_extraction`, with the pinned
   `memory.backend_llm`, so it extracts facts as the kernel's Mem0 does). `replicated_inhouse`
   uses the kernel's `ChromaInHouseProvider`. Each condition has its own
-  store, separate from the kernel's.
+  store, separate from the kernel's, with its own Mem0 history file
+  (`history.db` next to its `chroma` directory) and its own tombstones
+  (`tombstones.sqlite`, Subtask 15).
+- **Deletion and supersession** (Subtask 15,
+  `docs/DELETION_AND_SUPERSESSION.md`). A v2 writer revokes through
+  `MemoryPipeline.forget`, as the kernel's `forget_memory` does, and
+  under the `writer_scoped` control through `list_own` and `delete`.
+  A store's agents share its tombstones through the file, which every
+  check reads, as the kernel's per-request pipelines share the
+  kernel's; a variant's tuned pipeline keeps them. `supersession` is a
+  pipeline setting, copied from `/memory/config` like the others.
 - **Records.** Every trial records `locus` (`kernel`, `replicated`,
   `native`, or `none` for the no-memory baselines) and
   `pipeline_version`, a hash of the library's source, so a later

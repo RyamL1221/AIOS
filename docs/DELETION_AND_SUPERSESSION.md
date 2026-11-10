@@ -111,19 +111,25 @@ Whatever counts as exposure must be what revocation removes (Decision
 2). So the forget, the sweep, the guard and the Mem0 scrub use the
 scorer's own code, not a copy:
 - `normalize`, `value_in` and `match_any` move from Cerebrum
-  `benchmarks/shared_memory/probes.py` to the SDK package,
-  `cerebrum/utils/matching.py`, which also gains `match_forms(text,
-  forms)`: the first form found.
-- `probes.py` imports and re-exports them, so the scorer and its
-  callers are unchanged. `synth_v2.py` is untouched, so the dataset
-  header's `generator_sha256` still matches.
-- The library (`aios/memory/pipeline`) imports the same module, as it
-  already imports `cerebrum.utils.usage`. `PIPELINE_VERSION` hashes
-  the module's bytes with the package's, so a kernel and a replicated
-  agent running different matchers show different versions.
-- Tests pin that `probes.value_in is matching.value_in` and that the
-  library calls the same functions. `test_cerebrum_sdk_consistency.py`
-  checks the kernel venv's installed copy.
+  `benchmarks/shared_memory/probes.py` into the library,
+  `aios/memory/pipeline/matching.py`, with `match_forms(text, forms)`:
+  the first form found.
+- `probes.py` re-exports them, loading that file from the AIOS checkout
+  (`AIOS_ROOT`) by path; it cannot import `aios`, which in a Cerebrum
+  process resolves to the Cerebrum checkout's `aios/` stub. The scorer
+  and its callers are unchanged, and `synth_v2.py`, which imports the
+  names from `probes.py`, is untouched, so the dataset header's
+  `generator_sha256` still matches.
+- `PIPELINE_VERSION` covers the matcher with the rest of the package.
+- **The library imports no `cerebrum` module**, and a test scans the
+  package for one. The usage tag that counts a provider's own LLM and
+  embedding calls to the user they serve
+  (`cerebrum.utils.usage.tagged`, which the library imported before
+  this step) is passed in as `usage_tag`: the kernel and the replicated
+  agents pass it, so cost accounting is unchanged; library-only use
+  tags nothing.
+- A test pins that the scorer's functions are defined in the library's
+  file.
 
 ## Aliases on every statement
 
@@ -163,8 +169,11 @@ and delete do now.
 4. **The tombstone first.** It records a tombstone: the user, the slot,
    each value with its aliases, the forgotten statements'
    `provenance_event`s and the agent that asked. It does so before
-   any delete, so a forget that fails partway still guards every read,
-   and a write that commits meanwhile is swept.
+   any delete, so a forget that fails partway still guards every read.
+   A write that commits after the forget's listing and before its
+   tombstone escapes both the forget and its own sweep; the read guard
+   still drops it, and v2 never writes during a forget ("What this does
+   not show").
 5. **The deletes.** It deletes, through the provider, every row whose
    `fact_key` is the slot and every carrier of a form, whoever owns it.
 6. **The history.** It scrubs the provider's stored messages and
@@ -172,17 +181,21 @@ and delete do now.
 7. **The reply.** It returns the ids deleted, each with its owner and
    reason (`fact_key`, `value` or `alias`), the number of values and
    forms, the values the caller may read (from its own and shared
-   rows), and the scrub's counts. It names ids and owners, never
-   another agent's text (Decision 1). A forget that found no value says
-   so (`values_count` 0): it then deleted by `fact_key` only.
+   rows, spelled as those rows spell them), and the scrub's counts. It
+   names ids and owners, never another agent's text (Decision 1). A
+   forget that found no value says so (`values_count` 0): it then
+   deleted by `fact_key` only.
 
 **Where tombstones live.** A SQLite sidecar per store, read on every
-check: the kernel's `memory.tombstones_path` (default
-`.aios_state/tombstones.sqlite`), and `<store root>/tombstones.sqlite`
-for a replicated store. So the kernel's per-request pipelines and a
-replicated cell's four agents see the same tombstones. The path is not
-a pipeline setting: a replicated store must not inherit the kernel's.
-Library-only use without a path keeps tombstones in memory.
+check: the kernel's `memory.tombstones_path`
+(`.aios_state/tombstones.sqlite` in the shipped config), and
+`<store root>/tombstones.sqlite` for a replicated store. So the
+kernel's per-request pipelines and a replicated cell's four agents see
+the same tombstones. The path is not a pipeline setting: a replicated
+store must not inherit the kernel's. Without a path, tombstones live in
+memory, as in library-only use and the unit tests; a kernel restart
+then loses them, so the v2 pre-flight refuses a kernel that reports no
+path.
 
 **After the forget.**
 - **A re-write is suppressed.** After any write or update for a user
@@ -210,11 +223,35 @@ Library-only use without a path keeps tombstones in memory.
 
   Each drop logs a WARNING. After a complete forget nothing is
   dropped, so a drop means a carrier escaped the forget and the sweep.
-  The harness counts withheld ids as carriers, so the guard cannot
-  hide an incomplete deletion from the audit.
+  The benchmark's audit does not read through any of these paths
+  ("The audit reads the store", below).
 - **Not under the controls.** `no_delete` and `writer_scoped` revoke
   without a forget, so they record no tombstone, and nothing is swept
   or guarded.
+
+**The audit reads the store.** The harness checks what a revoke left
+with `revoked_value_rows` (every row, of any agent, that carries a form
+of the revoked fact after the history and after the probes) and the
+reappearance check (a deleted id in a later listing or block). Both,
+and `probe_writes`, `extraction_failure` and the retired rows, read the
+harness's listings after each session and after the probes.
+- **Until this step** those listings were each agent's owner-only
+  `list_own`, which now leaves tombstoned rows out. An escaped carrier
+  would then be hidden from the audit by the guard, and "no carrier is
+  left" would hold by construction, whether the forget worked or not.
+- **So the kernel and replicated listings are the raw store**: every
+  row of the user's partition, of every agent, with no visibility rule
+  and no tombstone guard, grouped by owner.
+  - Kernel: `GET /memory/audit?user_id=` (`MemoryManager.audit_rows`,
+    the provider's `list`). A route for the audit; no agent and no SDK
+    call uses it.
+  - Replicated: the store's provider `list`, in process.
+  - Native: unchanged, each agent's own rows through its backend, which
+    has no guard.
+- A carrier the forget missed therefore shows in `revoked_value_rows`
+  with its text. A deletion probe's pass alone could come from the
+  guard; the check also requires an empty audit and a guard that
+  dropped nothing.
 
 **Decision 1, authority (settled: yes).** A forget deletes other
 agents' rows, which the library's owner-only rule (Subtask 2) forbids.
@@ -332,6 +369,9 @@ is the agent-managed reference here too.
 - **Replies.** A write's reply (`add_memory`) carries in `metadata`
   what it swept, retired and lifted, and whether it was suppressed. A
   listing's reply (`list_memory`) carries the ids it withheld.
+- **The audit route.** `GET /memory/audit?user_id=` lists the store's
+  rows for the user, unfiltered, for the benchmark's audit ("The audit
+  reads the store"); it is not part of the SDK.
 - **Settings**, flat keys under `memory:` like the other selection
   settings:
   - `supersession` (`off` or `exclude`): in `PipelineSettings`, so
@@ -380,9 +420,9 @@ is the agent-managed reference here too.
   - each revoke's path (`forget` or `owner`), its ids by owner and
     reason, its value and form counts and its scrub counts;
   - each write's swept, retired and lifted ids, and suppression;
-  - each listing's withheld ids;
-  - `revoked_value_rows`, over every statement of the revoked slot and
-    the withheld ids, and the reappearance check.
+  - `revoked_value_rows`, over every statement of the revoked slot,
+    and the reappearance check, both read from the raw store ("The
+    audit reads the store").
 - **Controls at H = 0**, in the kernel and replicated cells on both
   backends, beside the existing ones:
   - `writer_scoped`: the writers revoke by their own list and delete,
@@ -402,8 +442,7 @@ is the agent-managed reference here too.
     some block;
   - the guard was armed and dropped nothing: every probe reports
     `after_tombstone`, `tombstoned_forms` is positive in every probe
-    of a user whose forget ran, and no probe dropped and no listing
-    withheld a row;
+    of a user whose forget ran, and no probe dropped a row;
   - every Mem0 forget scrubbed at least one message (each revoked value
     was stated in an utterance Mem0 stored as a message);
   - the Subtask 14 criteria still hold, except the budget's, which is
@@ -441,8 +480,13 @@ Expectations, not rules:
 ## Tests
 
 Each mechanism gets a test that fails without it:
-- **The matcher:** the scorer and the library call the same functions;
-  `match_forms` returns the first form found.
+- **The matcher:** the scorer's functions are defined in the library's
+  file; `match_forms` returns the first form found; the library imports
+  no `cerebrum` module (a scan of every file, with a planted import to
+  show the scan finds one).
+- **The audit:** the kernel's `/memory/audit` and the replicated
+  provider listing return a row the guard hides from the agents, and
+  `revoked_value_rows` reports an escaped carrier with its text.
 - **Forget:** it deletes the owner's rows, another writer's echo, a
   Mem0 fold by value and a row naming only an alias; it leaves rows
   that carry no form; it records the tombstone before its deletes; it
@@ -475,9 +519,10 @@ Each mechanism gets a test that fails without it:
 - **The writers:** they revoke through `forget` in kernel and
   replicated, and through list and delete in native and under
   `writer_scoped`; every statement carries `value_aliases`.
-- **The harness and the analysis:** the audit counts a withheld id as a
-  carrier; `retired_in_block` from the dataset; the new criteria, with
-  the budget reported, not required.
+- **The harness and the analysis:** the kernel and replicated listings
+  come from the raw store, so `revoked_value_rows` sees a carrier the
+  guard hides; `retired_in_block` from the dataset; the new criteria,
+  with the budget reported, not required.
 
 ## What this does not show
 
@@ -492,6 +537,12 @@ Each mechanism gets a test that fails without it:
   the store open. Complete deletion here covers what the memory system
   reads: the rows, Mem0's messages and Mem0's history.
 - Concurrent writers during a forget: v2 runs sessions one at a time.
+  A write that commits between a forget's listing and its tombstone
+  stays stored (the read guard drops it from every read).
+- Mem0 history records of rows deleted before the forget by another
+  path (an owner's delete) keep their text: the scrub clears the
+  records of the rows it deletes and of the user's rows still stored.
+  Extraction reads the messages, never these records.
 - Retention outside the memory system (logs, the model provider).
 - Rows another identity convention puts in another partition (H = 2).
 - In-place updates of extracted facts (known issue 23).
