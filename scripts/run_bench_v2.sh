@@ -1,13 +1,16 @@
 #!/bin/bash
 # Subtask 14: benchmark v2 runs (docs/BENCHMARK_V2.md, "Functional
 # check and smoke"). For each model:
-#   phase kmem0: Mem0 (infer), kernel memory on: kernel_shared
-#   phase kinh:  in-house, kernel memory on: kernel_shared
+#   phase kmem0: Mem0 (infer), kernel injection on, extraction off:
+#                kernel_shared
+#   phase kinh:  in-house, kernel injection on, extraction off:
+#                kernel_shared
 #   phase agent: kernel memory off: replicated_mem0, replicated_inhouse,
 #                native_mem0, native_inhouse; 0 kernel memory ops checked
 # Every phase runs with session ages on (memory.block_recency true, unit
-# session), the write barrier at 60 s, k 10 and a 500-token budget, set
-# through set_memory_mode.py;
+# session), the write barrier at 60 s, k 10 and a 300-token budget, set
+# through set_memory_mode.py; a probe writes nothing (Amendment 3: the
+# kernel's auto_extract is off, the agents skip their probe writes);
 # the harness's pre-flight refuses any other setting.
 #
 #   MODE=functional: pilot_v2 users 0-4, no judge, conditions h0, h2
@@ -71,7 +74,7 @@ finish() { stop_kernel; cp "$SAVED" "$CONFIG"; rm -f "$SAVED"; }
 trap finish EXIT
 mode() {
     "$AIOS/.venv/bin/python" scripts/set_memory_mode.py "$CONFIG" "$@" \
-        --recency session --barrier-timeout-ms 60000 --k 10 --budget 500
+        --recency session --barrier-timeout-ms 60000 --k 10 --budget 300
 }
 cell_done() {
     python3 "$AIOS/scripts/pilot_cell_done.py" "$1" "$TRIALS" --strict \
@@ -165,8 +168,10 @@ phase_needed() {  # $1 = model, $2 = phase: true if a cell is unfinished
 for model in $MODELS; do
     for phase in $PHASES; do
         case $phase in
-            kmem0) mode --provider mem0 --kernel-memory on; provider=mem0 ;;
-            kinh)  mode --provider in-house --kernel-memory on; provider=in-house ;;
+            kmem0) mode --provider mem0 --kernel-memory on --extract off
+                   provider=mem0 ;;
+            kinh)  mode --provider in-house --kernel-memory on --extract off
+                   provider=in-house ;;
             agent) mode --provider mem0 --kernel-memory off; provider="" ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
@@ -182,6 +187,10 @@ for model in $MODELS; do
             ops=$(grep -cE "$MEMORY_OPS" "$KLOG")
             echo "$(date) $model $phase kernel_memory_ops=$ops"
             [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; }
+        else  # Amendment 3: the kernel stored no probe turn
+            turns=$(grep -c "Stored conversation memory" "$KLOG")
+            echo "$(date) $model $phase stored_conversation_turns=$turns"
+            [ "$turns" -eq 0 ] || { echo "$(date) PROBE TURNS STORED"; exit 1; }
         fi
         stop_kernel
     done

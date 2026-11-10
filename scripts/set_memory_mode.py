@@ -2,8 +2,14 @@
 config.yaml in place, keeping every other byte (comments included).
 
     python scripts/set_memory_mode.py aios/config/config.yaml \\
-        --provider mem0 --kernel-memory on|off [--recency off|time|session]
-        [--barrier-timeout-ms N] [--k N] [--budget N]
+        --provider mem0 --kernel-memory on|off [--extract on|off]
+        [--recency off|time|session] [--barrier-timeout-ms N] [--k N]
+        [--budget N]
+
+``--kernel-memory`` sets ``auto_inject`` and ``auto_extract`` together;
+``--extract`` then sets ``auto_extract`` alone (benchmark v2 kernel runs
+use ``--kernel-memory on --extract off``: a probe writes nothing,
+docs/BENCHMARK_V2.md, Amendment 3).
 
 ``--recency`` also sets the block's ages (docs/BENCHMARK_V2.md,
 "Recency"): ``off`` is ``block_recency: false`` with the default unit
@@ -12,7 +18,7 @@ it, the recency keys are left as they are. ``--barrier-timeout-ms``
 sets ``memory.write_barrier.timeout_ms`` (benchmark v2 kernel runs use
 60000, so a probe never runs without the previous one's conversation).
 ``--k`` and ``--budget`` set ``memory.max_injected_memories`` and
-``memory.max_memory_tokens`` (benchmark v2 runs use 10 and 500).
+``memory.max_memory_tokens`` (benchmark v2 runs use 10 and 300).
 
 Run drivers call it between runs, never during one.
 """
@@ -48,6 +54,19 @@ def set_mode(text: str, provider: str, kernel_memory: bool) -> str:
     assert memory["provider"] == provider
     assert memory["auto_inject"] is kernel_memory
     assert memory["auto_extract"] is kernel_memory
+    return text
+
+
+def set_extract(text: str, extract: bool) -> str:
+    """Set ``memory.auto_extract`` alone, matched exactly once, a
+    trailing comment kept in its column."""
+    text, count = re.subn(
+        r"^(  auto_extract: )(true|false)([ \t]*)(#.*)?$",
+        _keep_column("true" if extract else "false"), text, flags=re.M,
+    )
+    if count != 1:
+        raise SystemExit(f"expected one auto_extract line, got {count}")
+    assert yaml.safe_load(text)["memory"]["auto_extract"] is extract
     return text
 
 
@@ -127,6 +146,7 @@ def main(argv=None) -> None:
     parser.add_argument("--provider", required=True)
     parser.add_argument("--kernel-memory", choices=["on", "off"],
                         required=True)
+    parser.add_argument("--extract", choices=["on", "off"])
     parser.add_argument("--recency", choices=sorted(RECENCY))
     parser.add_argument("--barrier-timeout-ms", type=int)
     parser.add_argument("--k", type=int)
@@ -135,6 +155,8 @@ def main(argv=None) -> None:
     with open(args.config) as handle:
         text = handle.read()
     text = set_mode(text, args.provider, args.kernel_memory == "on")
+    if args.extract:
+        text = set_extract(text, args.extract == "on")
     if args.recency:
         text = set_recency(text, args.recency)
     if args.barrier_timeout_ms is not None:

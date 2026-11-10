@@ -34,7 +34,8 @@ uses the same library.
   retrieves through its pipeline, prepends `build_block`'s output as a
   system message, exactly where the kernel injector puts it, and writes
   the conversation turn through its pipeline, as the kernel's extractor
-  does.
+  does. A benchmark v2 probe turn writes nothing (`store_conversation`
+  false; BENCHMARK_V2.md, Amendment 3).
 - **Inference.** The kernel serves the LLM calls (`llm_chat`) and
   nothing else. `memory.auto_inject` and `memory.auto_extract` are off,
   and the harness refuses to run otherwise (the Subtask 6 pre-flight).

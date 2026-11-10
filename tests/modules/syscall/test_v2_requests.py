@@ -252,3 +252,52 @@ def test_query_handler_without_a_provenance_event_promotes_none():
     for llm_query in (LLMQuery, ProvenanceLLMQuery):
         query = handled_query(llm_query, user_id=USER, session=7)
         assert query._request_provenance_event is None
+
+
+# --- Amendment 3: a v2 probe turn stores nothing ------------------------
+
+
+class InlineThread:
+    """Runs the extractor's background write on ``start``."""
+
+    def __init__(self, target, args, daemon):
+        self.target, self.args = target, args
+
+    def start(self):
+        self.target(*self.args)
+
+
+def probe_turn_rows(auto_extract):
+    """One benchmark v2 probe turn (a chat at session 7 carrying its
+    probe id) through the executor, with a real extractor over a real
+    manager; the rows the kernel holds for the user afterwards."""
+    from unittest.mock import patch
+
+    from aios.memory.conversation_extractor import ConversationExtractor
+    from aios.memory.manager import MemoryManager
+
+    with patch("aios.memory.manager.global_config") as config:
+        config.get_memory_config.return_value = {"provider": "in-memory"}
+        config.get_storage_config.return_value = {}
+        manager = MemoryManager()
+    query = chat_query()
+    query._request_user_id = USER
+    query._request_session = 7
+    query._request_provenance_event = "u000-p3-recall"
+    executor = chat_executor(query)
+    executor.conversation_extractor = ConversationExtractor(
+        manager, {"auto_extract": auto_extract})
+    with patch("aios.memory.conversation_extractor.threading.Thread",
+               InlineThread):
+        executor.execute_request(AGENT, query)
+    return manager.provider.list(USER, 10)
+
+
+def test_a_v2_probe_turn_stores_nothing_with_extraction_off():
+    """v2 kernel runs set ``auto_extract`` off (BENCHMARK_V2.md,
+    Amendment 3), so a probe turn writes no row; with it on, the same
+    turn writes its row, stamped with the probe."""
+    assert probe_turn_rows(auto_extract=False) == []
+    (row,) = probe_turn_rows(auto_extract=True)
+    assert row.metadata["provenance_event"] == "u000-p3-recall"
+    assert row.metadata["session"] == 7

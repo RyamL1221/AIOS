@@ -123,25 +123,40 @@ def test_barrier_timeout_sets_only_that_line(tmp_path):
 
 
 def test_k_and_budget_set_their_lines_only(tmp_path):
-    """Benchmark v2 sets k 10 and a 500-token budget explicitly
-    (docs/BENCHMARK_V2.md, "Loci and backends")."""
+    """Benchmark v2 sets k 10 and a 300-token budget explicitly
+    (docs/BENCHMARK_V2.md, "Loci and backends", Amendment 3)."""
     original = EXAMPLE.read_text()
     config = tmp_path / "config.yaml"
     config.write_text(original)
     main([str(config), "--provider", "in-house", "--kernel-memory", "on",
-          "--k", "10", "--budget", "500"])
+          "--k", "10", "--budget", "300"])
     text = config.read_text()
     memory = yaml.safe_load(text)["memory"]
     assert (memory["max_injected_memories"], memory["max_memory_tokens"]) \
-        == (10, 500)
+        == (10, 300)
     changed = [b for a, b in zip(original.split("\n"), text.split("\n"))
                if a != b and "max_" in a]
     assert changed == [
         "  max_injected_memories: 10    # Max memories to inject per LLM call",
-        "  max_memory_tokens: 500       # Token budget for injected memory block",
+        "  max_memory_tokens: 300       # Token budget for injected memory block",
     ]
     # Without the flags the selection keys are untouched.
     config.write_text(original)
     main([str(config), "--provider", "in-house", "--kernel-memory", "on"])
     assert yaml.safe_load(config.read_text())["memory"][
         "max_memory_tokens"] == 1500
+
+
+def test_extract_sets_auto_extract_alone(tmp_path):
+    """Benchmark v2 kernel runs inject but do not extract: a probe
+    writes nothing (docs/BENCHMARK_V2.md, Amendment 3)."""
+    original = EXAMPLE.read_text()
+    written = run(tmp_path, "--extract", "off")
+    memory = yaml.safe_load(written)["memory"]
+    assert (memory["auto_inject"], memory["auto_extract"]) == (True, False)
+    assert all(line.startswith(MODE_KEYS)
+               for line in changed_lines(original, written))
+    assert yaml.safe_load(run(tmp_path, "--extract", "on"))["memory"][
+        "auto_extract"] is True
+    # Without the flag --kernel-memory sets both, as before.
+    assert yaml.safe_load(run(tmp_path))["memory"]["auto_extract"] is True

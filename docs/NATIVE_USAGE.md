@@ -92,7 +92,9 @@ the user/assistant turn to the backend as a private `conversation`
 memory, as Mem0's documentation shows for chat. This happens after the
 response and is excluded from the trial's latency (the kernel
 conditions write theirs on a background thread). In a single-interaction
-trial it is written after retrieval, so it cannot change that trial.
+trial it is written after retrieval, so it cannot change that trial. A
+benchmark v2 probe turn writes nothing (`store_conversation` false;
+BENCHMARK_V2.md, Amendment 3).
 
 **Configuration.** One pinned embedding model for both conditions,
 `memory.embedding` (Subtask 5), and one pinned internal LLM for Mem0's
