@@ -4,7 +4,7 @@ config.yaml in place, keeping every other byte (comments included).
     python scripts/set_memory_mode.py aios/config/config.yaml \\
         --provider mem0 --kernel-memory on|off [--extract on|off]
         [--recency off|time|session] [--barrier-timeout-ms N] [--k N]
-        [--budget N]
+        [--budget N] [--supersession off|exclude]
 
 ``--kernel-memory`` sets ``auto_inject`` and ``auto_extract`` together;
 ``--extract`` then sets ``auto_extract`` alone (benchmark v2 kernel runs
@@ -19,6 +19,9 @@ sets ``memory.write_barrier.timeout_ms`` (benchmark v2 kernel runs use
 60000, so a probe never runs without the previous one's conversation).
 ``--k`` and ``--budget`` set ``memory.max_injected_memories`` and
 ``memory.max_memory_tokens`` (benchmark v2 runs use 10 and 300).
+``--supersession`` sets ``memory.supersession`` (benchmark v2 runs use
+``exclude``, and the ``no_supersession`` control ``off``;
+docs/BENCHMARK_V2.md, Amendment 4).
 
 Run drivers call it between runs, never during one.
 """
@@ -140,6 +143,22 @@ def set_selection(text: str, k: int = None, budget: int = None) -> str:
     return text
 
 
+def set_supersession(text: str, mode: str) -> str:
+    """Set ``memory.supersession`` (``off`` or ``exclude``), matched
+    exactly once at two spaces of indent, its comment kept in its
+    column."""
+    if mode not in ("off", "exclude"):
+        raise SystemExit("--supersession must be off or exclude")
+    text, count = re.subn(
+        r'^(  supersession: )("[^"]*")([ \t]*)(#.*)?$',
+        _keep_column(f'"{mode}"'), text, flags=re.M,
+    )
+    if count != 1:
+        raise SystemExit(f"expected one supersession line, got {count}")
+    assert yaml.safe_load(text)["memory"]["supersession"] == mode
+    return text
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
@@ -151,6 +170,7 @@ def main(argv=None) -> None:
     parser.add_argument("--barrier-timeout-ms", type=int)
     parser.add_argument("--k", type=int)
     parser.add_argument("--budget", type=int)
+    parser.add_argument("--supersession", choices=["off", "exclude"])
     args = parser.parse_args(argv)
     with open(args.config) as handle:
         text = handle.read()
@@ -162,6 +182,8 @@ def main(argv=None) -> None:
     if args.barrier_timeout_ms is not None:
         text = set_barrier_timeout(text, args.barrier_timeout_ms)
     text = set_selection(text, args.k, args.budget)
+    if args.supersession:
+        text = set_supersession(text, args.supersession)
     with open(args.config, "w") as handle:
         handle.write(text)
 

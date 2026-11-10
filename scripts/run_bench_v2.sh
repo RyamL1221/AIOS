@@ -7,16 +7,21 @@
 #                kernel_shared
 #   phase agent: kernel memory off: replicated_mem0, replicated_inhouse,
 #                native_mem0, native_inhouse; 0 kernel memory ops checked
+#   phases kmem0_ns, kinh_ns, agent_ns: the same kernels with
+#                memory.supersession off, for the no_supersession control
+#                (kernel_shared; replicated_mem0, replicated_inhouse)
 # Every phase runs with session ages on (memory.block_recency true, unit
 # session), the write barrier at 60 s, k 10 and a 300-token budget, set
 # through set_memory_mode.py; a probe writes nothing (Amendment 3: the
 # kernel's auto_extract is off, the agents skip their probe writes);
-# the harness's pre-flight refuses any other setting.
+# supersession is exclude, off in the _ns phases (Amendment 4); the
+# harness's pre-flight refuses any other setting.
 #
 #   MODE=functional: pilot_v2 users 0-4, no judge, conditions h0, h2
 #     (the seeded cycle) and the controls no_memory (kernel in-house
 #     only: the guessing floor does not depend on the locus), no_delete
-#     (every cell) and no_visibility (native only).
+#     (every cell), no_visibility (native only), writer_scoped (kernel and
+#     replicated) and no_supersession (kernel and replicated, _ns phases).
 #   MODE=smoke: pilot_v2's 30 users, h0, judge v2 on the integration
 #     probe.
 #
@@ -37,22 +42,26 @@ case "$MODE" in
     functional)
         OUTROOT="${OUTROOT:-results/bench_v2_functional}"
         TRIALS="${TRIALS:-5}"
-        CONDITIONS="${CONDITIONS:-h0 h2 no_memory no_delete no_visibility}"
+        CONDITIONS="${CONDITIONS:-h0 h2 no_memory no_delete no_visibility writer_scoped no_supersession}"
         JUDGE_ARGS=(--no-judge)
+        PHASES="${PHASES:-kmem0 kinh agent kmem0_ns kinh_ns agent_ns}"
         RUN_PREFIX="${RUN_PREFIX:-f14}" ;;
     smoke)
         OUTROOT="${OUTROOT:-results/bench_v2_smoke}"
         TRIALS="${TRIALS:-30}"
         CONDITIONS="${CONDITIONS:-h0}"
         JUDGE_ARGS=(--judge-model "gpt-5.4:azure")
+        PHASES="${PHASES:-kmem0 kinh agent}"
         RUN_PREFIX="${RUN_PREFIX:-s14}" ;;
     *) echo "MODE must be functional or smoke" >&2; exit 1 ;;
 esac
 LOGS="$CEREBRUM/$OUTROOT/logs"
 DATASET="pilot_v2"
 MODELS="${MODELS:-qwen}"
-PHASES="${PHASES:-kmem0 kinh agent}"
-MEMORY_OPS='add_memory: agent=|retrieve_memory result|Injection pipeline|Stored conversation memory|Injected [0-9]+ memories'
+# Any kernel memory request: none in an agent phase.
+MEMORY_OPS='add_memory: agent=|retrieve_memory result|Injection pipeline|Stored conversation memory|Injected [0-9]+ memories|MEMORY QUERY RECEIVED|forget_memory: agent=|list_memory: agent='
+# The read guard's warnings (Amendment 4): a carrier escaped the forget.
+GUARD='Selection guard dropped|Listing withheld|Read withheld'
 KERNEL=""
 
 clean() {  # $1 = repo: prints HEAD, or fails on tracked changes
@@ -72,9 +81,11 @@ stop_kernel() {
 }
 finish() { stop_kernel; cp "$SAVED" "$CONFIG"; rm -f "$SAVED"; }
 trap finish EXIT
-mode() {
+SUPERSESSION=exclude
+mode() {  # supersession from $SUPERSESSION (off in the _ns phases)
     "$AIOS/.venv/bin/python" scripts/set_memory_mode.py "$CONFIG" "$@" \
-        --recency session --barrier-timeout-ms 60000 --k 10 --budget 300
+        --recency session --barrier-timeout-ms 60000 --k 10 --budget 300 \
+        --supersession "$SUPERSESSION"
 }
 cell_done() {
     python3 "$AIOS/scripts/pilot_cell_done.py" "$1" "$TRIALS" --strict \
@@ -103,9 +114,14 @@ start_kernel() {  # $1 = log name; a resume never overwrites a log
 }
 
 applies() {  # $1 = condition, $2 = phase, $3 = method
+    case "$2" in  # the _ns phases run no_supersession only
+        *_ns) [ "$1" = no_supersession ]; return ;;
+    esac
     case "$1" in
         no_memory) [ "$2" = kinh ] ;;
         no_visibility) case "$3" in native_*) true ;; *) false ;; esac ;;
+        writer_scoped) case "$3" in native_*) false ;; *) true ;; esac ;;
+        no_supersession) false ;;  # its own phases
         *) true ;;
     esac
 }
@@ -113,7 +129,8 @@ condition_args() {  # $1 = condition
     case "$1" in
         h0) echo "--heterogeneity 0" ;;
         h2) echo "--heterogeneity 2" ;;
-        no_memory|no_delete|no_visibility) echo "--heterogeneity 0 --control $1" ;;
+        no_memory|no_delete|no_visibility|writer_scoped|no_supersession)
+            echo "--heterogeneity 0 --control $1" ;;
         *) echo "unknown condition $1" >&2; exit 1 ;;
     esac
 }
@@ -149,8 +166,9 @@ run_cell() {  # $1 = model, $2 = phase, $3 = method, $4 = condition, [$5 = provi
 
 methods_of() {  # $1 = phase
     case "$1" in
-        kmem0|kinh) echo "kernel_shared" ;;
+        kmem0|kinh|kmem0_ns|kinh_ns) echo "kernel_shared" ;;
         agent) echo "replicated_mem0 replicated_inhouse native_mem0 native_inhouse" ;;
+        agent_ns) echo "replicated_mem0 replicated_inhouse" ;;
     esac
 }
 
@@ -168,11 +186,15 @@ phase_needed() {  # $1 = model, $2 = phase: true if a cell is unfinished
 for model in $MODELS; do
     for phase in $PHASES; do
         case $phase in
-            kmem0) mode --provider mem0 --kernel-memory on --extract off
+            *_ns) SUPERSESSION=off ;;
+            *) SUPERSESSION=exclude ;;
+        esac
+        case $phase in
+            kmem0|kmem0_ns) mode --provider mem0 --kernel-memory on --extract off
                    provider=mem0 ;;
-            kinh)  mode --provider in-house --kernel-memory on --extract off
+            kinh|kinh_ns)  mode --provider in-house --kernel-memory on --extract off
                    provider=in-house ;;
-            agent) mode --provider mem0 --kernel-memory off; provider="" ;;
+            agent|agent_ns) mode --provider mem0 --kernel-memory off; provider="" ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
         phase_needed "$model" "$phase" || { echo "$(date) skip $model $phase"; continue; }
@@ -183,15 +205,19 @@ for model in $MODELS; do
                 run_cell "$model" "$phase" "$method" "$cond" "$provider"
             done
         done
-        if [ "$phase" = agent ]; then
+        case $phase in
+        agent|agent_ns)
             ops=$(grep -cE "$MEMORY_OPS" "$KLOG")
             echo "$(date) $model $phase kernel_memory_ops=$ops"
-            [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; }
-        else  # Amendment 3: the kernel stored no probe turn
+            [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; } ;;
+        *)  # Amendment 3: the kernel stored no probe turn
             turns=$(grep -c "Stored conversation memory" "$KLOG")
             echo "$(date) $model $phase stored_conversation_turns=$turns"
             [ "$turns" -eq 0 ] || { echo "$(date) PROBE TURNS STORED"; exit 1; }
-        fi
+            # Amendment 4: reported here, judged by the analysis.
+            guard=$(grep -cE "$GUARD" "$KLOG")
+            echo "$(date) $model $phase guard_warnings=$guard" ;;
+        esac
         stop_kernel
     done
 done
