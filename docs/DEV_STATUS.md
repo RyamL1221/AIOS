@@ -44,7 +44,7 @@ do not describe this branch.
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
-| 15 | Complete deletion and supersession | In progress (step 1 code) |
+| 15 | Complete deletion and supersession | In progress (step 1 functional check) |
 
 ### Subtask 1
 
@@ -1744,11 +1744,61 @@ Step 0 settles two items before the deletion and supersession work.
   - **Reviews.** None yet: rule 6 gives Subtask 15 one review and one
     verification pass, which will cover step 0 with the rest, and one
     mutation run on the final code.
-- **Step 1**: the spec, `DELETION_AND_SUPERSESSION.md`, reviewed before
-  any code. Its decisions were settled on 2026-11-10 (open decisions 4
-  and 5), with one change to its proposals: carriers are matched with
-  the scorer's own matcher, aliases included. `BENCHMARK_V2.md`
-  Amendment 4 states the benchmark's side.
+- **Step 1: complete deletion and supersession**
+  (`DELETION_AND_SUPERSESSION.md`; `BENCHMARK_V2.md`, Amendment 4).
+  - **Reviews of the design.** The spec was reviewed before any code,
+    and its decisions were settled on 2026-11-10 (open decisions 4 and
+    5), with one change to its proposals: carriers are matched with
+    the scorer's own matcher, aliases included. A second review, before
+    the first commit, made three more changes:
+    - the matcher moved into the library
+      (`aios/memory/pipeline/matching.py`; Cerebrum's `probes.py` loads
+      it by path);
+    - the library imports no `cerebrum` module (a test scans it; the
+      usage tag is passed in);
+    - the audits read the raw store, not the owner-only listings the
+      read guard now filters.
+  - **Code** (AIOS `a610dcd`, `9b3e1db`, `210aa58`; Cerebrum `059e5a5`):
+    - the library's `forget`: the tombstone first, then every row of
+      the slot and every carrier of a value or alias, of any agent,
+      deleted, and Mem0's messages and history records scrubbed;
+    - the sweep after every write and update; the read guard on
+      injection, SDK search, `get_memory` and `list_own`;
+    - supersession (`memory.supersession: exclude`), with
+      metadata-only marks;
+    - the kernel's `forget_memory` and `GET /memory/audit`, and each
+      Mem0 store's own history file (known issue 46);
+    - the writers' revoke through the forget (native and
+      `writer_scoped`: the owner's list and delete), and
+      `value_aliases` on every statement;
+    - in the harness, the raw-store listings in kernel and replicated,
+      `retired_rows` and `retired_in_block`, the controls
+      `writer_scoped` and `no_supersession` (the driver's `_ns`
+      phases), and the pre-flight's new checks;
+    - the analysis's new criteria, with the budget's binding reported,
+      not required.
+  - **Found by the test agents and fixed before the first commit:**
+    - a forget's report could spell a value as another agent's private
+      row spells it, and a restatement's `lifted` named the
+      tombstone's spelling;
+    - a refused forget, an update without a `memory_id` and an add
+      whose note could not be built kept the barrier sequence stamped
+      at acceptance, so every later retrieval of the user waited out
+      the barrier's timeout;
+    - Mem0's scrub found nothing to scrub in a store without a history
+      path of its own;
+    - `revoked_value_rows` did not carry the carrier's text.
+
+    The spec's claim that a write during a forget is swept was
+    narrowed: one that commits between the forget's listing and its
+    tombstone stays stored, and the read guard drops it from every
+    read.
+  - **Tests:** AIOS 606 passed and the 14 errors (136 new); Cerebrum
+    1050 passed, 4 skipped, the same 19 failures and 2 errors, by name.
+    The test agents checked their tests against mutants of the rules
+    they pin; the subtask's mutation run, on the final code, is still
+    due (rule 6), as are its review and verification passes.
+  - **Functional check** (`f15b`): pending.
 
 ## Open decisions
 
@@ -1812,7 +1862,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   468 passed, the 14 errors; Cerebrum 868 passed, 4 skipped, the same
   19 failures and 2 errors, by name) and Subtask 15's step 0 (Cerebrum
   `596451c`, AIOS `38696f3`: AIOS 470 passed, the 14 errors; Cerebrum
-  900 passed, 4 skipped, the same 19 failures and 2 errors, by name).
+  900 passed, 4 skipped, the same 19 failures and 2 errors, by name)
+  and Subtask 15's step 1 code (AIOS `210aa58`, Cerebrum `059e5a5`:
+  AIOS 606 passed, the 14 errors; Cerebrum 1050 passed, 4 skipped, the
+  same 19 failures and 2 errors, by name).
   The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
@@ -2168,9 +2221,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
       tests it (open decision 2 (b) would).
     Kernel against replicated is unaffected (one library, one order).
     `bench_v2_analysis.py` reports both. Open decision 2.
-46. The kernel's and the replicated loci's Mem0 keep its message
-    history in `~/.mem0/history.db`, Mem0's default: neither sets
-    `history_db_path`, so every run and store shares one file (about
+46. Fixed in Subtask 15, step 1 (AIOS `a610dcd`): each kernel and
+    replicated Mem0 store keeps its history in its own file
+    (`history.db` next to its `chroma` directory; the kernel's
+    `.mem0/history.db`), and a forget scrubs it. Before: the kernel's
+    and the replicated loci's Mem0 kept its message
+    history in `~/.mem0/history.db`, Mem0's default: neither set
+    `history_db_path`, so every run and store shared one file (about
     84 MB on 2026-11-10), which no store reset clears. Mem0 reads the
     scope's last 10 messages into each extraction; v2 user ids carry
     the run id, so runs do not read each other's messages, but a
