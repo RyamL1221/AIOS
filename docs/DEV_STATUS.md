@@ -44,6 +44,7 @@ do not describe this branch.
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
+| 15 | Complete deletion and supersession | In progress (step 0) |
 
 ### Subtask 1
 
@@ -1615,6 +1616,41 @@ revision-2 functional check").
   level or a note's text outside its pinned phrases, and 32 change no
   output on `s14b` or `f14c` (two of them are equivalent). The sections
   it reported before are unchanged, byte for byte on `f14c` and `s14b`.
+
+### Subtask 15
+
+Step 0 settles two items before the deletion and supersession work.
+
+- **A. Native Mem0's ranking is Mem0's own.** The reference native
+  consumer uses Mem0's results in the order returned and acts on no
+  score: `NativeMemory._search` keeps Mem0's order, and `_select`
+  filters by metadata only (partition, visibility). Its threshold and
+  budget steps run only when set, and only the H = 2 V4 consumer sets
+  them. Two new tests pin this (Cerebrum
+  `tests/agents/test_native_conditions.py`): for any rows, scores and k,
+  the reference consumer keeps the rows it may see, in the backend's
+  order, cut at k by position; and the native Mem0 block follows
+  Mem0's order and records its scores as returned. Both fail if the
+  consumer sorts by score or applies Mem0's 0.1 threshold. No consumer
+  change was needed, so nothing was re-run.
+  - **Evidence** (`NATIVE_USAGE.md`, "Evidence"). Cerebrum
+    `results/native_mem0_ranking/replay.py` (`7d4224a`) replays the smoke's (`s14b`)
+    native Mem0 searches with Mem0's own `search` and the consumer's
+    own selection, on a copy of the cell's store as it stood at each
+    probe. It reproduced all 90 recorded fetches (the recall, recency
+    and contradiction probes of 30 users), with the same rows, order
+    and scores. Every row's score was its squared L2 distance to the
+    question capped at 1.0, so the rows at cosine 0.5 or below come
+    first, and those above follow, least similar first.
+  - The recall target was the user's nearest row by cosine for 26 of
+    30 users. Mem0 ranked it a median 24.5th, and it reached the
+    10-row fetch for 4 users, the four whose recall passed on its row.
+    The fifth recall pass (user 0) came through an earlier probe's
+    stored answer. The recency target reached the fetch for 1 user.
+    For users 0 to 4 the section lists every row Mem0 ranked above the
+    target. In all ten of their recall and recency probes, the target
+    is the user's first to third row by cosine, and Mem0 ranks it last
+    or within two of last.
 
 ## Open decisions
 
