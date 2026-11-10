@@ -188,12 +188,13 @@ After the history, the consumer answers six questions, in this order:
 | 5 | contradiction | the contradicted fact | the later value | the earlier value (in the answer) |
 | 6 | integration | the v1 `follow_up_query` | judged | — |
 
-- **Order.** The hard constraints come first, so no earlier answer can
-  bring their values back. Integration comes last. Each probe's
-  conversation is stored (kernel `auto_extract`; the replicated and
-  native assistants write theirs), so later probes see earlier ones.
-  This is accumulation too. The order is fixed and recorded, and each
-  probe records which of its block's rows came from earlier probes.
+- **Order.** The hard constraints come first and integration last. The
+  order is fixed and recorded. Since Amendment 3 no probe writes to
+  memory: kernel `auto_extract` is off in v2, and the replicated and
+  native assistants skip their conversation write on a probe turn. So
+  every probe reads what the writers stored, and no block holds a row
+  from an earlier probe; each probe still records which of its block's
+  rows came from earlier probes, and that list must be empty.
 - **Questions** come from the slot's template and are never
   paraphrased. A question never contains an expected or forbidden
   value, or an alias of one. The consumer is v1's: the same system
@@ -283,7 +284,8 @@ sessions ago)". The age is the current session minus the row's
 `metadata.session`. A row gets no age when it has no session, or when
 its session is after the current one. At the probes (session 7), a
 session-6 row reads "1 session ago" and a session-1 row "6 sessions
-ago". The assistant's earlier probes read "this session".
+ago". (Before Amendment 3 the assistant's earlier probes read "this
+session".)
 
 - **Config.** A new key, `memory.block_recency_unit`: `time` (the
   existing wall-clock ages, the default) or `session`. v2 runs set
@@ -297,7 +299,8 @@ ago". The assistant's earlier probes read "this session".
   3. The executor passes it to `ContextInjector.inject` and on to
      `MemoryPipeline.inject`, `build_block` and the formatter.
   4. The executor also passes it to the conversation write, which
-     stamps it on the stored turn.
+     stamps it on the stored turn. Since Amendment 3, v2 kernel runs
+     store no turn (`auto_extract` off); the stamping is unchanged.
 - **Replicated.** Same library, same rendering. The assistant passes
   the session to `MemoryPipeline.inject` and stamps its conversation
   note.
@@ -348,6 +351,7 @@ it leaves behind is recorded, not hidden:
 - facts Mem0 extracts again from its history of recent messages,
   which a delete does not purge;
 - the assistant's own conversation rows, if one ever quoted the fact.
+  Since Amendment 3, v2 probes store none.
 
 **Recorded per user.** The harness lists the rows of all four agents
 (each through the owner-only list) after every session and after the
@@ -374,17 +378,18 @@ All six cells run v2: `kernel_shared` on Mem0 and on in-house,
 By-design differences that the probes will show, stated before any
 run:
 - **Kernel and replicated** fetch own k plus shared 4k rows, then cap
-  at k = 10 by score, then fit the 500-token budget (see the
-  amendment below).
+  at k = 10 by score, then fit the 300-token budget (Amendments 1 and
+  3).
 - **Native** fetches k rows from the backend and applies visibility
-  afterwards, so other agents' private rows and the assistant's own
-  conversations take slots. It has no budget. Native Mem0 ranks by
-  Mem0's own `search()` score, which as installed is the squared L2
-  distance alone (Chroma has no keyword search, and without the
-  `[nlp]` extra there is no entity boost), clamped at 1.0. Every row at
-  cosine 0.5 or below ties at 1.0 in Chroma's nearest-first order, and
-  the rows above 0.5 follow from the least similar up, so they are cut
-  whenever k rows lie at 0.5 or below (NATIVE_USAGE.md, "Scores").
+  afterwards, so other agents' private rows take slots (and, before
+  Amendment 3, the assistant's own conversations). It has no budget.
+  Native Mem0 ranks by Mem0's own `search()` score, which as
+  installed is the squared L2 distance alone (Chroma has no keyword
+  search, and without the `[nlp]` extra there is no entity boost),
+  clamped at 1.0. Every row at cosine 0.5 or below ties at 1.0 in
+  Chroma's nearest-first order, and the rows above 0.5 follow from the
+  least similar up, so they are cut whenever k rows lie at 0.5 or
+  below (NATIVE_USAGE.md, "Scores" and "Evidence").
 - **Mem0 cells store extracted facts**, in-house cells the utterances
   verbatim. How many facts a one-value utterance becomes is not yet
   measured; the functional check measures it.
@@ -394,9 +399,9 @@ run:
   "names both" failures should be more common in Mem0 cells.
   Contradictions come from another writer, whose Mem0 scope is
   different, so contradiction is not affected.
-- **The budget** binds through long rows: the assistant's own
-  conversation rows in in-house cells. Ten one-sentence writer rows come
-  to about 250 estimated tokens.
+- **The budget** binds through long rows: since Amendment 3, the base
+  rows (v1's renderings) in the integration probe's block. Ten
+  one-sentence writer rows come to about 250 estimated tokens.
 
 **Heterogeneity.** The variants apply unchanged, through the same
 channels, to `profile_agent`, `task_agent` and `assistant_agent`.
@@ -496,11 +501,12 @@ trial per user, trial *i* = user *i*, as v1 does. For each user:
 `/memory/config` reports:
 - recency on with unit `session` (or off, with `--no-recency` for an
   ablation);
-- `max_injected_memories` 10, `max_memory_tokens` 500,
+- `max_injected_memories` 10, `max_memory_tokens` 300 (Amendment 3),
   `relevance_threshold` 0.0 and `block_format` compact;
 - `write_barrier.timeout_ms` of at least 60,000 for a kernel method
   (see below);
-- for a kernel method, `auto_inject` and `auto_extract` both on.
+- for a kernel method, `auto_inject` on and `auto_extract` off
+  (Amendment 3; before it, both on).
 
 Each value is recorded with the results.
 
@@ -659,7 +665,8 @@ These are expectations, not a rule.
   in the library, so it should not fail either. Native fails with its
   V3 consumer (H = 2, user 4) and under `no_visibility`.
 - **The budget** binds, if ever, in late probes of in-house cells, once
-  long conversation rows rank in the top 10.
+  long conversation rows rank in the top 10. (Since Amendment 3: in the
+  integration probe of in-house cells, through the base rows.)
 
 ## What v2 does not show
 
@@ -842,3 +849,116 @@ changes a design decision or a score:
   which the native consumer reports as `visibility_checked`. In the
   check this changed no `cap_bound` (0 of 240 native probes), and a
   reference consumer's count is unchanged.
+
+
+## Amendment 3 (2026-11-09, after the smoke, before Subtask 15's deletion work)
+
+**Why.** The smoke (`s14b`, revision 2) showed two problems.
+- **The probes' stored answers.** Each probe's answer was stored, and
+  later probes read it (known issue 45).
+  - In 19 of the smoke's 900 judge-free probes, a value reached the
+    block only through the consumer's own earlier answers. Every such
+    probe is a recall, recency or contradiction probe. The revision-2
+    functional check (`f14c`) had 12 of its 525, and the revision-1
+    check (`f14b`) 9 of 525.
+  - The stored answers also displaced the base rows from the in-house
+    kernel and replicated integration blocks under the budget. That
+    effect differs by backend (verbatim or extracted rows) and by locus
+    (a budget or none). (Open decision 2, option (b).)
+- **The contradiction questions' wording.** In revision 2, every
+  question of a slot shared its content words with the same one of the
+  two statements, so the smoke could not tell the wording from the slot
+  (known issue 44; open decision 3, option (a)).
+
+**Probes write nothing to memory.**
+- **Kernel.** v2 kernel runs set `memory.auto_extract: false`, with
+  `auto_inject` still on. In v2 every consumer turn is a probe, so no
+  probe answer is stored. The pre-flight refuses a v2 kernel run with
+  `auto_extract` on, and `scripts/set_memory_mode.py --extract off`
+  sets it apart from injection.
+- **Replicated and native.** The assistant skips its conversation
+  write on a probe turn: the harness sets the consumer's
+  `store_conversation` to false for its probe turns. A v1 turn still
+  stores its conversation.
+- **Checked.** The harness lists every agent's rows after the last
+  session and again after the probes. A probe turn that stored a row
+  fails the user ("probe turns stored N rows").
+- **So:**
+  - no row in a block comes from a probe, and `contaminated` is 0 by
+    construction;
+  - the probe order no longer changes what a block holds, but it stays
+    fixed;
+  - memory accumulates over the sessions only.
+
+**The budget is 300 tokens.** Without stored answers, 500 cannot bind:
+in revision 2, no `users_v2` kernel or replicated in-house block can
+exceed 336 estimated tokens at H = 0. On a copy of the smoke's kernel
+in-house store (revision 2), blocks of writer rows only reach 314
+tokens in the integration probe and 299 elsewhere. 300 binds in 6 of those 180 probes, all
+integration probes, and keeps the base rows as no budget does.
+- v2 runs set `memory.max_memory_tokens` to 300
+  (`set_memory_mode.py --budget 300`), and the pre-flight checks it.
+- Native has no budget, as before.
+- The functional check's budget criterion stands: if 300 never binds
+  there, the design changes before the smoke.
+
+**Revision 3 of `users_v2`: contradiction questions of balanced lean.**
+- **Two questions per slot.** Each contradiction slot has two
+  questions. One leans to the earlier statement (the owner's add), the
+  other to the later one (the contradiction).
+- **Half of each.**
+  - A slot's contradiction users alternate between the two questions,
+    in index order.
+  - The contradiction slots, in catalog order, alternate the lean of
+    their first user's question.
+  - So `users_v2` has 75 questions of each lean, `pilot_v2` 15, and
+    every slot is within one of half, in both.
+  - The probe records its `lean` (`earlier` or `later`; the other
+    probes record none).
+- **The word rule.** A question's content words are its words without
+  a fixed list of function words: articles, pronouns, auxiliaries,
+  prepositions, conjunctions, wh-words, a few particles, and the
+  letters a contraction leaves.
+  - A content word counts for a statement that has it under two rules:
+    as written, and by its word family, a fixed table (`report`,
+    `reports`, `reported`, `reporting`) rather than a stemmer.
+  - A question leans to the statement that has more of its content
+    words, under both rules. If the rules disagree, or it is a tie,
+    it has no lean.
+- **Templates and questions** (four templates change, marked *):
+
+  | Slot | Earlier statement | Later statement | Leans earlier | Leans later |
+  |---|---|---|---|---|
+  | home_city | I live in {value}. | I'm based in {value}. | Which city do I live in? | Which city am I based in? |
+  | manager | I report to {value}. | My manager is {value}. | Who do I report to? | Who is my manager? |
+  | client | We're building this project for {value}. | The client for my project is {value}. | Who am I building this project for? | Who is the client for my current project? |
+  | teammate | I pair with {value} on this project every day.* | My only pairing partner on this project is {value}. | Who do I pair with every day? | Who is my pairing partner on this project? |
+  | conference | I'm presenting at {value} next month. | The only conference I'm presenting at is {value}. | Where am I presenting next month? | Which conference am I presenting at? |
+  | one_on_one | I meet with {value} one-on-one every week.* | My only standing one-on-one is with {value}.* | Who do I meet with every week? | Who is my standing one-on-one with? |
+  | offsite_city | The team offsite is in {value}. | This year's offsite will be held in {value}.* | Where is the team offsite? | Where will the offsite be held? |
+
+  A changed earlier statement is used only by the contradiction role
+  (`contradiction_add`). The recall, recency and deletion facts of the
+  same slot keep the slot's add and question.
+- **Paraphrases keep the lean.** A contradiction statement's paraphrase
+  must have exactly the question words its template has, as written and
+  by family. So each question leans as it does on its template pair,
+  which the generator checks for every value of the slot's pool. The
+  paraphrase request names the words to keep and the words not to use.
+  The other checks (Amendment 2) apply as before.
+- **How revision 3 is built.** As revision 2 was:
+  - `--reuse` on revision 2; the scripts (slots, values, sessions) are
+    unchanged;
+  - each utterance that passes every check is kept byte for byte;
+  - one that fails is paraphrased again, from attempt 1 with its
+    problems as feedback;
+  - an event whose template changed is paraphrased from attempt 0.
+
+  The header records revision 3, the generator's commit
+  (`harness_commit`), the seed and the model, and revision 2's SHA-256
+  under `reuse`. Revision 2 is kept in
+  `repo-artifacts/Cerebrum/users_v2_revisions/`.
+
+**Not changed.** The scoring rules, the five other probes, the
+controls and the functional check's criteria. Since no block holds a
+probe answer, the check also confirms that no probe is contaminated.
