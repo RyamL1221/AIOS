@@ -44,7 +44,7 @@ do not describe this branch.
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
-| 15 | Complete deletion and supersession | In progress (step 0) |
+| 15 | Complete deletion and supersession | In progress (step 1 spec, for review) |
 
 ### Subtask 1
 
@@ -1634,14 +1634,14 @@ Step 0 settles two items before the deletion and supersession work.
   consumer sorts by score or applies Mem0's 0.1 threshold. No consumer
   change was needed, so nothing was re-run.
   - **Evidence** (`NATIVE_USAGE.md`, "Evidence"). Cerebrum
-    `results/native_mem0_ranking/replay.py` (`7d4224a`) replays the smoke's (`s14b`)
-    native Mem0 searches with Mem0's own `search` and the consumer's
-    own selection, on a copy of the cell's store as it stood at each
-    probe. It reproduced all 90 recorded fetches (the recall, recency
-    and contradiction probes of 30 users), with the same rows, order
-    and scores. Every row's score was its squared L2 distance to the
-    question capped at 1.0, so the rows at cosine 0.5 or below come
-    first, and those above follow, least similar first.
+    `results/native_mem0_ranking/replay.py` (`7d4224a`) replays the
+    smoke's (`s14b`) native Mem0 searches with Mem0's own `search` and
+    the consumer's own selection, on a copy of the cell's store as it
+    stood at each probe. It reproduced all 90 recorded fetches (the
+    recall, recency and contradiction probes of 30 users), with the
+    same rows, order and scores. Every row's score was its squared L2
+    distance to the question capped at 1.0, so the rows at cosine 0.5
+    or below come first, and those above follow, least similar first.
   - The recall target was the user's nearest row by cosine for 26 of
     30 users. Mem0 ranked it a median 24.5th, and it reached the
     10-row fetch for 4 users, the four whose recall passed on its row.
@@ -1651,6 +1651,101 @@ Step 0 settles two items before the deletion and supersession work.
     target. In all ten of their recall and recency probes, the target
     is the user's first to third row by cosine, and Mem0 ranks it last
     or within two of last.
+- **B. Benchmark v2 Amendment 3** (`BENCHMARK_V2.md`; the spec AIOS
+  `458b040`, before the code; its implementation notes `773077f`).
+  - **Probes write nothing to memory.** v2 kernel runs set
+    `auto_extract` off with injection on (`set_memory_mode.py
+    --extract off`, the driver, and the pre-flight, which refuses
+    anything else). The replicated and native assistants skip their
+    conversation write when the locus sets `store_conversation` false,
+    which it does for every probe turn. A probe turn that stored a row
+    fails the user (`probe_writes`, from the listings before and after
+    the probes), and the driver fails a kernel phase whose log shows a
+    stored conversation turn. One test per locus shows that a probe
+    turn writes nothing and that the same turn, stored, writes its row:
+    native in-house and Mem0 (`test_v2_writers.py`), replicated
+    (`_v2_replicated_checks.py`), the kernel through the executor with
+    a real extractor and manager (`test_v2_requests.py`), and the
+    harness over all three loci (`test_history_v2.py`), which also
+    checks the failure. The pre-flight has its first tests
+    (`test_v2_preflight.py`).
+  - **The rationale's figure.** The task gave "9 of 525 smoke probes";
+    9 of 525 is the revision-1 functional check (`f14b`). The spec
+    gives the revision-2 figures: 19 of the smoke's 900 judge-free
+    probes, and 12 of the revision-2 check's 525.
+  - **Budget 300** (the pre-flight's `V2_SETTINGS`, the driver).
+  - **`users_v2` revision 3** (Cerebrum `af078c3`, SHA-256
+    `ecd3585f…`; the generator `5b5f0de`; revision 2 kept in
+    `repo-artifacts/Cerebrum/users_v2_revisions/`). Each contradiction
+    slot has a question that leans to each statement, alternated within
+    the slot: 75 of each lean in `users_v2`, 15 in `pilot_v2`, every
+    slot within one of half. The lean counts content words as written
+    and by word family. Four templates changed; the scripts and every
+    utterance but the contradictions' statements (214 changed) are
+    revision 2's.
+    - The first build (Cerebrum `4ac61fe`, SHA-256 `e019ece9…`) passed
+      every check, but reading its new paraphrases found statements
+      that lost their meaning ("My work is based in X"; 16 client
+      statements about "a project", not this one; "I am under X's
+      report"). It was not kept; meaning rules per slot reject those
+      (`LEAN_MEANING`), and the build was made again.
+    - The final build: 344 GPT-4o calls, 22 fallbacks to the template
+      text (21 client earlier statements, 1 home_city contradiction).
+      Both lean questions of every user lean as designed under the rule
+      and under Porter and Snowball stemming (300 of 300 each); counting
+      every word, 141 of the 150 asked questions lean as assigned and 9
+      tie. One quirk: user 73's earlier manager statement, "I am under
+      Callum Reyes and report to him." (known issue 41).
+  - **Open decisions 2 and 3 are resolved**, as (b) and (a), by this
+    amendment.
+  - **Functional check under Amendment 3** (`f15a`; Cerebrum
+    `results/bench_v2_functional_a3/`, `596451c`): `pilot_v2` users 0
+    to 4, Qwen, no judge, Subtask 14's 21 cells with its three
+    controls, on Cerebrum `af078c3` and AIOS `38696f3`. 105
+    user-trials, 0 failed: no user failed `probe_writes`, neither
+    kernel phase's log shows a stored conversation turn, and the agent
+    phase made no kernel memory operation. 0 of the 525 judge-free
+    probes are contaminated, and no block held a probe answer.
+    - Eight of the nine criteria hold. In the real conditions (H = 0
+      and 2), with the control: deletion passed 46 and failed 14, and
+      `no_delete` failed 25 of 30; privacy 59 and 1 (native in-house's
+      V3 consumer), `no_visibility` 5 of 10; recall 47 and 13, recency
+      15 and 45, contradiction 23 and 37, each failing 5 of 5 under
+      `no_memory`. Non-echo in-house deletion passed 18 of 18, the
+      kernel's privacy probe never failed (35 probes), and the cap
+      bound in 54 of 60 kernel probes per backend and 42 of 60
+      replicated.
+    - **The budget criterion fails.** 300 bound in no probe of a
+      kernel or replicated in-house cell; their largest block was 291
+      estimated tokens. It bound in 3 Mem0 probes (kernel `no_delete`
+      recall and integration, replicated H = 0 recency), so the budget
+      step ran in both loci. The spec says the design changes before
+      the smoke: open decision 4.
+    - Kernel against replicated at H = 0: 30 of 30 in-house blocks are
+      identical; on Mem0, 3 of the 25 paired probe outcomes differ.
+    - Deletion failed in the real conditions through the echo row of
+      users 0 and 4, and once through a Mem0 fold (replicated Mem0,
+      H = 0, user 1; known issue 38).
+    - In every kernel and replicated cell at H = 0, the stale row
+      reached the block in all 5 recency and all 5 contradiction
+      probes. Every failing recency answer named both values (14 of
+      14, the stale one as past in 12); 6 of the 8 failing
+      contradiction answers did not name the later value.
+    - Users 0 to 4 have one contradiction each, 3 leaning to the
+      earlier statement (client, conference, home_city) and 2 to the
+      later (manager, one_on_one), so the check cannot tell the lean
+      from the slot: in the real conditions, 10 of 36 and 13 of 24
+      passed. The smoke's 30 users have 15 of each.
+    - Against the revision-2 check (`f14c`: stored answers, budget
+      500), the real-condition passes are deletion 46 (47), privacy 59
+      (59), recall 47 (47), recency 15 (21) and contradiction 23 (23).
+      The data and settings differ, so the runs are not paired, and no
+      cause of the recency difference is established.
+  - **Reviews.** None yet: rule 6 gives Subtask 15 one review and one
+    verification pass, which will cover step 0 with the rest, and one
+    mutation run on the final code.
+- **Step 1**: the spec, `DELETION_AND_SUPERSESSION.md`, for review
+  before any code (open decision 5).
 
 ## Open decisions
 
@@ -1667,100 +1762,51 @@ Step 0 settles two items before the deletion and supersession work.
    check and the smoke use the default. Decide before the final runs
    whether native Mem0 is the default install or the full one
    (`NATIVE_USAGE.md`, "Install").
-2. **The probes' stored answers** (known issue 45). The options:
-   - (a) keep them, as the spec does ("This is accumulation too"), and
-     compare integration, recency and contradiction only between
-     kernel and replicated within a backend;
-   - (b) store no probe answer, so each probe reads what the writers
-     stored: kernel `auto_extract` off in v2, whose history has no
-     consumer turn, and the replicated and native assistants skip their
-     probe writes;
-   - (c) ask integration first, which mends integration's block but
-     not the stale answers, and gives up the spec's reason for the
-     order ("no earlier answer can bring their values back"): the
-     integration answer, the longest in 160 of 180 trials, would be
-     stored before the hard constraints. In the smoke the second probe
-     read the first one's answer for 22 to 28 of 30 users per cell,
-     and the integration answer named the revoked value for 4 to 8 of
-     30 users per cell (never a private value), including 5 native
-     users whose deletion probe passed (4 Mem0, 1 in-house).
+2. **The probes' stored answers** (known issue 45). Resolved in
+   Subtask 15: (b), by Amendment 3 (`BENCHMARK_V2.md`). The analysis
+   that led to it is in this file's history (AIOS `78c073c`).
+3. **Contradiction wording** (known issue 44). Resolved in Subtask 15:
+   (a), revision 3 of `users_v2` (Amendment 3).
+4. **The v2 budget** (Subtask 15, `f15a`). Under Amendment 3 the
+   functional check fails its budget criterion: 300 bound in no kernel
+   or replicated in-house probe of users 0 to 4 (largest block 291
+   estimated tokens), only in 3 Mem0 probes. Amendment 3 chose 300 on
+   the smoke's 30-user kernel in-house store (revision 2, writer rows
+   only), where it bound in 6 of 180 probes, all integration, and kept
+   the base rows. In-house blocks no longer depend on the consumer's
+   answers, so a lower budget's effect on users 0 to 4 follows from
+   the recorded blocks (112 kernel and replicated in-house probes with
+   a block, H = 0 and 2; "values cut": rows holding a probe's
+   expected or forbidden value):
 
-   (b) ends contamination (19 probes in the smoke) and the effect,
-   which differs by backend (verbatim or extracted rows) and by locus
-   (a budget or none). But the stored answers are what make the
-   500-token budget bind: every budget-bound probe of in-house kernel
-   and replicated (82 of 180 each) had an earlier answer among its
-   capped rows, and without them no `users_v2` user's kernel or
-   replicated in-house block can exceed 336 estimated tokens at H = 0
-   (the header and the user's ten longest writer rows). At H = 0 the
-   cap would still bind (every user has at least 12 visible writer
-   rows). At H = 2 fewer rows are visible: V1 and V3 writers' rows are
-   private, and only the kernel maps a V2 id to the user, so in the
-   functional check user 2 sees 2 writer rows in in-house kernel and
-   replicated, and user 0's replicated V2 consumer none; a replicated
-   V1 consumer prints the longer legacy block, up to 366 estimated
-   tokens on `users_v2` under the seeded cycle (the check has no V1
-   consumer).
-   The task and the functional check require the budget to bind
-   (Amendment 1), so (b) also needs a new budget and a spec amendment
-   (the Probes "Order" paragraph, the pre-flight list, Amendment 1's
-   500). It changes the pre-flight check, `set_memory_mode.py` (which
-   sets `auto_inject` and `auto_extract` together), the driver's
-   `--budget 500` and both assistants (which store every probe turn),
-   and the functional check would be re-run.
+   | Budget | Probes bound | Rows cut | Base rows cut | Values cut |
+   |---:|---:|---:|---:|---:|
+   | 300 | 0 | 0 | 0 | 0 |
+   | 290 | 3 (recency) | 3 | 0 | 0 |
+   | 280 | 14 | 14 | 0 | 0 |
+   | 270 | 17 | 24 | 3 | 0 |
+   | 250 | 30 | 56 | 10 | 0 |
 
-   Recommended: (b), with a budget chosen to bind on writer rows alone.
-   Without the answers a budget binds first, and most often, in the
-   integration probe, whose block holds each user's longest writer
-   row, the base task row (28 of 30 users; 4 to 9 in the other
-   probes). On the copy of the kernel in-house store, writer-only
-   blocks reach 314 tokens there and 299 elsewhere. 300 binds in 6 of
-   180 probes, all integration, and keeps the base rows as no budget
-   does; 290 binds in 19 (11 integration) and drops the base task row
-   for 2 more users; 250 binds in 61 (28 integration) and keeps both
-   base rows for 21 of 30 users, against 28 without a budget. Native
-   has no budget (on the same rows, native in-house's fetch keeps both
-   for 27), so a budget below about 293 brings back part of the
-   difference between the loci on integration: choose one that binds
-   only there (299 to 313 here), or report integration with and
-   without it. The paper compares backends, and the kernel with
-   native, and only (b) removes an effect that differs between them.
-   Decide before the full v2 run.
-3. **Contradiction wording** (known issue 44). In revision 2, how a
-   contradiction question's content words lean between the two
-   statements goes with the smoke's outcome: outside native Mem0, 9 of
-   50 pass when the question leans to the earlier statement and 59 of
-   80 when it leans to the later one. In `pilot_v2` every question of
-   a slot leans the same way, so the smoke can hardly tell the wording
-   from the slot; only Mem0's reworded rows vary it (in kernel and
-   replicated Mem0, teammate passed 5 of 7 when the stale row lost
-   "pairing" and 0 of 5 when it kept it, mostly different users).
-   The one balanced slot, offsite_city, passed 0 of 20, 18 of them
-   with a stale earlier answer in the block (known issue 45). The
-   options:
-   - (a) a revision 3 with new contradiction templates, whose add and
-     contradiction share equally many content words with the slot's
-     question (or a new question), and a generator that rejects a
-     paraphrase that breaks this. A check alone cannot guarantee it:
-     questions are never paraphrased, a paraphrase that fails its
-     three retries falls back to its template, and at least 4 of the 7
-     templates lean today (in content words, home_city and manager to
-     the earlier statement, client and conference to the later one).
-     In `pilot_v2` the paraphrases changed the lean of three slots:
-     teammate and one_on_one, whose templates tie, and home_city, whose
-     templates lean the other way. Fix the word rule first (function
-     words, stemming and which stemmer): `pilot_v2`'s 30 questions
-     split 10, 16 and 4 (earlier, later, tie) in content words, 9, 13
-     and 8 in all words, 4, 16 and 10 with Porter stemming and 4, 13
-     and 13 with Snowball, which also merges "weekly" and "week";
-   - (b) keep revision 2 and report contradiction per slot, as the
-     analysis does.
+   On the 30-user store, a budget below about 293 also drops base rows
+   that native, which has no budget, keeps (290 drops the base task row
+   for 2 more users). The options:
+   - (a) keep 300 and move the in-house budget criterion to the smoke,
+     where it is expected to bind in a few integration probes; a
+     writer-only replay of the smoke's 30 in-house stores (embedding
+     calls only, no model) can check this on revision 3 first;
+   - (b) 280: binds in the functional check without cutting a base row
+     or a probe's value row, but binds more often in the smoke and can
+     drop base rows there that native keeps;
+   - (c) drop the criterion: in v2 the cap is the limit that binds.
 
-   Recommended: (a), together with decision 2. Balanced wording alone
-   did not make offsite_city pass, and its 2 probes without a stale
-   earlier answer failed too, so the smoke does not show that (a)
-   suffices, with or without decision 2 (b). Decide before the full v2
-   run.
+   Recommended: (a). 300 was chosen to bind only in the largest
+   blocks, integration's, whose base rows are long; these five users
+   have none that large, and the budget step ran end to end here in
+   both loci. Decide before Subtask 15's functional check; it is the
+   spec's Decision 8.
+5. **Deletion and supersession** (Subtask 15, step 1). The decisions in
+   `DELETION_AND_SUPERSESSION.md`, "Decisions for review", before any
+   code.
 
 ## Test baselines
 
@@ -1788,7 +1834,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   19 failures and 2 errors, by name) and the end of Subtask 14
   (Cerebrum `8dbea1e`, which adds 8 tests; AIOS unchanged:
   468 passed, the 14 errors; Cerebrum 868 passed, 4 skipped, the same
-  19 failures and 2 errors, by name). The names
+  19 failures and 2 errors, by name) and Subtask 15's step 0 (Cerebrum
+  `596451c`, AIOS `38696f3`: AIOS 470 passed, the 14 errors; Cerebrum
+  900 passed, 4 skipped, the same 19 failures and 2 errors, by name).
+  The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -1980,9 +2029,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
       across the six cells, and native Mem0 user 25's. Native's fetch
       left the carrier out in 11 of them; in the 10 in kernel and
       replicated, whose fetch returned every stored row, the cap did.
+      Under Amendment 3 (`f15a`, users 0 to 4), the real conditions'
+      deletion failures came through the echo rows of users 0 and 4,
+      and once through a fold (replicated Mem0, H = 0, user 1).
 39. `config.yaml` keeps `max_memory_tokens: 2000` for v1. v2 runs set
-    500 through the driver (`BENCHMARK_V2.md`, Amendment 1), and the
-    pre-flight check refuses anything else.
+    300 through the driver (`BENCHMARK_V2.md`, Amendment 3; 500 under
+    Amendment 1), and the pre-flight check refuses anything else. In
+    `f15a` it bound in no in-house probe (open decision 4).
 40. Fixed in Subtask 14 (Amendment 2, AIOS `554a408`): the kernel's
     conversation rows carry `provenance_event`, the probe that wrote
     them, as the replicated and native assistants' do. In `f14c`, 382
@@ -2011,6 +2064,12 @@ These fail on `workshop-postrun` too and are not caused by later work.
       (Subtask 14, "Smoke").
     - User 75's contradiction reads "I'm only presenting at Bytewave
       Forum for a conference."
+    Revision 3 keeps these, except the contradictions' earlier
+    teammate statements, whose template changed (users 8, 17, 20 and
+    26 now read "I pair with … each day" or "I work on this project
+    with … each day as a pair"). It adds one: user 73's earlier manager
+    statement reads "I am under Callum Reyes and report to him.", the
+    file's only third-person pronoun.
 42. Mem0's extraction (gpt-4o) changes what is stored from run to run:
     - Its prompt holds the current UTC date, which it writes into facts
       ("relocated to bittern-06 on November 9, 2026"). `f14b`'s
@@ -2092,7 +2151,14 @@ These fail on `workshop-postrun` too and are not caused by later work.
     Asking with the contradiction's words would only lean the other
     way: a later dataset version should ask with words that favor
     neither statement (open decision 3).
-45. The probes' stored answers shape the later probes' blocks. The six
+    Addressed by revision 3 (Amendment 3), in another way: each slot
+    asks a question that leans to each statement, half of each, so the
+    lean can be measured rather than avoided. Only the smoke's 30 users
+    can separate it from the slot (Subtask 15, `f15a`).
+45. Fixed in Subtask 15 (Amendment 3; Cerebrum `4ac61fe`, AIOS
+    `ea1a309`): probes write nothing, and in `f15a` no block held a
+    probe answer (0 of 525 probes contaminated). The record follows.
+    The probes' stored answers shape the later probes' blocks. The six
     probes are asked in session 7 and each answer is stored (kernel
     `auto_extract`; the replicated and native assistants write
     theirs), so later probes read the earlier answers as "(this
@@ -2126,6 +2192,15 @@ These fail on `workshop-postrun` too and are not caused by later work.
       tests it (open decision 2 (b) would).
     Kernel against replicated is unaffected (one library, one order).
     `bench_v2_analysis.py` reports both. Open decision 2.
+46. The kernel's and the replicated loci's Mem0 keep its message
+    history in `~/.mem0/history.db`, Mem0's default: neither sets
+    `history_db_path`, so every run and store shares one file (about
+    84 MB on 2026-11-10), which no store reset clears. Mem0 reads the
+    scope's last 10 messages into each extraction; v2 user ids carry
+    the run id, so runs do not read each other's messages, but a
+    deleted value stays there (`DELETION_AND_SUPERSESSION.md`,
+    Decision 3). Native Mem0 keeps its history in its own store
+    directory (`cerebrum/example/agents/native/backends.py`).
 
 ## Fixed
 
