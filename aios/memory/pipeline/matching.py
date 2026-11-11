@@ -7,13 +7,16 @@ It lives here, in the library, and the benchmark's scorer (Cerebrum
 ``benchmarks/shared_memory/probes.py``) re-exports it, loading this file
 from the AIOS checkout: one copy of the code, so whatever the scorer
 counts as exposure is what the forget removes. ``PIPELINE_VERSION``
-covers it with the rest of the package. Standard library only, like
-every module of the library (no ``cerebrum`` import).
+covers it with the rest of the package. Standard library only: it
+imports no other module, so the scorer can load it alone.
 
 Text is casefolded, accents are stripped, and runs of whitespace and
 the punctuation ``-`` ``_`` ``.`` ``/`` collapse to one space. A value
-matches when it appears with a non-alphanumeric character, or the
-text's start or end, on each side.
+matches when neither side of it, after normalization, is an ASCII
+letter or digit: each side is the text's start or end or any other
+character. A letter normalization leaves non-ASCII (ø, ł, æ, or any
+non-Latin script) therefore counts as a boundary, so a value written
+inside Chinese text still matches.
 """
 import re
 import unicodedata

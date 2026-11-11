@@ -17,6 +17,7 @@ import json
 import logging
 import threading
 import time
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,7 +41,11 @@ from aios.memory.pipeline import (
     statement_forms,
 )
 from aios.memory.pipeline.memory_formatter import format_memory
-from aios.memory.providers.base import Candidate, ProviderError
+from aios.memory.providers.base import (
+    Candidate,
+    ProviderError,
+    note_metadata,
+)
 from aios.memory.providers.in_house import InHouseProvider
 from tests.modules.memory.test_list_and_delete import (
     ASSISTANT,
@@ -328,6 +333,59 @@ def test_lift_refuses_a_replay_and_other_values():
     assert tombstones.forms(USER) == [VALUE, ALIAS]
     assert tombstones.lift(USER, SLOT, VALUE, event="e3") == [VALUE]
     assert tombstones.forms(USER) == []
+
+
+@pytest.mark.parametrize("event", [None, ""])
+def test_a_statement_without_an_event_lifts_nothing(event):
+    """A statement of the slot without a provenance_event cannot be told
+    from a replay, so it lifts nothing."""
+    tombstones = TombstoneStore()
+    tombstones.record(USER, SLOT, [(VALUE, [ALIAS])], ["e1"])
+    assert tombstones.lift(USER, SLOT, VALUE, event=event) == []
+    assert tombstones.forms(USER) == [VALUE, ALIAS]
+
+
+def test_a_lift_keeps_the_slots_forgotten_statements():
+    """A restatement lifts the tombstone but not the slot's forgotten
+    statements: after a second forget, a replay of the first forgotten
+    statement or of the restatement lifts nothing, and only a new
+    statement lifts the new tombstone."""
+    tombstones = TombstoneStore()
+    tombstones.record(USER, SLOT, [(VALUE, [ALIAS])], ["e1"])
+    assert tombstones.lift(USER, SLOT, VALUE, event="e3") == [VALUE]
+    tombstones.record(USER, SLOT, [(VALUE, [ALIAS])], ["e3"])
+    assert tombstones.lift(USER, SLOT, VALUE, event="e1") == []
+    assert tombstones.lift(USER, SLOT, ALIAS, event="e3") == []
+    assert tombstones.forms(USER) == [VALUE, ALIAS]
+    assert tombstones.forgotten_events(USER, SLOT) == ["e1", "e3"]
+    assert tombstones.forgotten_events(USER, "pet") == []
+    assert tombstones.lift(USER, SLOT, VALUE, event="e5") == [VALUE]
+    assert tombstones.forgotten_events(USER, SLOT) == ["e1", "e3"]
+
+
+def test_a_file_from_before_the_events_table_keeps_its_statements(
+        tmp_path):
+    """A tombstone file written before the slot's forgotten statements
+    were kept apart: opening it takes them from its tombstones, so a
+    lift there still leaves a replay unable to lift a later one."""
+    import sqlite3
+
+    path = tmp_path / "tombstones.sqlite"
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute(TombstoneStore._SCHEMA)
+        connection.execute(
+            "INSERT INTO tombstones VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (USER, SLOT, matching.normalize(VALUE), VALUE,
+             json.dumps([ALIAS]), json.dumps(["e1"]), WRITER, "then"),
+        )
+    connection.close()
+    tombstones = TombstoneStore(str(path))
+    assert tombstones.forgotten_events(USER, SLOT) == ["e1"]
+    assert tombstones.lift(USER, SLOT, VALUE, event="e3") == [VALUE]
+    tombstones.record(USER, SLOT, [(VALUE, [ALIAS])], ["e3"])
+    assert tombstones.lift(USER, SLOT, VALUE, event="e1") == []
+    assert TombstoneStore(str(path)).forms(USER) == [VALUE, ALIAS]
 
 
 def test_stores_on_one_file_share_tombstones_and_memory_is_isolated(
@@ -870,6 +928,42 @@ class Scrubbing(InHouseProvider):
         return {"messages": 2, "history": 3}
 
 
+class Vanishing(Scrubbing):
+    """The recording store, but deleting ``vanish`` finds it already
+    gone, as when another request deleted it between the forget's
+    listing and its delete."""
+
+    vanish = None
+
+    def delete(self, memory_id, user_id):
+        if memory_id == self.vanish:
+            super().delete(memory_id, user_id)
+            return False
+        return super().delete(memory_id, user_id)
+
+
+def test_a_listed_row_gone_at_its_delete_is_reported_and_scrubbed(caplog):
+    """A row the forget listed but found gone when deleting it is
+    reported in ``not_found`` with a WARNING, and its history is
+    scrubbed as a deleted row's."""
+    provider = Vanishing()
+    pipeline = MemoryPipeline(provider)
+    statement = write(pipeline, WRITER, "My lawyer is Greta Sandvik.",
+                      **stated(VALUE, "e1"))
+    echo = write(pipeline, TASK, "Meeting with Greta Sandvik.",
+                 memory_type="task_context", fact_key="meeting")
+    provider.vanish = echo
+    with caplog.at_level(logging.WARNING):
+        report = pipeline.forget(WRITER, USER, SLOT)
+    assert report["not_found"] == [echo]
+    assert list(deleted(report)) == [statement]
+    assert provider.scrubs == [
+        (USER, [VALUE, ALIAS], sorted([statement, echo]), []),
+    ]
+    assert warned(caplog, "aios.memory.pipeline.deletion", echo)
+    assert stored(provider) == {}
+
+
 def test_forget_and_sweep_scrub_the_providers_history():
     """A forget, and a sweep after it, ask the provider to scrub the
     user's history with every form, the ids just deleted and the ids
@@ -937,6 +1031,163 @@ def test_a_replay_or_another_value_lifts_nothing():
                             memory_type="task_context", fact_key="meeting")
     assert (echo, outcome["suppressed"]) == ("", True)
     assert list(stored(provider)) == [other]
+
+
+@pytest.mark.parametrize("spelling", [VALUE, "greta sandvik"])
+def test_a_replay_after_a_restatement_and_a_second_forget_is_swept(
+        spelling):
+    """Forget, restate (a new event lifts the tombstone), forget again:
+    a replay of the first forgotten statement is then swept and lifts
+    nothing, and the value stays forgotten for every agent."""
+    provider, pipeline = forgotten_store()
+    _, outcome = written(pipeline, WRITER, f"My lawyer is {spelling}.",
+                         **stated(spelling, "e3"))
+    assert outcome["lifted"] == [spelling]
+    pipeline.forget(WRITER, USER, SLOT)
+    assert stored(provider) == {}
+
+    replay, outcome = written(pipeline, WRITER,
+                              "My lawyer is Greta Sandvik.",
+                              **stated(VALUE, "e1"))
+    assert (replay, outcome["lifted"], outcome["suppressed"]) == (
+        "", [], True,
+    )
+    echo, outcome = written(pipeline, TASK, "Meeting with Greta Sandvik.",
+                            memory_type="task_context", fact_key="meeting")
+    assert (echo, outcome["suppressed"]) == ("", True)
+    assert stored(provider) == {}
+
+
+def test_a_statement_without_an_event_is_swept():
+    """A statement of the forgotten value without a provenance_event
+    lifts nothing and is swept: it cannot be told from a replay."""
+    provider, pipeline = forgotten_store()
+    eventless = stated(VALUE, "e2")
+    del eventless["provenance_event"]
+    memory_id, outcome = written(pipeline, WRITER,
+                                 "My lawyer is Greta Sandvik.", **eventless)
+    assert (memory_id, outcome["lifted"], outcome["suppressed"]) == (
+        "", [], True,
+    )
+    assert [t.value for t in pipeline.tombstones.entries(USER)] == [VALUE]
+    assert stored(provider) == {}
+
+
+def test_only_an_update_with_its_own_event_lifts():
+    """An owner's update of a later row of the slot to the forgotten
+    value lifts nothing when it carries no provenance_event of its own
+    (the stored row's event is not a new statement): the row is swept.
+    With an event of its own the update is a restatement and lifts."""
+    provider, pipeline = forgotten_store()
+    olsen = write(pipeline, WRITER, "My lawyer is Henrik Olsen.",
+                  **stated("Henrik Olsen", "e2", aliases=()))
+    restated = stated(VALUE, "e2")
+    del restated["provenance_event"]
+    outcome = {}
+    assert pipeline.update(WRITER, USER, olsen,
+                           content="My lawyer is Greta Sandvik.",
+                           metadata=restated, outcome=outcome)
+    assert (outcome["lifted"], outcome["suppressed"]) == ([], True)
+    assert olsen not in stored(provider)
+    assert [t.value for t in pipeline.tombstones.entries(USER)] == [VALUE]
+
+    olsen = write(pipeline, WRITER, "My lawyer is Henrik Olsen.",
+                  **stated("Henrik Olsen", "e4", aliases=()))
+    outcome = {}
+    assert pipeline.update(WRITER, USER, olsen,
+                           content="My lawyer is Greta Sandvik.",
+                           metadata=stated(VALUE, "e5"), outcome=outcome)
+    assert (outcome["lifted"], outcome["suppressed"]) == ([VALUE], False)
+    assert olsen in stored(provider)
+    assert pipeline.tombstones.entries(USER) == []
+
+
+# --- a write's own rows -------------------------------------------------
+
+
+class SplittingStore(InHouseProvider):
+    """The in-memory store, but a note whose content holds " | " is
+    stored as one row per part, each with the note's metadata, and the
+    first row's id is returned: as Mem0's extraction stores several
+    facts for one write."""
+
+    def add(self, memory_note):
+        metadata = note_metadata(memory_note)
+        ids = []
+        with self._lock:
+            for part in memory_note.content.split(" | "):
+                row_id = str(uuid.uuid4())
+                self._rows(metadata.get("user_id"))[row_id] = Candidate(
+                    row_id, part, dict(metadata),
+                )
+                ids.append(row_id)
+        return ids[0]
+
+
+@pytest.mark.parametrize("with_event", [True, False])
+def test_a_write_whose_first_row_is_swept_returns_a_kept_one(with_event):
+    """A write that stored several rows, the first carrying a forgotten
+    value: the first is swept, the write is not suppressed, and it
+    returns the id of a row of its own that was kept, with or without a
+    provenance_event."""
+    provider, pipeline = forgotten_store(SplittingStore())
+    metadata = {"fact_key": "meeting", "provenance_event": "e2"} \
+        if with_event else {}
+    memory_id, outcome = written(
+        pipeline, TASK, "Meeting with Greta Sandvik | User likes hiking",
+        memory_type="task_context", **metadata,
+    )
+    assert outcome["suppressed"] is False
+    assert len(outcome["swept"]) == 1
+    assert stored(provider)[memory_id].content == "User likes hiking"
+    assert pipeline.read(TASK, USER, memory_id) is not None
+    assert "kept_own" not in outcome
+
+
+def test_a_write_whose_rows_are_all_swept_is_suppressed():
+    """A write whose every row carries a forgotten value is suppressed
+    and returns "", however many rows it stored."""
+    provider, pipeline = forgotten_store(SplittingStore())
+    memory_id, outcome = written(
+        pipeline, TASK, "Meeting with Greta Sandvik | Call Sandvik",
+        memory_type="task_context", fact_key="meeting",
+        provenance_event="e2",
+    )
+    assert (memory_id, outcome["suppressed"]) == ("", True)
+    assert len(outcome["swept"]) == 2
+    assert stored(provider) == {}
+
+
+def test_a_write_is_judged_by_its_own_rows_not_its_event():
+    """Two writes of one provenance_event: the second, swept, is
+    suppressed and returns "", though the first's row of the event is
+    kept; the first's row is not counted as the second's."""
+    provider, pipeline = forgotten_store()
+    first, _ = written(pipeline, TASK, "Meeting on Monday.",
+                       memory_type="task_context", fact_key="meeting",
+                       provenance_event="e2")
+    second, outcome = written(pipeline, TASK, "Meeting with Greta Sandvik.",
+                              memory_type="task_context",
+                              fact_key="meeting", provenance_event="e2")
+    assert (second, outcome["suppressed"]) == ("", True)
+    assert list(stored(provider)) == [first]
+
+
+def test_a_statement_that_stored_nothing_retires_nothing_whatever_is_listed():
+    """A statement whose write stored no row retires nothing, even when
+    another row carries its provenance_event (a row of another slot
+    from the same event)."""
+    provider = DroppingStore()
+    pipeline = MemoryPipeline(provider, EXCLUDE)
+    juniper = write(pipeline, WRITER, "I live on Juniper Street.",
+                    **home("Juniper Street", "e1", 1))
+    write(pipeline, WRITER, "I walk to work.", fact_key="commute",
+          provenance_event="e2", session=2)
+    provider.dropping = True
+    memory_id, outcome = written(pipeline, WRITER, "I moved to Birch Road.",
+                                 **home("Birch Road", "e2", 2))
+    assert (memory_id, outcome["retired"]) == ("", [])
+    assert "superseded_by" not in stored(provider)[juniper].metadata
 
 
 # --- the guard on every read path --------------------------------------
@@ -1158,6 +1409,10 @@ def test_retired_rows_are_never_selected_but_listed_and_forgotten():
     assert ids(candidates) == [birch]
     assert diagnostics["superseded_rows"] == [juniper]
     assert diagnostics["after_supersession"] < diagnostics["after_visibility"]
+    # Dropped before dedupe and the threshold, so the cap does not bind.
+    assert diagnostics["after_dedupe"] == 1
+    assert diagnostics["after_threshold"] == 1
+    assert diagnostics["after_cap"] == diagnostics["after_threshold"]
     _, injection = pipeline.inject(
         ASSISTANT, [{"role": "user", "content": query}], user_id=USER, k=1,
     )
@@ -1176,6 +1431,24 @@ def test_retired_rows_are_never_selected_but_listed_and_forgotten():
     }
     assert report["values_count"] == 2
     assert stored(provider) == {}
+
+
+def test_a_same_text_restatement_is_selected_not_its_retired_twin():
+    """A later statement with the same text as the earlier one retires
+    it; the retired row leaves before exact-content dedupe, so dedupe
+    keeps the new row, not the retired twin."""
+    provider = store()
+    pipeline = MemoryPipeline(provider, EXCLUDE)
+    first = write(pipeline, WRITER, "I live on Juniper Street.",
+                  **home("Juniper Street", "e1", 1))
+    again, outcome = written(pipeline, WRITER, "I live on Juniper Street.",
+                             **home("Juniper Street", "e3", 3))
+    assert outcome["retired"] == [first]
+    candidates, diagnostics = pipeline.retrieve(
+        ASSISTANT, USER, "Where do I live?", k=1,
+    )
+    assert ids(candidates) == [again]
+    assert diagnostics["superseded_rows"] == [first]
 
 
 def test_agents_cannot_set_or_clear_a_mark():

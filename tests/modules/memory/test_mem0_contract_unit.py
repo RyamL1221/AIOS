@@ -176,3 +176,68 @@ def test_no_shared_injection_without_a_request_user(provider):
     _, injector = kernel(provider)
     _, diagnostics = injector.inject("assistant_agent", chat("python?"))
     assert diagnostics["injected_count"] == 0
+
+
+# --- a failed read is not a missing row (Subtask 15 review) -------------
+
+
+def failing_reads(client, error):
+    """Make the client's ``get`` and its vector store's raise ``error``
+    from now on: IndexError is how Mem0's Chroma adapter reports a
+    missing id; anything else is a failed read (a locked file)."""
+    def raise_error(*args, **kwargs):
+        raise error
+    client.get = raise_error
+    client.vector_store.get = raise_error
+
+
+def test_a_missing_row_is_none_and_nothing_is_deleted(provider, client):
+    """IndexError, Mem0's missing-id signal, reads as no row: ``get`` is
+    None and delete, update and update_metadata answer False."""
+    kept = provider.add(note("my lawyer is Greta Sandvik", ALICE))
+    failing_reads(client, IndexError("list index out of range"))
+    assert provider.get(kept, ALICE) is None
+    assert provider.delete(kept, ALICE) is False
+    assert provider.update(kept, ALICE, "x", None) is False
+    assert provider.update_metadata(kept, ALICE, {"a": 1}) is False
+    assert kept in client.store
+
+
+def test_a_failed_read_raises_and_deletes_nothing(provider, client):
+    """Any other error from Mem0's read is a failed read, not a missing
+    row: ``get``, delete, update and update_metadata raise
+    ProviderError, and the row is not deleted."""
+    from aios.memory.providers.base import ProviderError
+
+    kept = provider.add(note("my lawyer is Greta Sandvik", ALICE))
+    failing_reads(client, TimeoutError("database is locked"))
+    for call in (
+        lambda: provider.get(kept, ALICE),
+        lambda: provider.delete(kept, ALICE),
+        lambda: provider.update(kept, ALICE, "x", None),
+        lambda: provider.update_metadata(kept, ALICE, {"a": 1}),
+    ):
+        with pytest.raises(ProviderError, match="database is locked"):
+            call()
+    assert kept in client.store
+
+
+def test_a_forget_over_a_failed_read_fails(provider, client):
+    """A forget whose delete meets a failed read raises instead of
+    filing the row as not found and reporting success."""
+    import json
+
+    from aios.memory.pipeline import MemoryPipeline
+    from aios.memory.providers.base import ProviderError
+
+    pipeline = MemoryPipeline(provider, barrier=None)
+    memory = note("My lawyer is Greta Sandvik.", ALICE)
+    memory.metadata.update({
+        "fact_key": "lawyer", "provenance_event": "e1",
+        "structured": json.dumps({"value": "Greta Sandvik"}),
+    })
+    kept = pipeline.write("profile_agent", ALICE, memory)
+    failing_reads(client, TimeoutError("database is locked"))
+    with pytest.raises(ProviderError, match="database is locked"):
+        pipeline.forget("profile_agent", ALICE, "lawyer")
+    assert kept in client.store

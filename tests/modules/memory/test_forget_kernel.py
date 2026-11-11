@@ -576,8 +576,17 @@ def test_list_memory_withholds_an_escaped_carrier(forget, caplog):
 
 OPERATIONS = (
     "add_memory", "update_memory", "get_memory", "retrieve_memory",
-    "list_memory", "forget_memory",
+    "retrieve_memory_raw", "list_memory", "forget_memory",
 )
+
+
+def served(operation, reply):
+    """Whether a branch served a request on a healthy store: a
+    ``retrieve_memory_raw`` reply is a non-empty list of notes, every
+    other branch's a successful ``MemoryResponse``."""
+    if operation == "retrieve_memory_raw":
+        return isinstance(reply, list) and bool(reply)
+    return reply.success
 
 
 def well_formed(operation, seeded):
@@ -594,6 +603,7 @@ def well_formed(operation, seeded):
         },
         "get_memory": {"memory_id": seeded["city"], "user_id": USER},
         "retrieve_memory": {"user_id": USER, "content": "home", "k": 5},
+        "retrieve_memory_raw": {"user_id": USER, "content": "home", "k": 5},
         "list_memory": {"user_id": USER},
         "forget_memory": {"user_id": USER, "fact_key": SLOT},
     }[operation]
@@ -604,6 +614,7 @@ def well_formed(operation, seeded):
     ("update_memory", "update"),
     ("get_memory", "get"),
     ("retrieve_memory", "search"),
+    ("retrieve_memory_raw", "search"),
     ("list_memory", "list"),
     ("forget_memory", "delete"),
 ])
@@ -613,8 +624,8 @@ def test_every_branch_answers_a_failing_provider(operation, method):
     that is not a ``ProviderError``, and releases any barrier sequence
     it held. The same request on a healthy store succeeds."""
     healthy = kernel()
-    assert request(healthy, WRITER, operation,
-                   **well_formed(operation, seed(healthy))).success
+    assert served(operation, request(healthy, WRITER, operation,
+                                     **well_formed(operation, seed(healthy))))
     manager = kernel()
     params = well_formed(operation, seed(manager))
     setattr(manager.provider, method,
@@ -657,6 +668,18 @@ def test_every_branch_answers_a_request_it_cannot_serve(operation, params):
     response = request(manager, WRITER, operation, **params)
     assert isinstance(response, MemoryResponse)
     assert response.success is False
+
+
+def test_an_operation_the_manager_does_not_serve_is_answered():
+    """An operation no branch of ``address_request`` serves (the
+    executor rewrites ``add_agentic_memory`` before it gets here) is
+    answered with ``success`` false, not raised."""
+    manager = kernel()
+    response = request(manager, WRITER, "add_agentic_memory",
+                       content=CITY, metadata={"user_id": USER})
+    assert isinstance(response, MemoryResponse)
+    assert response.success is False
+    assert "add_agentic_memory" in response.error
 
 
 # --- what a write's reply says -----------------------------------------

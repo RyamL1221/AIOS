@@ -874,11 +874,18 @@ class Mem0Provider(MemoryProvider):
     def get(
         self, memory_id: str, user_id: Optional[str]
     ) -> Optional[Candidate]:
+        """The row, or None when the scope holds no row with this id.
+        Mem0's Chroma adapter signals a missing id with IndexError; any
+        other error is a failed read and raises ``ProviderError``, so a
+        delete or an update never takes a read error for a missing row
+        (a forget would report it deleted)."""
         client = self._get_client_for_user(self._scope(user_id))
         try:
             item = client.get(memory_id)
-        except Exception:
+        except IndexError:
             return None
+        except Exception as e:
+            raise ProviderError(f"Mem0 get failed: {e}") from e
         return self._candidate(item) if isinstance(item, dict) else None
 
     def update(
@@ -918,8 +925,10 @@ class Mem0Provider(MemoryProvider):
         store = self._get_client_for_user(self._scope(user_id)).vector_store
         try:
             found = store.get(vector_id=memory_id)
-        except Exception:
-            return False  # Mem0's Chroma adapter raises for a missing id
+        except IndexError:
+            return False  # Mem0's Chroma adapter: no row with this id
+        except Exception as e:
+            raise ProviderError(f"Mem0 metadata read failed: {e}") from e
         if found is None:
             return False
         payload = {**(found.payload or {}), **(metadata or {})}

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Subtask 14: benchmark v2 runs (docs/BENCHMARK_V2.md, "Functional
-# check and smoke"). For each model:
+# Subtasks 14 and 15: benchmark v2 runs (docs/BENCHMARK_V2.md,
+# "Functional check and smoke"). For each model:
 #   phase kmem0: Mem0 (infer), kernel injection on, extraction off:
 #                kernel_shared
 #   phase kinh:  in-house, kernel injection on, extraction off:
@@ -30,9 +30,14 @@
 # trial, or the driver stops. One fresh kernel per model per phase, on a
 # port that must be free first; config.yaml restored byte for byte at
 # exit. Resumable: a finished cell is skipped, an unfinished one is
-# re-run whole, so give a re-run its own RUN_PREFIX (known issue 36).
+# re-run whole. RUN_PREFIX is required and must be new for every run
+# and every re-run of a cell: the stores and tombstones a run leaves
+# are not reset (known issue 36). At the end of each phase, and for a
+# phase a resumed launch finds finished, the checks read every kernel
+# log of the phase in $OUTROOT/logs, earlier launches' included: move a
+# discarded attempt's logs out of $OUTROOT before reusing it.
 # Run from the AIOS repo, detached:
-#   MODE=functional nohup bash scripts/run_bench_v2.sh > ../repo-artifacts/Cerebrum/bench_v2_functional.log 2>&1 &
+#   MODE=functional RUN_PREFIX=f16 nohup bash scripts/run_bench_v2.sh > ../repo-artifacts/Cerebrum/bench_v2_functional.log 2>&1 &
 set -u
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"
@@ -44,17 +49,17 @@ case "$MODE" in
         TRIALS="${TRIALS:-5}"
         CONDITIONS="${CONDITIONS:-h0 h2 no_memory no_delete no_visibility writer_scoped no_supersession}"
         JUDGE_ARGS=(--no-judge)
-        PHASES="${PHASES:-kmem0 kinh agent kmem0_ns kinh_ns agent_ns}"
-        RUN_PREFIX="${RUN_PREFIX:-f14}" ;;
+        PHASES="${PHASES:-kmem0 kinh agent kmem0_ns kinh_ns agent_ns}" ;;
     smoke)
         OUTROOT="${OUTROOT:-results/bench_v2_smoke}"
         TRIALS="${TRIALS:-30}"
         CONDITIONS="${CONDITIONS:-h0}"
         JUDGE_ARGS=(--judge-model "gpt-5.4:azure")
-        PHASES="${PHASES:-kmem0 kinh agent}"
-        RUN_PREFIX="${RUN_PREFIX:-s14}" ;;
+        PHASES="${PHASES:-kmem0 kinh agent}" ;;
     *) echo "MODE must be functional or smoke" >&2; exit 1 ;;
 esac
+[ -n "${RUN_PREFIX:-}" ] || {
+    echo "set RUN_PREFIX, new for every run (known issue 36)" >&2; exit 1; }
 LOGS="$CEREBRUM/$OUTROOT/logs"
 DATASET="pilot_v2"
 MODELS="${MODELS:-qwen}"
@@ -172,6 +177,28 @@ methods_of() {  # $1 = phase
     esac
 }
 
+check_phase() {  # $1 = model, $2 = phase: every kernel log of the phase
+    # in $LOGS, earlier launches' included (`_2`: kmem0 never matches
+    # kmem0_ns); counts are summed through cat, as grep -c over several
+    # files prints one count per file.
+    local model=$1 phase=$2
+    set -- "$LOGS"/kernel_${model}_${phase}_2*.log
+    [ -e "$1" ] || { echo "$(date) NO KERNEL LOG $model $phase"; exit 1; }
+    case $phase in
+    agent|agent_ns)
+        ops=$(cat "$@" | grep -cE "$MEMORY_OPS")
+        echo "$(date) $model $phase kernel_memory_ops=$ops"
+        [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; } ;;
+    *)  # Amendment 3: the kernel stored no probe turn
+        turns=$(cat "$@" | grep -c "Stored conversation memory")
+        echo "$(date) $model $phase stored_conversation_turns=$turns"
+        [ "$turns" -eq 0 ] || { echo "$(date) PROBE TURNS STORED"; exit 1; }
+        # Amendment 4: reported here, judged by the analysis.
+        guard=$(cat "$@" | grep -cE "$GUARD")
+        echo "$(date) $model $phase guard_warnings=$guard" ;;
+    esac
+}
+
 phase_needed() {  # $1 = model, $2 = phase: true if a cell is unfinished
     local model=$1 phase=$2
     for cond in $CONDITIONS; do
@@ -197,7 +224,11 @@ for model in $MODELS; do
             agent|agent_ns) mode --provider mem0 --kernel-memory off; provider="" ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
-        phase_needed "$model" "$phase" || { echo "$(date) skip $model $phase"; continue; }
+        phase_needed "$model" "$phase" || {
+            echo "$(date) skip $model $phase"
+            check_phase "$model" "$phase"
+            continue
+        }
         start_kernel "${model}_$phase"
         for cond in $CONDITIONS; do
             for method in $(methods_of "$phase"); do
@@ -205,20 +236,8 @@ for model in $MODELS; do
                 run_cell "$model" "$phase" "$method" "$cond" "$provider"
             done
         done
-        case $phase in
-        agent|agent_ns)
-            ops=$(grep -cE "$MEMORY_OPS" "$KLOG")
-            echo "$(date) $model $phase kernel_memory_ops=$ops"
-            [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; } ;;
-        *)  # Amendment 3: the kernel stored no probe turn
-            turns=$(grep -c "Stored conversation memory" "$KLOG")
-            echo "$(date) $model $phase stored_conversation_turns=$turns"
-            [ "$turns" -eq 0 ] || { echo "$(date) PROBE TURNS STORED"; exit 1; }
-            # Amendment 4: reported here, judged by the analysis.
-            guard=$(grep -cE "$GUARD" "$KLOG")
-            echo "$(date) $model $phase guard_warnings=$guard" ;;
-        esac
         stop_kernel
+        check_phase "$model" "$phase"
     done
 done
 echo "$(date) BENCH V2 $MODE DONE"

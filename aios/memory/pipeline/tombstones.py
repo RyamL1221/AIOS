@@ -6,7 +6,10 @@ A tombstone holds one value of a forgotten fact: the user, the slot
 (``fact_key``), the value and its aliases (its forms), the forgotten
 statements' ``provenance_event`` ids, the agent that asked and when. A
 row whose text carries a form, under the scorer's matcher
-(``matching``), is a carrier.
+(``matching``), is a carrier. The slot's forgotten statements are also
+kept apart, per slot, where a lift never removes them: a replay of a
+statement the user forgot lifts nothing, even after a restatement and
+a second forget of the slot.
 
 ``TombstoneStore`` keeps them in a SQLite file, read on every call, so
 every pipeline over one store sees the same tombstones: the kernel
@@ -119,6 +122,14 @@ class TombstoneStore:
         " created_at TEXT NOT NULL,"
         " PRIMARY KEY (user_id, fact_key, value_key))"
     )
+    # Every statement of a slot a forget has covered, kept across lifts.
+    _EVENTS_SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS forgotten_events ("
+        " user_id TEXT NOT NULL,"
+        " fact_key TEXT NOT NULL,"
+        " event TEXT NOT NULL,"
+        " PRIMARY KEY (user_id, fact_key, event))"
+    )
 
     def __init__(self, path: Optional[str] = None):
         self.path = os.path.abspath(path) if path else None
@@ -132,6 +143,17 @@ class TombstoneStore:
             )
         with self._connect() as connection:
             connection.execute(self._SCHEMA)
+            connection.execute(self._EVENTS_SCHEMA)
+            # A file written before the table existed: its tombstones'
+            # events are the forgotten statements.
+            for user_id, fact_key, events in connection.execute(
+                "SELECT user_id, fact_key, events FROM tombstones"
+            ).fetchall():
+                connection.executemany(
+                    "INSERT OR IGNORE INTO forgotten_events "
+                    "VALUES (?, ?, ?)",
+                    [(user_id, fact_key, e) for e in _json_list(events)],
+                )
 
     @contextmanager
     def _connect(self):
@@ -159,10 +181,16 @@ class TombstoneStore:
     ) -> List[Tombstone]:
         """Tombstone each ``(value, aliases)`` of the user's fact. A
         value already tombstoned (same normalized value) gains the new
-        aliases and events. Returns the fact's tombstones."""
+        aliases and events. The events are also kept as the slot's
+        forgotten statements (``forgotten_events``). Returns the fact's
+        tombstones."""
         events = sorted({str(e) for e in events if e})
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
+            connection.executemany(
+                "INSERT OR IGNORE INTO forgotten_events VALUES (?, ?, ?)",
+                [(user_id, fact_key, event) for event in events],
+            )
             for value, aliases in values:
                 key = normalize(value)
                 if not key:
@@ -210,6 +238,17 @@ class TombstoneStore:
             for row in rows
         ]
 
+    def forgotten_events(self, user_id: str, fact_key: str) -> List[str]:
+        """Every statement of the user's slot a forget covered, sorted,
+        including those of tombstones a restatement has since lifted."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT event FROM forgotten_events WHERE user_id = ? "
+                "AND fact_key = ? ORDER BY event",
+                (user_id, fact_key),
+            ).fetchall()
+        return [row[0] for row in rows]
+
     def forms(self, user_id: Optional[str]) -> List[str]:
         """Every tombstoned form of the user, values first per value."""
         forms: List[str] = []
@@ -226,16 +265,19 @@ class TombstoneStore:
     ) -> List[str]:
         """The user stated ``fact_key`` again with ``value``: lift every
         tombstone of the slot whose value or an alias normalizes to
-        ``value``, unless ``event`` is one of its forgotten statements
-        (a replay, not a restatement). Returns the lifted values."""
+        ``value``. Only a new statement lifts: a statement without an
+        ``event`` cannot be told from a replay, and one whose event is
+        among the slot's forgotten statements (``forgotten_events``,
+        which a lift keeps) is a replay; neither lifts anything.
+        Returns the lifted values."""
         key = normalize(value)
-        if not key:
+        if not key or not event:
+            return []
+        if event in self.forgotten_events(user_id, fact_key):
             return []
         lifted = []
         for tombstone in self.entries(user_id):
             if tombstone.fact_key != fact_key:
-                continue
-            if event and event in tombstone.events:
                 continue
             if key in {normalize(form) for form in tombstone.forms}:
                 lifted.append(tombstone.value)

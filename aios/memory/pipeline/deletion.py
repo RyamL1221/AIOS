@@ -146,13 +146,19 @@ def forget_fact(
                 "reason": reason,
             })
         else:
+            # Listed a moment ago, gone now: deleted by another request.
+            # A provider raises on a failed read, so this is no error,
+            # but it is reported and its history is scrubbed as a
+            # deleted row's.
             not_found.append(row.memory_id)
+            logger.warning(
+                "forget: user_id=%s fact_key=%s: memory %s was listed "
+                "but was gone when deleted", scope, fact_key,
+                row.memory_id,
+            )
 
-    gone = {entry["memory_id"] for entry in deleted}
-    kept = [
-        row.memory_id for row in rows
-        if row.memory_id not in gone and row.memory_id not in not_found
-    ]
+    gone = {entry["memory_id"] for entry in deleted} | set(not_found)
+    kept = [row.memory_id for row in rows if row.memory_id not in gone]
     scrubbed = provider.scrub_history(scope, forms, sorted(gone), kept)
     logger.info(
         "forget: agent=%s user_id=%s fact_key=%s values=%d forms=%d "
@@ -182,16 +188,11 @@ def _supersede(
 ) -> List[str]:
     """Mark the earlier rows of the write's slot retired; their ids.
 
-    Only after a write that stored a row (one of its
-    ``provenance_event`` is listed): a statement Mem0 stored nothing for
-    retires nothing. A row already marked keeps its mark."""
+    ``after_write`` calls it only for a write that kept a row of its
+    own. The rows of the write's own ``provenance_event`` are not
+    retired, and a row already marked keeps its mark."""
     fact_key = metadata.get("fact_key")
     event = metadata.get("provenance_event")
-    if not any(
-        (row.metadata or {}).get("provenance_event") == event
-        for row in rows
-    ):
-        return []
     marks: Dict[str, Any] = {"superseded_by": event}
     if metadata.get("session") is not None:
         marks["superseded_session"] = metadata["session"]
@@ -218,23 +219,32 @@ def after_write(
     metadata: Optional[Dict[str, Any]],
     *,
     memory_id: Optional[str] = None,
+    note_id: Optional[str] = None,
     supersede: bool = True,
 ) -> Dict[str, Any]:
     """What a successful write (or, with ``supersede`` False, an update)
     of a note with ``metadata`` does next for the user ``scope``.
 
+    The write's own rows are the listed rows that carry its note's id
+    (``memory_note_id``; with extraction, Mem0 may store several, each
+    with the note's metadata), else the row ``memory_id`` names.
+
     1. A restatement (a write of a tombstoned slot whose ``structured``
-       value is the value or an alias, from a statement other than the
-       forgotten ones) lifts that value's tombstone.
+       value is the value or an alias, from a new statement: its
+       ``provenance_event`` is set and is not one of the slot's
+       forgotten statements) lifts that value's tombstone.
     2. Every carrier of a remaining tombstoned form is deleted
        (``swept``), whoever wrote it, and the history is scrubbed. The
-       write is ``suppressed`` when its own rows were all swept.
+       write is ``suppressed`` when it had own rows and all were swept;
+       ``kept_own`` lists, in storage order, its own rows still stored.
     3. With ``supersession: exclude``, a write with a ``fact_key`` and a
-       ``provenance_event`` that was not suppressed retires the earlier
-       rows of its slot (``retired``).
+       ``provenance_event`` that kept a row of its own retires the
+       earlier rows of its slot (``retired``): one that stored nothing,
+       or was suppressed, retires nothing.
     """
     outcome: Dict[str, Any] = {
         "swept": [], "retired": [], "lifted": [], "suppressed": False,
+        "kept_own": [memory_id] if memory_id else [],
     }
     metadata = metadata or {}
     fact_key = metadata.get("fact_key")
@@ -256,7 +266,13 @@ def after_write(
         return outcome
 
     rows = partition(provider, scope)
+    own = {
+        row.memory_id for row in rows
+        if note_id and (row.metadata or {}).get("memory_note_id") == note_id
+    } or {row.memory_id for row in rows if memory_id and row.memory_id
+          == memory_id}
     swept: List[Dict[str, str]] = []
+    gone: set = set()
     if forms:
         for row in rows:
             row_metadata = row.metadata or {}
@@ -274,10 +290,6 @@ def after_write(
         outcome["scrubbed"] = provider.scrub_history(
             scope, forms, sorted(gone), kept,
         )
-        own = {
-            row.memory_id for row in rows
-            if event and (row.metadata or {}).get("provenance_event") == event
-        } or ({memory_id} if memory_id else set())
         outcome["suppressed"] = bool(own) and own <= gone
         rows = [row for row in rows if row.memory_id not in gone]
         if swept:
@@ -287,6 +299,8 @@ def after_write(
                 scope, len(swept), event,
             )
     outcome["swept"] = swept
-    if marking and not outcome["suppressed"]:
+    outcome["kept_own"] = [row.memory_id for row in rows if row.memory_id
+                           in own]
+    if marking and outcome["kept_own"]:
         outcome["retired"] = _supersede(provider, scope, metadata, rows)
     return outcome

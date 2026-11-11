@@ -43,10 +43,9 @@ NOTE_FIELDS = (
 _LOCAL = object()
 
 # Tags the provider's own LLM and embedding calls with the user they
-# serve, for cost accounting. The library imports nothing outside the
-# standard library and the provider contract, so the caller passes the
-# tag: the kernel and the replicated agents pass the SDK's
-# ``cerebrum.utils.usage.tagged``.
+# serve, for cost accounting. No module of the library imports a
+# ``cerebrum`` module, so the caller passes the tag: the kernel and the
+# replicated agents pass the SDK's ``cerebrum.utils.usage.tagged``.
 UsageTag = Callable[[Optional[str]], ContextManager]
 
 
@@ -214,10 +213,13 @@ class MemoryPipeline:
         is accepted; ``0`` means none); without it the write acquires
         its own.
 
-        ``outcome``, when given, gets ``after_write``'s report: the ids
-        swept, retired and lifted, and ``suppressed``. A suppressed
-        write (its own rows carried a forgotten value and were swept)
-        returns ``""``, as a write that stored nothing does.
+        ``outcome``, when given, gets ``after_write``'s report: the rows
+        swept (id and owner), the ids retired, the values lifted, and
+        ``suppressed``. A suppressed write (its own rows carried a
+        forgotten value and were all swept) returns ``""``, as a write
+        that stored nothing does. When the row the provider named was
+        swept but another row of the write was kept (Mem0's extraction
+        may store several), that row's id is returned.
         """
         if note.metadata is None:
             note.metadata = {}
@@ -257,10 +259,17 @@ class MemoryPipeline:
                 report = after_write(
                     self.provider, self.tombstones, self.settings, uid,
                     note_metadata_of(note), memory_id=memory_id,
+                    note_id=note.id,
                 )
+            kept_own = report.pop("kept_own")
             if outcome is not None:
                 outcome.update(report)
-            return "" if report["suppressed"] else memory_id
+            if report["suppressed"] or not memory_id:
+                return ""
+            swept = {entry["memory_id"] for entry in report["swept"]}
+            if memory_id not in swept:
+                return memory_id
+            return kept_own[0] if kept_own else ""
         finally:
             # Waiters are released even when the provider raised.
             if self.barrier:
@@ -295,7 +304,9 @@ class MemoryPipeline:
         like a write, so a retrieval accepted after it reads the new
         content; released on every path. Then, like a write, a
         restatement lifts its tombstone and tombstoned values are swept
-        (``outcome``); an update retires no other row."""
+        (``outcome``); an update retires no other row. Only an update
+        that carries its own ``provenance_event`` is a new statement
+        that can lift a tombstone: the stored row's event is not."""
         user_id = self.resolver.canonical(user_id)
         if barrier_seq is None:
             barrier_seq = (
@@ -321,9 +332,15 @@ class MemoryPipeline:
                 if success and owner_user:
                     report = after_write(
                         self.provider, self.tombstones, self.settings,
-                        owner_user, {**found.metadata, **kept},
+                        owner_user, {
+                            **found.metadata, **kept,
+                            "provenance_event": kept.get(
+                                "provenance_event"
+                            ),
+                        },
                         memory_id=memory_id, supersede=False,
                     )
+                    report.pop("kept_own")
                     if outcome is not None:
                         outcome.update(report)
             return success
@@ -386,7 +403,9 @@ class MemoryPipeline:
         A row carrying a tombstoned value is never returned
         (docs/DELETION_AND_SUPERSESSION.md): it is left out with a
         WARNING, and its id comes back as withheld, the second element
-        of the result, so an audit counts it as a carrier.
+        of the result, so the caller can tell a carrier escaped the
+        forget. The benchmark's audit does not read this listing; it
+        reads the raw store (``MemoryManager.audit_rows``).
         """
         scope = self.resolver.canonical(user_id) or agent_name
         limit = LIST_TOP_K if top_k is None else top_k

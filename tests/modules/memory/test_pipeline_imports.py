@@ -1,13 +1,17 @@
-"""The memory pipeline library imports no ``cerebrum`` module.
+"""No module of the memory pipeline library imports a ``cerebrum``
+module.
 
-The library (``aios/memory/pipeline``) depends on the standard library
-and the provider contract only. The benchmark's scorer re-exports the
-library's matcher (``matching.py``), never the other way round, and the
-callers pass the usage tag (docs/DELETION_AND_SUPERSESSION.md, "The
-matcher, shared"). This greps every module of the package for an import
-of ``cerebrum``: a statement (``import cerebrum...``, ``from cerebrum...
-import``, at any depth of the file) or a dynamic one
-(``importlib.import_module("cerebrum...")``, ``__import__``).
+The library's own modules (``aios/memory/pipeline``) import the
+standard library and the provider contract only. The benchmark's scorer
+re-exports the library's matcher (``matching.py``), never the other way
+round, and the callers pass the usage tag
+(docs/DELETION_AND_SUPERSESSION.md, "The matcher, shared"). This scans
+every module of the package for an import of ``cerebrum``: a statement
+(``import cerebrum...``, ``from cerebrum... import``, at any depth of
+the file) or a dynamic one (``importlib.import_module("cerebrum...")``,
+``__import__``). It does not follow imports: importing the package
+still loads ``cerebrum.utils.usage``, through the providers package's
+Mem0 provider.
 """
 import ast
 from pathlib import Path

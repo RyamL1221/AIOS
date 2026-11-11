@@ -5,9 +5,13 @@ search -> user partition -> visibility -> supersession -> tombstone guard
 -> dedupe -> threshold -> sort -> cap, with diagnostics for every stage
 and timings for the barrier wait, the provider calls and the selection.
 The supersession and tombstone stages come before the threshold and the
-cap (docs/DELETION_AND_SUPERSESSION.md), so a new statement competes for
-the slot a retired one held, and ``cap_bound`` and ``budget_bound`` keep
-their meaning.
+cap (docs/DELETION_AND_SUPERSESSION.md), so a dropped row never takes a
+cap slot, and ``cap_bound`` and ``budget_bound`` keep their meaning.
+With the shared fetch (``SHARED_FETCH_FACTOR`` x k rows: injection, and
+SDK search with ``sharing_policy`` "shared", for a resolved user), a new
+statement competes for the slot a retired one held while at most the
+fetch's surplus is dropped. An own-only search fetches k rows, so each
+row dropped after the provider's cut leaves it a row short.
 """
 import logging
 import time
@@ -128,9 +132,10 @@ class Selector:
         """Decide which memories an agent sees.
 
         Runs identity resolution, one barrier wait, own and shared
-        retrieval, the user-partition check, the visibility rule,
-        exact-content dedupe, the relevance threshold, the sort and the
-        count cap, in that order.
+        retrieval, the user-partition check, the visibility rule, the
+        supersession stage, the tombstone guard, exact-content dedupe,
+        the relevance threshold, the sort and the count cap, in that
+        order.
 
         Args:
             agent_name: The requesting agent.

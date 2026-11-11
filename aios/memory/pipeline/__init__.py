@@ -12,9 +12,12 @@ thin client of it, and so is each replicated agent
 ``PIPELINE_VERSION`` is a hash of this package's source, the value
 matcher it shares with the benchmark's scorer (``matching``) included,
 recorded on every trial, so two agents running different copies show as
-different versions. The package imports nothing but the standard
-library and the provider contract: no ``cerebrum`` module (a test greps
-for one); the caller passes the usage tag.
+different versions. No module of the package imports a ``cerebrum``
+module (a test scans each file), and the caller passes the usage tag.
+Importing the package still loads ``cerebrum.utils.usage``: its import
+of the provider contract runs ``aios/memory/providers/__init__.py``,
+which imports the Mem0 provider, and that imports it. So the SDK must
+be installed.
 """
 import hashlib
 from pathlib import Path

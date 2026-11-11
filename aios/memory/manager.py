@@ -170,11 +170,12 @@ class MemoryManager:
         # Whether a later statement retires the earlier rows of its
         # slot ("off" or "exclude"; docs/DELETION_AND_SUPERSESSION.md).
         self.supersession = _block.supersession
-        # The store's tombstones (memory.tombstones_path): one sidecar
-        # file, read on every call, so every per-request pipeline sees
-        # every forget. Not a pipeline setting: a replicated store keeps
-        # its own. Without a path they live in memory and a restart
-        # loses them; the v2 pre-flight refuses that.
+        # The kernel's tombstones (memory.tombstones_path): one sidecar
+        # file whichever provider the kernel runs, read on every call,
+        # so every per-request pipeline sees every forget. Not a
+        # pipeline setting: a replicated store keeps its own. Without a
+        # path they live in memory and a restart loses them; the v2
+        # pre-flight refuses that.
         path = memory_config.get("tombstones_path")
         self.tombstones_path = os.path.abspath(path) if path else None
         self.tombstones = TombstoneStore(self.tombstones_path)
@@ -598,21 +599,32 @@ class MemoryManager:
             )
 
         elif operation_type == "retrieve_memory_raw":
-            # The same selection as retrieve_memory, returned as notes.
+            # The same selection as retrieve_memory, returned as notes;
+            # a failure answers success false, as retrieve_memory's does
+            # (a failed fetch is never an empty store).
             from .note import MemoryNote
 
             sharing_policy = query.params.get("sharing_policy")
-            candidates, _ = self.retrieve_for_agent(
-                memory_syscall.agent_name,
-                query.params.get("user_id"),
-                query.params.get("content", ""),
-                k=query.params.get("k", 5),
-                include_shared=sharing_policy == "shared",
-                sharing_policy=sharing_policy,
-                barrier_snapshot=getattr(
-                    memory_syscall, "barrier_snapshot", 0
-                ),
-            )
+            try:
+                candidates, diagnostics = self.retrieve_for_agent(
+                    memory_syscall.agent_name,
+                    query.params.get("user_id"),
+                    query.params.get("content", ""),
+                    k=query.params.get("k", 5),
+                    include_shared=sharing_policy == "shared",
+                    sharing_policy=sharing_policy,
+                    barrier_snapshot=getattr(
+                        memory_syscall, "barrier_snapshot", 0
+                    ),
+                )
+            except Exception as e:
+                return self._failure(
+                    "retrieve_memory_raw", memory_syscall, e
+                )
+            if diagnostics["error"] is not None:
+                return MemoryResponse(
+                    success=False, error=diagnostics["error"]
+                )
             return [
                 MemoryNote(
                     content=row["content"],
@@ -628,7 +640,16 @@ class MemoryManager:
             ]
 
         else:
-            raise ValueError(f"Invalid operation: {operation_type}")
+            # Answered, not raised: the scheduler sets a syscall's event
+            # only when its handler returns.
+            logger.warning(
+                "address_request: invalid memory operation %r (agent=%s)",
+                operation_type, memory_syscall.agent_name,
+            )
+            return MemoryResponse(
+                success=False,
+                error=f"Invalid operation: {operation_type}",
+            )
     
     def _update_memory(self, memory_syscall) -> MemoryResponse:
         """Owner-only update (``MemoryPipeline.update``), stamped
@@ -750,8 +771,10 @@ class MemoryManager:
             len(rows),
             len(withheld),
         )
-        # A row that carries a forgotten value is never listed; its id is
-        # reported, so an audit counts it as a carrier (Amendment 4).
+        # A row that carries a forgotten value is never listed; its id
+        # is reported in ``metadata.withheld`` for the caller. The
+        # benchmark's audit reads the raw store instead (GET
+        # /memory/audit; Amendment 4, "The audit reads the store").
         return MemoryResponse(
             success=True, search_results=rows,
             metadata={"withheld": withheld},
