@@ -220,9 +220,11 @@ Each probe type is reported separately, as a pass rate with n and a
 
 - **Matching.** Text is casefolded, accents are stripped, and runs of
   whitespace and the punctuation `-` `_` `.` `/` collapse to one space.
-  A value or an alias matches when it appears with a non-alphanumeric
-  character, or the text's start or end, on each side. Only this exact
-  rule decides a pass. Values are distinctive names so that it
+  A value or an alias matches when neither side of it, after
+  normalization, is an ASCII letter or digit: each side is the text's
+  start or end or any other character (so a letter normalization
+  leaves non-ASCII counts as a boundary). Only this exact rule decides
+  a pass. Values are distinctive names so that it
   suffices.
 - **Semantic score, a diagnostic.** For each expected value, the
   pinned embedding model (`nomic-embed-text`) gives the best cosine
@@ -530,8 +532,11 @@ trial per user, trial *i* = user *i*, as v1 does. For each user:
   (see below);
 - for a kernel method, `auto_inject` on and `auto_extract` off
   (Amendment 3; before it, both on);
-- `supersession` `exclude`, or `off` under the `no_supersession`
-  control (Amendment 4).
+- for a kernel or replicated method, `supersession` `exclude`, or `off`
+  under the `no_supersession` control (Amendment 4; native runs no
+  supersession, so its setting is only recorded);
+- for a kernel method, a `tombstones_path` and, on Mem0, a
+  `history_db_path` that is set and not under `~/.mem0` (Amendment 4).
 
 Each value is recorded with the results.
 
@@ -551,8 +556,8 @@ Each value is recorded with the results.
 - `deleted_memory_ids`, `reappeared_memory_ids` and
   `revoked_value_rows`;
 - since Amendment 4, on the session records: each revoke's path and its
-  forget report, and each write's swept, retired and lifted ids; and
-  `retired_rows`.
+  forget report, and each write's swept and retired ids and lifted
+  values; and `retired_rows`.
 
 Three v1 summary fields stay unset in v2: `writer_stored_rows` is `{}`
 (each writer's stored rows are in `sessions[]`, from the listings),
@@ -588,8 +593,9 @@ into the top level:
   backend LLM calls. This replaces v1's "every writer creates", which
   a revoke would break. Since Amendment 4 two writes are excused: one
   the library suppressed, and one whose reply named rows that its own
-  session then removed, every one. A write whose reply named no row
-  never is (Amendment 4, "Corrected during the smoke").
+  session then removed, every one. Any other write whose reply named
+  no row never is (a suppressed write's names none; Amendment 4,
+  "Corrected during the smoke").
 
 A cell with a failed user is re-run whole under a new run id (known
 issue 36).
@@ -618,13 +624,14 @@ probe.
 - **Per-row diagnostics.** The injected-row entries carry the row's
   text, `fact_key`, `session` and `provenance_event` in every locus.
   `InjectionDiagnostics` keeps them and `barrier_waits`.
-- **Write barrier.** The kernel writes a probe's conversation in the
-  background, behind the write barrier. In the pilot, 3 of 90 kernel
-  Mem0 conversation writes took longer than the barrier's 5 s timeout,
-  so the next probe would have run without them, while replicated
-  writes synchronously. v2 kernel runs set
+- **Write barrier.** Before Amendment 3 the kernel wrote a probe's
+  conversation in the background, behind the write barrier. In the
+  pilot, 3 of 90 kernel Mem0 conversation writes took longer than the
+  barrier's 5 s timeout, so the next probe would have run without
+  them, while replicated writes synchronously. v2 kernel runs set
   `memory.write_barrier.timeout_ms` to 60,000, and every probe records
-  its barrier waits.
+  its barrier waits. Since Amendment 3 a probe writes nothing; the
+  timeout still bounds a retrieval's wait for the writers' writes.
 - Any edit to `aios/memory/pipeline/` changes `PIPELINE_VERSION`. Every
   kernel and replicated v2 trial records it. Native trials, which do
   not run the library, record None; their file records the kernel's
@@ -953,8 +960,15 @@ no budget does.
     in index order.
   - The contradiction slots, in catalog order, alternate the lean of
     their first user's question.
-  - So `users_v2` has 75 questions of each lean, `pilot_v2` 15, and
-    every slot is within one of half, in both.
+  - So every slot is within one of half, in both files.
+  - `users_v2` has 75 questions of each lean and `pilot_v2` 15, which
+    tests check. The alternation does not guarantee it; it holds
+    because each file's odd-count slots split evenly between the two
+    first leans: in `users_v2`, home_city (31) and offsite_city (21)
+    start earlier and manager (19) and one_on_one (19) later; in
+    `pilot_v2`, conference (3) starts earlier and one_on_one (3) later.
+    (`lean_start`'s docstring says more; it is left as is, so the
+    generator's hash still matches revision 3's header.)
   - The probe records its `lean` (`earlier` or `later`; the other
     probes record none).
 - **The word rule.** A question's content words are its words without
@@ -1030,7 +1044,11 @@ probe answer, the check also confirms that no probe is contaminated.
   - only the contradictions' statements changed (214).
 
   User 73's earlier manager statement reads "I am under Callum Reyes
-  and report to him.", the file's only third-person pronoun.
+  and report to him.", the only gendered pronoun in the file's
+  utterances and the only third-person pronoun among the 214 changed
+  statements (56 choir statements use "them" and 63 offsite statements
+  "its"). Other new wordings and a time cue are listed in
+  `DEV_STATUS.md`, known issue 41.
 - **Cross-checks.**
   - Both lean questions of every user lean as designed under Porter
     and Snowball stemming of the content words too (300 of 300 each).
@@ -1064,12 +1082,19 @@ bound in no kernel or replicated in-house probe.
   value or an alias, under the scorer's matcher). It records a
   tombstone first.
 - **The tombstone** suppresses a later re-write of the value by any
-  agent until the user states the fact again. No read returns a
-  carrier: not injection, SDK search, `get_memory` or `list_own`.
-- **Mem0's history.** The forget and the sweep scrub every stored
-  message and history record of the user that carries a form. Each
-  kernel and replicated Mem0 store keeps its history in a file of its
-  own.
+  agent until a new statement of the slot, as its writer labels it
+  (the slot's `fact_key`, the value or an alias, and an event other
+  than the forgotten statements'), states the value again. No read
+  returns a carrier: not injection, SDK search, `get_memory` or
+  `list_own`.
+- **Mem0's history.** The forget and the sweep delete every stored
+  message of the user that carries a form. They clear the text of
+  every history record of a row they delete and, in the records of the
+  user's other stored rows, the text that carries a form. A record of
+  a row deleted earlier by another path (an owner's delete) keeps its
+  text (`DELETION_AND_SUPERSESSION.md`, "What this does not show").
+  Each kernel and replicated Mem0 store keeps its history in a file of
+  its own.
 - **Native** revokes as before, by its own list and delete.
 
 **Supersession in kernel and replicated.** With `memory.supersession:
@@ -1080,7 +1105,9 @@ slot, whoever wrote them, and the selector never selects a marked row
 **The matcher moves to the library**
 (`aios/memory/pipeline/matching.py`). `probes.py` re-exports it, loaded
 from the AIOS checkout, so scoring is unchanged and the library runs the
-same code. The library imports no `cerebrum` module.
+same code. No module of the library imports a `cerebrum` module
+(importing it still loads `cerebrum.utils.usage`, through the providers
+package's Mem0 provider).
 
 **The audit reads the store.** The listings the audits read
 (`revoked_value_rows`, the reappearance check, `probe_writes`, the
@@ -1098,8 +1125,10 @@ value (above, "Metadata on every write").
 
 **Settings and pre-flight.** v2 runs set `memory.supersession:
 exclude` (`set_memory_mode.py --supersession exclude`). The pre-flight
-checks it per control (`off` under `no_supersession`) and records the
-kernel's Mem0 history path, which `/memory/config` reports.
+checks it per control for a kernel or replicated method (`off` under
+`no_supersession`). For a kernel method it requires a tombstone file
+and, on Mem0, records the history path `/memory/config` reports and
+refuses one that is missing or under `~/.mem0`.
 
 **Two more controls**, at H = 0 in the kernel and replicated cells on
 both backends:
@@ -1111,19 +1140,20 @@ both backends:
   setting from the kernel. Retired rows should return to the blocks.
 
 **Recorded**, each defaulted, so earlier files still load:
-- **per probe:** `after_supersession`, `superseded_rows`,
-  `after_tombstone`, `tombstoned_rows`, `tombstoned_forms`, and
-  `retired_in_block`, in every locus. The last is computed from the
-  dataset, not from the marks: the injected rows whose
-  `provenance_event` is an earlier statement of a fact that has a later
-  one.
+- **per probe:** in the kernel and replicated loci, the library's
+  selection stages `after_supersession`, `superseded_rows`,
+  `after_tombstone`, `tombstoned_rows` and `tombstoned_forms` (None in
+  native, which runs neither stage); in every locus,
+  `retired_in_block`. The last is computed from the dataset, not from
+  the marks: the injected rows whose `provenance_event` is an earlier
+  statement of a fact that has a later one.
 - **per revoke event:** `revoke_path` (`forget` or `owner`) and, for a
   forget, its ids by owner and reason, its value and form counts and
   its scrub counts. `deleted_ids` covers every owner's rows, so the
   reappearance check covers them too.
-- **per write event:** the ids it swept, retired and lifted,
-  `suppressed`, and `forgotten_ids` (the ids its reply named that its
-  own session removed). A suppressed write is not an extraction
+- **per write event:** the ids it swept and retired, the values it
+  lifted, `suppressed`, and `forgotten_ids` (the ids its reply named
+  that its own session removed). A suppressed write is not an extraction
   failure, nor is one whose session removed every row its reply named
   ("Corrected during the smoke").
 - **per user:** `revoked_value_rows` takes every statement of the
@@ -1159,8 +1189,10 @@ limit that matters, and it must still bind. This replaces Amendment
 3's "the functional check's budget criterion stands".
 
 **Not changed.** The scoring rules, the probes, the data (revision 3),
-the budget and the cap, the smoke's design, and native's writers and
-consumer.
+the budget and the cap, the smoke's design, native's consumer, and what
+native's writers do: they revoke by their own list and delete
+(`revoke_path` `owner`) and retire nothing. Their statements carry
+`value_aliases` too, which nothing in native reads.
 
 **Not covered.** Chroma keeps a deleted row's text in its write-ahead
 log until the log is purged (`DELETION_AND_SUPERSESSION.md`, "What
@@ -1170,9 +1202,10 @@ this does not show").
 - **The matcher is the library's.** The reviewed draft put it in the
   SDK. On review, before any commit, it moved to
   `aios/memory/pipeline/matching.py`, which `probes.py` loads from the
-  AIOS checkout by path. The library imports no `cerebrum` module, and
-  a test scans it for one; the usage tag that counts a provider's calls
-  to a user is passed in by the kernel and the replicated agents.
+  AIOS checkout by path. No module of the library imports a `cerebrum`
+  module, and a test scans each file for one; the usage tag that counts
+  a provider's calls to a user is passed in by the kernel and the
+  replicated agents.
 - **The audit reads the store**, as above. Added on review: the
   owner-only listings it read before now leave a carrier out.
 - **The writer chooses the forget.** The reviewed draft's kernel setting
@@ -1180,11 +1213,13 @@ this does not show").
   `writer_scoped` sets and every revoke records (`revoke_path`). The
   control needs no kernel of its own, and the check reads what each
   revoke did.
-- **The kernel's tombstone file** is `memory.tombstones_path`. Without
-  it tombstones are kept in memory, and the pre-flight refuses a kernel
-  method.
-- **Barrier sequences.** A forget or an update refused before the
-  library runs, and an add whose note cannot be built, release the
+- **The kernel's tombstone file** is `memory.tombstones_path`, one
+  file whichever provider the kernel runs. Without it tombstones are
+  kept in memory, and the pre-flight refuses a kernel that reports no
+  path.
+- **Barrier sequences.** A forget refused for a missing user or slot
+  (inside the library's barrier hold), an update refused before the
+  library runs, and an add whose note cannot be built release the
   sequence stamped when they were accepted.
 - **A forget's report** spells a value only as a row the caller may
   read spells it, and a restatement's `lifted` names the write's own
@@ -1206,9 +1241,9 @@ listing after the session then held no row of the write.
 - **The check.** A write whose reply named rows, every one of which
   its own session removed (a revoke's `deleted_ids` or a write's
   `swept_ids`), is no extraction failure, and its record names them
-  (`forgotten_ids`). A write whose reply named no row still fails, and
-  so does one whose named rows a later session removed or nothing
-  removed.
+  (`forgotten_ids`). A write whose reply named no row still fails,
+  unless the library suppressed it, and so does one whose named rows a
+  later session removed or nothing removed.
 - **What a fold costs.** A fold row also states its own fact, and the
   forget deletes it whole. In that cell the forgets deleted three
   folds: user 19's, in a filler's row, and the only rows of users 13's
@@ -1227,3 +1262,38 @@ whose target's rows the trial's forgets or sweeps all deleted is
 `target_forgotten`, not `not_in_block`, and the forget reading counts
 the revoking writer's rows it deleted by a value or an alias
 (`same_writer`).
+
+**Corrected in review** (2026-11-11, Subtask 15's adversarial review;
+AIOS `c814a5d`, Cerebrum `ec623ab`; `DEV_STATUS.md`, Subtask 15,
+"Review"). No recorded result changes: in `f15b` and `s15b` no write
+lifted, swept or was suppressed, every write's reply named rows, no
+retire came from a write that stored nothing, and no forget reported a
+row it did not delete; no run used `retrieve_memory_raw` or
+`--kernel-url`.
+- **A lift keeps the forgotten statements.** It deleted them with the
+  tombstone, so after a restatement and a second forget a replay of
+  the first forgotten statement lifted the new tombstone. Each slot's
+  forgotten statements are kept apart now, and a lift checks them all.
+- **Only a new statement lifts.** A statement without a
+  `provenance_event`, and an update with no event of its own, lifted a
+  tombstone; both are swept now.
+- **A write's own rows** are the rows that carry its note's id, not
+  the rows of its `provenance_event` or the one id the provider
+  returned. A Mem0 write that stored several rows could return a swept
+  row's id or be reported suppressed with a row still stored, and a
+  write that stored nothing could retire the slot's earlier rows when
+  another row carried its event.
+- **A failed read is not a missing row.** `Mem0Provider.get` read every
+  exception as "not found", so a forget could file a row it failed to
+  read under `not_found` and succeed. Only `IndexError`, Mem0's missing
+  id, reads as not found now, and a v2 writer fails a forget whose
+  report lists a row not found.
+- **Every branch answers.** The kernel's `retrieve_memory_raw` branch
+  (reached only through `add_agentic_memory`) caught nothing and
+  answered a failed fetch with an empty list, and an operation no branch
+  serves raised; both answer `success` false now.
+- **The driver checks every kernel log of a phase**, earlier launches'
+  included, also for a phase a resumed launch finds finished, and it
+  requires `RUN_PREFIX`.
+- **One kernel.** A v2 run refuses a `--kernel-url` other than the
+  configured kernel, which its agents, the audit and the judge use.

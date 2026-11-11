@@ -15,7 +15,8 @@
 # through set_memory_mode.py; a probe writes nothing (Amendment 3: the
 # kernel's auto_extract is off, the agents skip their probe writes);
 # supersession is exclude, off in the _ns phases (Amendment 4); the
-# harness's pre-flight refuses any other setting.
+# harness's pre-flight refuses any other setting (supersession only in
+# kernel and replicated cells: native runs none).
 #
 #   MODE=functional: pilot_v2 users 0-4, no judge, conditions h0, h2
 #     (the seeded cycle) and the controls no_memory (kernel in-house

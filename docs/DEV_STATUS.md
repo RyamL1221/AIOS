@@ -1627,19 +1627,25 @@ Step 0 settles two items before the deletion and supersession work.
   filters by metadata only (partition, visibility). Its threshold and
   budget steps run only when set, and only the H = 2 V4 consumer sets
   them. Two new tests pin this (Cerebrum
-  `tests/agents/test_native_conditions.py`): for any rows, scores and k,
-  the reference consumer keeps the rows it may see, in the backend's
-  order, cut at k by position; and the native Mem0 block follows
-  Mem0's order and records its scores as returned. Both fail if the
-  consumer sorts by score or applies Mem0's 0.1 threshold. No consumer
-  change was needed, so nothing was re-run.
+  `tests/agents/test_native_conditions.py`): for generated rows, scores
+  and k, the consumer's selection (`_select`) keeps the rows it may
+  see, in the backend's order, cut at k by position; and the native
+  Mem0 block follows Mem0's order and records its scores as returned.
+  Both fail if `_select` sorts by score or applies Mem0's 0.1
+  threshold; the first calls `_select` alone, so a sort or that
+  threshold in `NativeMemory._search` fails only the second. No
+  consumer change was needed, so nothing was re-run.
   - **Evidence** (`NATIVE_USAGE.md`, "Evidence"). Cerebrum
     `results/native_mem0_ranking/replay.py` (`7d4224a`) replays the
     smoke's (`s14b`) native Mem0 searches with Mem0's own `search` and
     the consumer's own selection, on a copy of the cell's store as it
     stood at each probe. It reproduced all 90 recorded fetches (the
-    recall, recency and contradiction probes of 30 users), with the
-    same rows, order and scores. Every row's score was its squared L2
+    recall, recency and contradiction probes of 30 users): the row
+    count, and the rows the block showed, in the same order with the
+    same scores. In 42 of them the sharing rule hid one row, which the
+    record gives only as a count: the user's one private row, whose
+    place in the fetch and score come from the replay. Every row's
+    score was its squared L2
     distance to the question capped at 1.0, so the rows at cosine 0.5
     or below come first, and those above follow, least similar first.
   - The recall target was the user's nearest row by cosine for 26 of
@@ -1694,8 +1700,8 @@ Step 0 settles two items before the deletion and supersession work.
       Both lean questions of every user lean as designed under the rule
       and under Porter and Snowball stemming (300 of 300 each); counting
       every word, 141 of the 150 asked questions lean as assigned and 9
-      tie. One quirk: user 73's earlier manager statement, "I am under
-      Callum Reyes and report to him." (known issue 41).
+      tie. Some new paraphrases read awkwardly, and 18 home_city
+      earlier statements gained "currently" (known issue 41).
   - **Open decisions 2 and 3 are resolved**, as (b) and (a), by this
     amendment.
   - **Functional check under Amendment 3** (`f15a`; Cerebrum
@@ -1741,21 +1747,23 @@ Step 0 settles two items before the deletion and supersession work.
       (59), recall 47 (47), recency 15 (21) and contradiction 23 (23).
       The data and settings differ, so the runs are not paired, and no
       cause of the recency difference is established.
-  - **Reviews.** None yet: rule 6 gives Subtask 15 one review and one
-    verification pass, which will cover step 0 with the rest, and one
-    mutation run on the final code.
+  - **Reviews.** Reviewed with step 1 (step 1, "Review").
 - **Step 1: complete deletion and supersession**
   (`DELETION_AND_SUPERSESSION.md`; `BENCHMARK_V2.md`, Amendment 4).
   - **Reviews of the design.** The spec was reviewed before any code,
     and its decisions were settled on 2026-11-10 (open decisions 4 and
-    5), with one change to its proposals: carriers are matched with
-    the scorer's own matcher, aliases included. A second review, before
-    the first commit, made three more changes:
+    5), with two changes to its proposals: carriers are matched with
+    the scorer's own matcher, aliases included, and the budget gets no
+    criterion (its binding is reported, not required, in the check and
+    the smoke; the writer-only replay was dropped). A second review,
+    before the first commit, made three more changes:
     - the matcher moved into the library
       (`aios/memory/pipeline/matching.py`; Cerebrum's `probes.py` loads
       it by path);
-    - the library imports no `cerebrum` module (a test scans it; the
-      usage tag is passed in);
+    - no module of the library imports `cerebrum` (a test scans each
+      file; the usage tag is passed in; importing the library still
+      loads `cerebrum.utils.usage`, through the providers package's
+      Mem0 provider);
     - the audits read the raw store, not the owner-only listings the
       read guard now filters.
   - **Code** (AIOS `a610dcd`, `9b3e1db`, `210aa58`; Cerebrum `059e5a5`):
@@ -1796,8 +1804,8 @@ Step 0 settles two items before the deletion and supersession work.
   - **Tests:** AIOS 606 passed and the 14 errors (136 new); Cerebrum
     1050 passed, 4 skipped, the same 19 failures and 2 errors, by name.
     The test agents checked their tests against mutants of the rules
-    they pin; the subtask's mutation run, on the final code, is still
-    due (rule 6), as are its review and verification passes.
+    they pin; the subtask's review, its verification pass and the
+    mutation run on the final code follow ("Review", below).
   - **Functional check under Amendment 4** (`f15b`; Cerebrum
     `results/bench_v2_functional_a4/`, `5b3295e`): `pilot_v2` users 0
     to 4, Qwen, no judge, 29 cells (Subtask 14's 21, plus
@@ -1807,9 +1815,14 @@ Step 0 settles two items before the deletion and supersession work.
     phase's log shows a stored conversation turn or a guard warning,
     and the agent phases made no kernel memory operation. 0 of the 725
     judge-free probes are contaminated, and no block held a probe
-    answer. The first launch was stopped in its first agent cell, which
-    wrote nothing, before the Mac slept; the rest ran under a new run
-    prefix (known issue 36; the results' `PROVENANCE.md`).
+    answer. The first launch's first agent cell (replicated Mem0,
+    H = 0) was to be stopped before the Mac slept, but it ran on
+    through the sleep's dark wakes and was stopped at 17:28:39, after
+    the wake, while it wrote its fifth user. It wrote no results file,
+    but its store (`.replicated_memory/f15b`) keeps 89 rows of its 5
+    users, 4 tombstones, 99 history records and 67 messages, so that
+    cell and the rest ran again under a new run prefix, `f15b2` (known
+    issue 36; the results' `PROVENANCE.md`).
     - **Every criterion holds.** Amendment 4's, at H = 0 in the kernel
       and replicated cells on both backends:
       - all 20 deletion probes passed, no audit kept a carrier
@@ -1818,8 +1831,12 @@ Step 0 settles two items before the deletion and supersession work.
         writer's row by `fact_key` for every user, and for users 0 and
         4 another agent's echo, by value;
       - `writer_scoped` failed 6 of its 8 echo-user deletion probes:
-        users 0 and 4 in-house, user 4 on Mem0 (user 0's Mem0 echo
-        rows stayed in the store but out of its block);
+        users 0 and 4 in-house, user 4 on Mem0. User 0's Mem0 echo rows
+        stayed in the store and out of the deletion probe's block, but
+        reached its privacy, contradiction and integration blocks in
+        both loci, and replicated's privacy answer named Mattermost (a
+        pass: its forbidden value is another). The value showed in all
+        8 echo-user trials (known issue 43);
       - every earlier statement's row was marked (10 of 10 per cell),
         and no block held one (0 of 120 probes); `no_supersession`
         marked none and put one in 109 of its 120 probes;
@@ -1842,8 +1859,9 @@ Step 0 settles two items before the deletion and supersession work.
       replicated in-house block was 296 estimated tokens) and in 10
       Mem0 probes, 5 per locus: 6 recency, 2 integration, 1 deletion
       and 1 recall (`f15a`: 3). Reported, not required (Amendment 4).
-    - **Against `f15a`** (step 0's code; the same data, users and
-      settings), the real-condition passes are deletion 57 (46),
+    - **Against `f15a`** (step 0's code, which had no supersession;
+      the same data, users and other settings), the real-condition
+      passes are deletion 57 (46),
       privacy 59 (59), recall 47 (47), recency 34 (15) and
       contradiction 38 (23). With supersession off, the in-house cells
       repeat `f15a`'s H = 0 rates in both loci (recency 1 of 5,
@@ -1853,7 +1871,10 @@ Step 0 settles two items before the deletion and supersession work.
       repeat `f15a` (kernel recency 4 of 5, `f15a` 1 of 5): Mem0's
       extraction varies between runs (known issue 42).
     - **What supersession leaves**, as `DELETION_AND_SUPERSESSION.md`
-      says it would. At H = 0 no in-house block held a stale value.
+      says it would. At H = 0, with supersession on, no kernel or
+      replicated in-house block held a stale value; native in-house's
+      held one in all 30 of its recency and contradiction probes, and
+      the in-house `no_supersession` cells' in all 20.
       Kernel Mem0 failed 2 recency probes (users 1 and 2) through the
       new statement's own row, which Mem0's extraction wrote as a
       transition ("relocated to Kaunas from Utrecht"); both answers
@@ -1871,11 +1892,12 @@ Step 0 settles two items before the deletion and supersession work.
       partition"). The kernel folds the domain into the canonical id
       and marks the row.
     - **UTC dates** (known issue 42): the run crossed 00:00 UTC. The
-      kernel Mem0 cells and the agent phase's Mem0 cells through
-      `no_visibility` ran on 2026-11-10 UTC, `writer_scoped`
-      replicated Mem0's users 0 to 2 on 2026-11-10 and users 3 and 4
-      on 2026-11-11, and both `no_supersession` Mem0 cells on
-      2026-11-11.
+      kernel Mem0 cells other than `no_supersession` (H = 0, H = 2,
+      `no_delete` and `writer_scoped`) and the agent phase's Mem0
+      cells through `no_visibility` ran on 2026-11-10 UTC,
+      `writer_scoped` replicated Mem0's users 0 to 2 on 2026-11-10 and
+      users 3 and 4 on 2026-11-11, and both `no_supersession` Mem0
+      cells (kernel and replicated) on 2026-11-11.
   - **Smoke, first attempt** (`s15`; Cerebrum `5b3295e`, AIOS
     `52bf922`; started 2026-11-10 19:52 EST). Its first cell, kernel
     Mem0 at H = 0, ran its 30 users, and the driver stopped on one
@@ -1938,12 +1960,18 @@ Step 0 settles two items before the deletion and supersession work.
       user's recall target and its only row, so both users failed
       recall (the analysis's `target_forgotten`); these are the only
       recall failures outside native Mem0. User 19's fold, deleted in
-      the first attempt, did not recur.
+      the first attempt, did not recur in kernel or replicated Mem0.
+      Native Mem0 kept three folds: users 13's and 19's (the codename
+      in the same write's row, `u019-e08`, as in the first attempt's
+      kernel cell), through which their deletion probes failed, and
+      user 25's, which the deletion probe's fetch missed.
     - **What supersession leaves** (as in `f15b`): every Mem0 recency
       failure (8 kernel, 7 replicated) came through the target's own
       row, which Mem0 wrote as a transition ("moved from Ryver to
       Brosix"). Each answer named the new value, and 14 of the 15 named
-      the old one as past. No in-house block held a stale value.
+      the old one as past. No kernel or replicated in-house block held
+      a stale value (native in-house's held one in all 60 of its
+      recency and contradiction probes).
     - **Kernel against replicated:** the in-house blocks are identical
       in 180 of 180 probes; on Mem0, 1 of the 150 paired judge-free
       outcomes differs (user 8's recency; known issue 42).
@@ -1954,6 +1982,18 @@ Step 0 settles two items before the deletion and supersession work.
       a retired row reached 168 of 180 in-house and 131 Mem0 probe
       blocks, and Mem0's ranking kept most targets out of its fetch
       (recall 5 of 30, as in `s14b`; step 0, A).
+    - **Contradiction by the question's lean** (known issue 44; joined
+      from `users_v2` by `probe_id`, since the results do not record
+      `lean`). Kernel and replicated passed 15 of 15 of each lean on
+      both backends, with no stale row in any block; native Mem0
+      passed none of either, the new value in no block. Native
+      in-house, with both values in all 30 blocks, passed 13 of 15
+      later-leaning questions and 5 of 15 earlier-leaning ones (lenient
+      14 and 6); outside home_city, 12 of 12 and 4 of 12, and home_city
+      1 of 3 each. The row of the statement the question leans to also
+      came first and scored higher in 29 of 30 of those blocks, so the
+      smoke tells the lean from the slot but not from the rank. n = 15
+      per lean, between users.
     - **Against `s14b`** (revision 2, budget 500, no forget or
       supersession), the kernel and replicated cells' passes rose from
       deletion 22 to 30 per cell on Mem0 and 21 to 30 in-house, recency
@@ -1967,8 +2007,91 @@ Step 0 settles two items before the deletion and supersession work.
       `0995994`): a failure whose target's rows the trial's forgets or
       sweeps all deleted is `target_forgotten`, no longer
       `not_in_block`, and the forget reading counts `same_writer` rows.
-  - **Next:** the subtask's review and verification pass and its
-    mutation run (rule 6), then the tag.
+  - **Review** (rule 6; the code and the write-up of steps 0 and 1).
+    Eight scoped reviewers, each finding checked by an adversarial
+    verifier: 78 findings, none refuted (13 errors, 53 imprecisions, 12
+    style). The numbers the corrections quote were then re-derived
+    from the raw results, the dataset and the logs.
+    - **Code fixes** (AIOS `c814a5d`, Cerebrum `ec623ab`), each with a
+      test that fails without it. None changes a recorded result: in
+      `f15b` and `s15b` no write lifted, swept or was suppressed (5,724
+      writes), every write's reply named rows, no retire came from a
+      write that stored nothing (398), and no forget reported a row it
+      did not delete (320 revokes); no run used `retrieve_memory_raw`
+      or `--kernel-url`, and the one kernel log the old driver never
+      checked (`f15b`'s first agent phase) has no memory operation.
+      - a lift deleted the slot's forgotten statements with its
+        tombstone, so after a restatement and a second forget a replay
+        of the first forgotten statement lifted the new tombstone; they
+        are now kept apart, per slot;
+      - a statement without a `provenance_event`, and an update with
+        no event of its own (it used the stored row's), lifted a
+        tombstone; neither does now;
+      - a write's own rows were those of its `provenance_event`, or the
+        one id the provider returned: a Mem0 write that stored several
+        rows could return a swept row's id, or be reported suppressed
+        with a row still stored, and a write that stored nothing
+        retired the slot's rows when another row carried its event.
+        They are now the rows that carry its note's id;
+      - `Mem0Provider.get` read every exception as a missing row, so a
+        forget filed a row it failed to read under `not_found` and
+        succeeded. Only `IndexError` (Mem0's missing id) is "not found"
+        now, and a v2 writer fails a forget whose report lists one;
+      - the kernel's `retrieve_memory_raw` branch caught nothing (an
+        error left its syscall unanswered) and answered a failed fetch
+        with an empty list, and an operation no branch serves raised;
+        both answer `success` false now;
+      - the driver's end-of-phase checks read only its own launch's
+        kernel log, so a resumed phase's earlier logs, and a phase
+        found finished, went unchecked; it reads every kernel log of
+        the phase now, and requires `RUN_PREFIX`;
+      - a v2 run with `--kernel-url` naming another kernel ran the
+        pre-flight on that one, while its agents used the configured
+        one; it refuses now;
+      - the analysis printed an integration mean of a whole number as
+        an integer (the smoke's analysis is regenerated: native Mem0's
+        3 prints as 3.00).
+
+      Two tests now pin the supersession stage before dedupe and the
+      threshold, which the cap and budget readings depend on.
+    - **The write-up**, corrected in place:
+      - `f15b`'s stopped cell wrote rows, and was stopped after the
+        Mac woke, not before it slept;
+      - the smoke's dates (Mem0 also wrote "as of November 2026",
+        "2026" and "December 2026"; four privacy answers dated
+        made-up events);
+      - native Mem0's third fold, the in-house stale-value statements
+        (kernel and replicated only), user 0's echo exposure under
+        `writer_scoped`, the pre-flight's recorded paths;
+      - `lifted` holds values, not ids; the tombstone file is one per
+        kernel, whichever provider runs; known issue 36 names the
+        kernel's stores and the tombstones; the library's no-`cerebrum`
+        claim is about its files (importing it loads
+        `cerebrum.utils.usage`); the matcher's boundary is ASCII; Mem0's
+        scrub covers the rows the forget and the sweep are given;
+      - the restatement rule (a new statement as its writer labels it,
+        not the user as such), the supersession rule (the latest write
+        wins), a private later statement, and an own-only search's
+        room;
+      - revision 3's wordings (four new ones and the time cue
+        "currently"; known issue 41), the pronoun claim, the lean
+        balance (true of these files, not guaranteed), the lean split,
+        now reported (known issue 44);
+      - the native ranking evidence (what the replay compared, the
+        unit-vector bound, what each consumer test catches);
+      - open decision 4's label, and the SDK catalog in the local
+        steering (`sdk-and-api.md`, gitignored).
+
+      `synth_v2.py`'s `lean_start` docstring overstates the balance
+      but is left: editing it would break the match between the
+      generator's SHA-256 and revision 3's header.
+    - **Not decided here** (the user's call): a forget deletes a Mem0
+      fold row whole, so the row's own fact goes with it (the smoke's
+      users 13 and 25 lost their recall targets). Rewriting the row
+      without the forgotten value would keep that fact, at the cost of
+      a write the forget makes on another agent's behalf.
+  - **Next:** the verification pass of the review's fixes and the
+    mutation run on the final code (rule 6), then the tag.
 
 ## Open decisions
 
@@ -1991,18 +2114,24 @@ Step 0 settles two items before the deletion and supersession work.
 3. **Contradiction wording** (known issue 44). Resolved in Subtask 15:
    (a), revision 3 of `users_v2` (Amendment 3).
 4. **The v2 budget** (Subtask 15, `f15a`). Resolved on review
-   (2026-11-10): (a), 300 kept, and its binding is reported, not
-   required, in the functional check and the smoke ("cap binds; budget
-   binding is reported, not required"; Amendment 4). If it never binds
-   in the smoke, that is a finding about v2's row sizes. The analysis
-   that led to it is in this file's history (AIOS `cf7c42f`).
+   (2026-11-10): 300 kept, but not as option (a), which moved the
+   budget criterion to the smoke after a writer-only replay: there is
+   no budget criterion in the functional check or the smoke (its
+   binding is reported, not required: "cap binds; budget binding is
+   reported, not required"; Amendment 4), and the replay was not run.
+   It bound in the smoke (`s15b`): in 3 integration probes per
+   in-house cell and in 5 probes per Mem0 cell of the kernel and
+   replicated loci (known issue 39). The analysis that led to it is in
+   this file's history (AIOS `cf7c42f`).
 5. **Deletion and supersession** (Subtask 15, step 1). Resolved on
    review (2026-11-10): `DELETION_AND_SUPERSESSION.md`, "Decisions".
    Every proposal was taken except matching, which uses the scorer's
    own matcher with aliases, so that whatever counts as exposure is
-   what revocation removes. Added on review: a tombstone suppresses a
-   later re-write of the value by any agent until the user states it
-   again, and no read path returns a tombstoned row.
+   what revocation removes, and the budget (open decision 4). Added on
+   review: a tombstone suppresses a later re-write of the value by any
+   agent until the user states it again (a new statement of the slot,
+   as its writer labels it: `DELETION_AND_SUPERSESSION.md`, "A
+   restatement lifts it"), and no read path returns a tombstoned row.
 
 ## Test baselines
 
@@ -2037,7 +2166,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   AIOS 606 passed, the 14 errors; Cerebrum 1050 passed, 4 skipped, the
   same 19 failures and 2 errors, by name) and its smoke's fixes
   (Cerebrum `64da5f7`: 1056 passed; `0995994`: 1062 passed; 4 skipped,
-  the same 19 failures and 2 errors, by name; AIOS unchanged).
+  the same 19 failures and 2 errors, by name; AIOS unchanged) and the
+  review's fixes (AIOS `c814a5d`, Cerebrum `ec623ab`: AIOS 632 passed,
+  the 14 errors; Cerebrum 1064 passed, 4 skipped, the same 19 failures
+  and 2 errors, by name).
   The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
@@ -2181,9 +2313,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
     in that session deleted: the smoke's first attempt (`s15`), kernel
     Mem0, user 19 (`u019-e08`, a fold of the revoked codename; known
     issue 38). It now excuses a write whose reply named rows that its
-    own session removed, every one; a write whose reply named no row
-    still fails. Any other caller of Mem0, including the kernel's own
-    conversation writes, still gets an empty result with no error.
+    own session removed, every one, and a suppressed write; any other
+    write whose reply named no row still fails. Any other caller of
+    Mem0, including the kernel's own conversation writes, still gets an
+    empty result with no error.
 33. Two Subtask 10 native Mem0 H0 runs were excluded: one was cut off
     by a laptop shutdown, the other ran from a network Azure refused.
     Both are in `repo-artifacts/Cerebrum/heterogeneity_check_interrupted/`.
@@ -2199,17 +2332,31 @@ These fail on `workshop-postrun` too and are not caused by later work.
 35. `test_summary_props.py::test_kernel_shared_delta_is_zero` sometimes
     hits Hypothesis's deadline (timing, not logic); it is the flaky test
     that makes the Cerebrum failure count 19 or 20.
-36. Nothing resets the native and replicated stores
-    (`.native_memory/<prefix>`, `.replicated_memory/<prefix>`) between
-    runs. Isolation rests on run ids in user ids, so re-running a cell
-    under the same run id sees the earlier attempt's rows. Give a
-    re-run its own run id (as Subtask 11 did) or a fresh store.
+36. Nothing resets the memory stores between runs. The kernel keeps
+    one set for every run and prefix: its Chroma stores
+    (`.mem0/chroma`, `.aios_state/chroma_inhouse`), its tombstones
+    (`memory.tombstones_path`, `.aios_state/tombstones.sqlite`) and its
+    Mem0 history (`.mem0/history.db`). The native and replicated stores
+    are one per run prefix (`.native_memory/<prefix>`,
+    `.replicated_memory/<prefix>`, each replicated backend with its own
+    `tombstones.sqlite` and Mem0 `history.db`). Isolation rests on run
+    ids in user ids, so re-running a cell under the same run id sees
+    the earlier attempt's rows and, since Subtask 15 step 1, its
+    tombstones: the re-run's statement of a fact the earlier attempt
+    forgot replays a forgotten event, so the sweep deletes it and every
+    echo of the value as soon as they are written, and its deletion
+    probe passes without testing the forget (only the forgets reading
+    shows it: `suppressed` and `swept` are 0 in a clean cell). Give a
+    re-run its own run id (as Subtask 11 and `f15b2` and `s15b` did);
+    the driver now requires `RUN_PREFIX`. For a kernel cell a fresh
+    store is not enough: the tombstone file is outside it.
 37. Every v2 user has one probe of each type, so a cell's per-probe
     rate rests on n = 30 users in the smoke and 5 in the functional
     check. Report Wilson intervals and compare cells paired over users.
 38. Fixed in Subtask 15, step 1, for the kernel and replicated loci
-    (AIOS `a610dcd`): a revoke there is a forget, which deletes every
-    carrier of the value, of any agent, folds included; in `f15b` no
+    (AIOS `a610dcd`, Cerebrum `059e5a5`): a revoke there is a forget,
+    which deletes every carrier of the value, of any agent, folds
+    included; in `f15b` no
     audit at H = 0 kept one. `f15b`'s forgets deleted no fold (each
     cell's value deletions were users 0 and 4's echoes). The smoke's
     first attempt (`s15`, kernel Mem0) deleted the folds of users 13,
@@ -2219,7 +2366,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
     before the revoke in its session, which the extraction check then
     misread (known issue 32). The smoke (`s15b`) deleted the folds of
     users 13 and 25 in kernel and replicated Mem0, at the same cost;
-    user 19's did not recur. Native deletion stays writer-scoped
+    user 19's did not recur there. Native Mem0 kept all three folds
+    (users 13, 19 and 25): 13's and 19's failed deletion through the
+    fold (19's in `u019-e08`), and 25's fetch missed its fold. Native
+    deletion stays writer-scoped
     (`DELETION_AND_SUPERSESSION.md`, Decision 4). There, under the
     `writer_scoped` control, and in every locus before step 1, a
     revoke leaves in place:
@@ -2292,9 +2442,32 @@ These fail on `workshop-postrun` too and are not caused by later work.
     Revision 3 keeps these, except the contradictions' earlier
     teammate statements, whose template changed (users 8, 17, 20 and
     26 now read "I pair with … each day" or "I work on this project
-    with … each day as a pair"). It adds one: user 73's earlier manager
-    statement reads "I am under Callum Reyes and report to him.", the
-    file's only third-person pronoun.
+    with … each day as a pair"). It adds others, none of them in
+    revision 2, all in contradiction statements: 20 of the 31 home_city
+    later statements read "My location is based in X." (10 per lean;
+    `pilot_v2` users 7, 10, 13 and 16); six home_city earlier statements
+    read "My home is where I live, in X." (user 133's without the comma;
+    `pilot_v2` user 13) and three "My home is in X, where I live."
+    (users 16, 37 and 103); two client earlier statements read "We're
+    creating and building this project for X." (users 23 and 116); and
+    user 73's earlier manager statement reads "I am under Callum Reyes
+    and report to him.", the only gendered pronoun in the file's
+    utterances and the only third-person pronoun among the 214
+    statements revision 3 changed (56 choir statements use "them" and
+    63 offsite statements "its").
+    - 18 of the 31 home_city earlier statements read "I currently live
+      in X." (revision 2: "My home is in X."), the only time word any
+      contradiction statement adds to its template; neither the lean
+      rule nor `LEAN_MEANING` sees it. `users_v2` has 9 per lean;
+      `pilot_v2` has 1 earlier-leaning (user 4) and 2 later-leaning
+      (users 7 and 22). In `s15b` native in-house, whose blocks held
+      both values, all three failed and their answers repeat
+      "currently"; users 7 and 22 are that cell's only later-leaning
+      failures. In `f15b`'s `no_supersession` cells user 4's stale row
+      came first in all four kernel and replicated blocks; three passed
+      ("You currently live in Dunedin") and replicated Mem0 named both
+      values. A later revision should reject a time word a statement's
+      template lacks.
 42. Mem0's extraction (gpt-4o) changes what is stored from run to run:
     - Its prompt holds the current UTC date, which it writes into facts
       ("relocated to bittern-06 on November 9, 2026"). `f14b`'s
@@ -2325,8 +2498,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
       lawyer. Under `no_visibility`, native Mem0 had it in some block
       for 5 of 5 users, while its privacy probe failed for 1. No kernel
       or replicated block held a private value.
-    - Deletion, for echo users in every locus: the echo row survives
-      the revoke (known issue 38). At H = 0 and 2, 7 of the 11
+    - Deletion, for echo users wherever a revoke is writer-scoped
+      (native, the `writer_scoped` control, and every locus before
+      Subtask 15 step 1): the echo row survives the revoke (known
+      issue 38). In `f14c`, at H = 0 and 2, 7 of the 11
       echo-user deletion passes had it in a later block (kernel and
       replicated 4 of 6, native 3 of 5); the other 4 are H = 2 user 0's
       V2 consumer, whose blocks held no writer row. In kernel Mem0 at
@@ -2336,10 +2511,15 @@ These fail on `workshop-postrun` too and are not caused by later work.
       later answers named its value for 3 of them (6 answers).
     Report trial-level exposure (the value in any block or answer) next
     to the per-probe rate, for deletion and privacy, in every cell;
-    `bench_v2_analysis.py` does since the smoke. In the smoke no private
-    value showed anywhere, and deletion passes hid the value in kernel
-    and replicated Mem0 3 of 22, native in-house 2 of 22 and native Mem0
-    8 of 28 times (7 echo users, and user 25 through a fold).
+    `bench_v2_analysis.py` does since the smoke `s14b`. In `s14b` no
+    private value showed anywhere, and deletion passes hid the value in
+    kernel and replicated Mem0 3 of 22, native in-house 2 of 22 and
+    native Mem0 8 of 28 times (7 echo users, and user 25 through a
+    fold). In `s15b` no private value showed either, no kernel or
+    replicated deletion trial was exposed (0 of 30 per cell), and
+    passes hid the value in native in-house 1 of 21 and native Mem0 7
+    of 26 times (Cerebrum `results/bench_v2_smoke_a4/analysis.md`,
+    "Trial-level exposure").
 44. Contradictions whose question repeats the stale statement's words
     favor the stale value. The manager add says "I report to {value}",
     the contradiction "My manager is {value}", and the question is "Who
@@ -2379,8 +2559,17 @@ These fail on `workshop-postrun` too and are not caused by later work.
     neither statement (open decision 3).
     Addressed by revision 3 (Amendment 3), in another way: each slot
     asks a question that leans to each statement, half of each, so the
-    lean can be measured rather than avoided. Only the smoke's 30 users
-    can separate it from the slot (Subtask 15, `f15a`).
+    lean can be measured rather than avoided. In the smoke (`s15b`) only
+    native in-house can show it: supersession kept every stale row out
+    of the kernel and replicated blocks (each passed 15 of 15 of each
+    lean), and native Mem0's later value reached no block. Native
+    in-house, with both values in all 30 blocks, passed 13 of 15
+    later-leaning questions and 5 of 15 earlier-leaning ones (lenient
+    14 and 6); the later lean passed more often in 6 of the 7 slots,
+    and home_city tied, 1 of 3 each (known issue 41: its "currently").
+    The leaned-to row also came first in 29 of the 30 blocks, so the
+    lean is not told from the rank (Subtask 15, "Smoke"). The results
+    do not record `lean`: the split joins `users_v2` by `probe_id`.
 45. Fixed in Subtask 15 (Amendment 3; Cerebrum `4ac61fe`, AIOS
     `ea1a309`): probes write nothing, and in `f15a` no block held a
     probe answer (0 of 525 probes contaminated). The record follows.

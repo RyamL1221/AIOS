@@ -296,7 +296,9 @@ Mem0's own order put each probe's relevant row below rows less similar
 to the question.
 
 **The consumer** keeps Mem0's order and acts on no score (Cerebrum
-`cerebrum/example/agents/native/agents.py`):
+`cerebrum/example/agents/native/agents.py`; the line numbers are those
+at `7d4224a`, whose file is the one `s14b` ran, at
+`neurips-subtask-14`; Amendment 3 later added lines above them):
 - It asks Mem0 for k rows and keeps them in Mem0's order, each with its
   score (lines 196-211):
 
@@ -316,11 +318,15 @@ to the question.
   (`variants/v4_tuned_consumer.py`, `HETEROGENEITY.md`). No H = 0 cell
   and no control sets one.
 - Two tests pin this (Cerebrum `tests/agents/test_native_conditions.py`).
-  `test_the_reference_consumer_keeps_the_backends_order` takes any rows,
-  scores and k: the consumer keeps the rows it may see, in the backend's
-  order, cut at k by position. `test_the_native_mem0_block_follows_mem0s_order`
-  checks the block and the recorded scores. Both fail if the consumer
-  sorts by score or applies Mem0's 0.1 threshold itself.
+  `test_the_reference_consumer_keeps_the_backends_order` calls the
+  consumer's `_select` alone, on generated rows (up to 15, scores None
+  or from 0 to 1, k from 1 to 12): it keeps the rows it may see, in the
+  given order, cut at k by position.
+  `test_the_native_mem0_block_follows_mem0s_order` runs the whole path,
+  from `NativeMemory.search` on a fake Mem0 to the block and the
+  recorded scores. A sort by score or Mem0's 0.1 threshold in `_select`
+  fails both; in `NativeMemory._search`, it fails only the block
+  test.
 
 **Mem0's search**, as installed (`mem0ai` 2.0.2):
 - `Memory.search(query, *, top_k=20, filters=None, threshold=0.1, ...)`
@@ -342,8 +348,9 @@ to the question.
   `max_possible` 1.0 here), sorts highest first (line 120) and returns
   the first `top_k` (line 121).
 
-Ollama's embeddings are unit vectors: on every replayed row, the squared
-distance equals 2 - 2 x cosine within 1e-6. So a row's Mem0 score is
+Ollama's embeddings are unit vectors: on every replayed row (2,425 over
+the 90 probes), the squared distance equals 2 - 2 x cosine within
+1.1e-6 (the largest gap is 1.008e-6). So a row's Mem0 score is
 min(2 - 2 x cosine, 1):
 - every row at cosine 0.5 or below scores 1.0, and those rows come
   first, nearest first (the sort is stable, and Chroma returns rows
@@ -364,8 +371,12 @@ at a probe is the final store without the rows written by that probe
 and the later ones. Those are their conversation rows, which carry the
 probe id as `provenance_event`.
 - It replayed the recall, recency and contradiction probes of all 30
-  users and reproduced the recorded fetch every time (90 of 90: the
-  rows, their order and their scores).
+  users and reproduced every recorded fetch (90 of 90): the row count,
+  and the rows the block showed, in order and with their scores. In 42
+  fetches the sharing rule hid one row, which the record gives only as
+  a count. It is always the user's one private row (the only row of
+  the user the assistant may not see), but its place in the fetch and
+  its score are the replay's, not compared with a record.
 - Every row's score was min(squared distance, 1). No row was near
   enough for the threshold to drop it.
 - `replay.json` and `summary.md` are in the same folder.

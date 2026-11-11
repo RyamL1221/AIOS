@@ -1,5 +1,7 @@
-"""Set memory.provider, memory.auto_inject and memory.auto_extract in a
-config.yaml in place, keeping every other byte (comments included).
+"""Set memory.provider, memory.auto_inject and memory.auto_extract, and
+optionally the recency, barrier, k, budget and supersession settings,
+in a config.yaml in place, keeping every other byte (comments
+included).
 
     python scripts/set_memory_mode.py aios/config/config.yaml \\
         --provider mem0 --kernel-memory on|off [--extract on|off]
@@ -16,7 +18,8 @@ docs/BENCHMARK_V2.md, Amendment 3).
 ``"time"``; ``time`` and ``session`` turn ages on in that unit. Without
 it, the recency keys are left as they are. ``--barrier-timeout-ms``
 sets ``memory.write_barrier.timeout_ms`` (benchmark v2 kernel runs use
-60000, so a probe never runs without the previous one's conversation).
+60000, so a retrieval waits out the writers' writes; before Amendment
+3 it also covered the probes' own conversation writes).
 ``--k`` and ``--budget`` set ``memory.max_injected_memories`` and
 ``memory.max_memory_tokens`` (benchmark v2 runs use 10 and 300).
 ``--supersession`` sets ``memory.supersession`` (benchmark v2 runs use

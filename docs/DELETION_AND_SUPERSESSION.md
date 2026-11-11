@@ -9,11 +9,12 @@ them (`BENCHMARK_V2.md`, Amendment 4).
 
 ## Why
 
-Benchmark v2 (`BENCHMARK_V2.md`) deletes a fact the way one writer
-can: a revoke lists the owner's own rows and deletes those whose
-`fact_key` is the revoked slot ("Revoke and deletion"). It keeps every
-earlier statement of a fact next to the later one ("Updates and
-contradictions are plain writes"). The smoke (`s14b`, revision 2,
+This section describes benchmark v2 before this step. Benchmark v2
+(`BENCHMARK_V2.md`) deleted a fact the way one writer can: a revoke
+listed the owner's own rows and deleted those whose `fact_key` is the
+revoked slot ("Revoke and deletion"). It kept every earlier statement
+of a fact next to the later one ("Updates and contradictions are plain
+writes"). The smoke (`s14b`, revision 2,
 H = 0, 30 users per cell) measured what this leaves:
 
 | Cell | Deletion, echo users | Deletion, no echo | Recency (strict) | Contradiction (strict) |
@@ -40,9 +41,10 @@ check under Amendment 3 (`f15a`, "Baseline" below).
   The revoke deletes by `fact_key`, so it misses the fold.
 - **Mem0's message history.** Mem0 reads the scope's last 10 messages
   (user id and agent id) into each extraction. A delete leaves them, so
-  a write after the revoke can extract the value again. The kernel's
-  and the replicated loci's Mem0 keep this history in
-  `~/.mem0/history.db`, shared by every run (known issue 46).
+  a write after the revoke can extract the value again. Until this
+  step the kernel's and the replicated loci's Mem0 kept this history
+  in Mem0's default `~/.mem0/history.db`, one file for every store and
+  run (known issue 46; Decision 3 gives each store its own).
 - **Conversation rows** that quoted the value. Since Amendment 3 v2
   probes store none, but a deployment's assistant does.
 
@@ -99,8 +101,9 @@ budget 300. At H = 0:
   formatted block.
 - **Complete deletion** of a revoked fact: after the revoke, no row of
   the user carries any form of any value the fact had, no later write
-  brings one back, and no read returns one, until the user states the
-  fact again.
+  brings one back, and no read returns one, until a new statement of
+  the fact states the value again (a restatement, "After the forget"
+  below).
 - **Supersession**: after a later statement of a fact, the rows of its
   earlier statements are retired. A retired row stays in the store,
   marked, and is never selected for a block.
@@ -121,8 +124,11 @@ scorer's own code, not a copy:
   names from `probes.py`, is untouched, so the dataset header's
   `generator_sha256` still matches.
 - `PIPELINE_VERSION` covers the matcher with the rest of the package.
-- **The library imports no `cerebrum` module**, and a test scans the
-  package for one. The usage tag that counts a provider's own LLM and
+- **No module of the library imports `cerebrum`**, and a test scans
+  each file of the package for an import. The scan does not follow
+  imports: importing the library still loads `cerebrum.utils.usage`,
+  through the providers package's Mem0 provider, so the SDK must be
+  installed. The usage tag that counts a provider's own LLM and
   embedding calls to the user they serve
   (`cerebrum.utils.usage.tagged`, which the library imported before
   this step) is passed in as `usage_tag`: the kernel and the replicated
@@ -181,18 +187,30 @@ and delete do now.
 7. **The reply.** It returns the ids deleted, each with its owner and
    reason (`fact_key`, `value` or `alias`), the number of values and
    forms, the values the caller may read (from its own and shared
-   rows, spelled as those rows spell them), and the scrub's counts. It
-   names ids and owners, never another agent's text (Decision 1). A
-   forget that found no value says so (`values_count` 0): it then
-   deleted by `fact_key` only.
+   rows, spelled as those rows spell them), the scrub's counts,
+   `listed` (the rows it listed) and `not_found` (rows it listed but
+   found gone when deleting them, with a WARNING; their history is
+   scrubbed as a deleted row's). It names ids and owners, never another
+   agent's text (Decision 1). A forget that found no value says so
+   (`values_count` 0): it then deleted by `fact_key` only, deleted no
+   other carrier, scrubbed nothing and recorded no tombstone.
 
-**Where tombstones live.** A SQLite sidecar per store, read on every
-check: the kernel's `memory.tombstones_path`
-(`.aios_state/tombstones.sqlite` in the shipped config), and
-`<store root>/tombstones.sqlite` for a replicated store. So the
-kernel's per-request pipelines and a replicated cell's four agents see
-the same tombstones. The path is not a pipeline setting: a replicated
-store must not inherit the kernel's. Without a path, tombstones live in
+A provider error fails the forget. On Mem0 a failed read is an error,
+not a missing row: its Chroma adapter reports a missing id with
+`IndexError`, the only error `Mem0Provider.get` reads as "not found".
+
+**Where tombstones live.** A SQLite file, read on every check. The
+kernel's is the file `memory.tombstones_path` names
+(`.aios_state/tombstones.sqlite` in the shipped config), whichever
+provider the kernel runs: its Mem0 and in-house stores share it, and
+resetting a store does not clear it. A replicated store keeps its own,
+`<store root>/tombstones.sqlite`. Tombstones are keyed by user, and v2
+user ids carry the run id, so no v2 cell meets another's. The kernel's
+per-request pipelines and a replicated cell's four agents see the same
+tombstones. The same file keeps each slot's forgotten statements (their
+`provenance_event`s) apart from its tombstones, and a lift never
+removes them. The path is not a pipeline setting: a replicated store
+must not inherit the kernel's. Without a path, tombstones live in
 memory, as in library-only use and the unit tests; a kernel restart
 then loses them, so the v2 pre-flight refuses a kernel that reports no
 path.
@@ -204,16 +222,26 @@ path.
   the history. This runs inside the write's barrier hold, so a later
   re-write of the value by any agent (an echo, a fold Mem0 extracts
   again, a conversation row) is gone before a retrieval accepted after
-  it can read it. A write whose own rows were all swept reports
-  `suppressed` and no id.
-- **Only the user lifts it.** A tombstone stays until the user states
-  the fact again: a write whose `fact_key` is the slot, whose
-  `structured` value is the tombstoned value or one of its aliases
-  (compared after the matcher's normalization), and whose
-  `provenance_event` is not one of the forgotten statements'. That
-  value's tombstone is lifted before the sweep, so the restatement is
-  kept. A replay of a forgotten statement, or the value in any other
-  row, is swept. v2 has no restatement; unit tests cover it.
+  it can read it. A write's own rows are the rows that carry its
+  note's id (`memory_note_id`): Mem0's extraction may store several. A
+  write whose own rows were all swept reports `suppressed` and no id;
+  one whose first row was swept and another kept returns the kept
+  row's id.
+- **A restatement lifts it.** A tombstone stays until a write or an
+  update, by any agent, is labelled as a new statement of the fact:
+  its `fact_key` is the slot, its `structured` value is the tombstoned
+  value or one of its aliases (compared after the matcher's
+  normalization), and it carries a `provenance_event` that is not one
+  of the slot's forgotten statements. The writer supplies these labels;
+  the library does not check who made the statement and takes such a
+  write as the user's. That value's tombstone is lifted before the
+  sweep, so the restatement is kept. The slot's forgotten statements
+  outlive the lift, so after a restatement and a second forget a
+  replay of any statement forgotten before is still a replay. Swept:
+  a replay, a statement without a `provenance_event` (it cannot be told
+  from a replay), an update that carries no event of its own (the
+  stored row's event is not a new statement), and the value in any
+  other row. v2 has no restatement; unit tests cover it.
 - **No read returns a carrier.** A row carrying a tombstoned form is
   absent from all four retrieval paths, each with a test:
   - injection and SDK search: the selector's `after_tombstone` stage;
@@ -256,9 +284,10 @@ harness's listings after each session and after the probes.
   write made earlier in its own session (a Mem0 fold of the value), so
   the listing after the session holds no row of that write.
   `extraction_failure` excuses it when the write's reply named rows and
-  the session removed every one, as it excuses a suppressed write; a
-  write whose reply named no row still fails it (`BENCHMARK_V2.md`,
-  Amendment 4, "Corrected during the smoke").
+  the session removed every one, as it excuses a suppressed write
+  (whose reply names none); any other write whose reply named no row
+  still fails it (`BENCHMARK_V2.md`, Amendment 4, "Corrected during
+  the smoke").
 
 **Decision 1, authority (settled: yes).** A forget deletes other
 agents' rows, which the library's owner-only rule (Subtask 2) forbids.
@@ -292,8 +321,10 @@ file per store).**
   provider set `history_db_path` inside the store
   (`<store root>/history.db`, next to its `chroma` directory), so a
   store and its history go together, and no run shares the old
-  `~/.mem0/history.db` (known issue 46). `/memory/config` reports the
-  kernel's path.
+  `~/.mem0/history.db` (known issue 46) unless its Chroma directory is
+  `~/.mem0/chroma` (a kernel started from the home directory with no
+  `path`), which the v2 pre-flight refuses. `/memory/config` reports
+  the kernel's path.
 
 ### Native
 
@@ -310,32 +341,51 @@ agent-managed deletion, and its echo and fold failures are expected.
 ### Kernel and replicated: mark and exclude
 
 With `memory.supersession: exclude`, after a successful write of a
-note with a `fact_key` and a `provenance_event`, if the write stored a
-row (a row of its `provenance_event` is listed):
+note with a `fact_key` and a `provenance_event`, if the write kept a
+row of its own (a listed row that carries its note's id; a write that
+stored nothing, or whose rows were all swept, retires nothing):
 1. Every other row of that `fact_key` in the user's partition, of any
    agent, whose `provenance_event` differs and that is not yet marked,
    is marked `superseded_by` (the write's `provenance_event`) and
    `superseded_session` (its session, when it has one).
 2. A mark is a metadata-only update (`MemoryProvider.update_metadata`):
    in-house and Mem0 keep the row's text and embedding, so a mark costs
-   no embedding call and writes no Mem0 history record. Like a forget,
-   it crosses owners (Decision 1): a contradiction by the task writer
-   retires the profile writer's row.
+   no embedding call and writes no Mem0 history record (the contract's
+   default, for any other provider, goes through `update`). Like a
+   forget, it crosses owners (Decision 1): a contradiction by the task
+   writer retires the profile writer's row.
 3. The write's reply lists the ids it retired.
 
 Agents cannot set or clear marks: a write's `superseded_by` and
-`superseded_session` are dropped, and an update cannot change them.
+`superseded_session` are dropped, and an update cannot change them. An
+`update_memory` retires nothing, even one that names a new event.
 
 The selector excludes marked rows in a new stage, `after_supersession`,
 after visibility and before the tombstone guard, dedupe, the threshold
-and the cap, so the new statement competes for the slot the stale one
-held. It records the excluded ids as `superseded_rows`. The shared
-fetch's over-fetch (4 × k) leaves the room; the selector does not
-fetch again. Listings still return retired rows, so a forget finds and
-deletes them too.
+and the cap, so, for every reader that may see the new statement, it
+competes for the slot the stale one held. It records the excluded ids
+as `superseded_rows`. The shared fetch's over-fetch (4 × k) leaves the
+room; the selector does not fetch again. An own-only search (SDK
+`retrieve_memory` without `sharing_policy` "shared", made only by the
+v1 writers) fetches k rows, so each retired row among them leaves it a
+row short; no v2 path searches own-only. Listings still return retired
+rows, so a forget finds and deletes them too.
 
-- The latest statement wins, whoever wrote it. That is the spec's rule
-  for contradictions ("the later one is true") and for updates.
+- The latest write of a slot wins, whoever wrote it: supersession
+  orders statements by the order their writes arrive, not by session.
+  v2 writes each statement once, in session order, so there the latest
+  write is the latest statement, as the spec's rule for contradictions
+  ("the later one is true") and for updates requires. A replay of an
+  earlier statement after a later one would retire the later one.
+- Whatever its sharing: a later statement stored private retires the
+  slot's earlier rows too. Every agent but its writer, the retired
+  rows' owners included, is then left with no selectable row of the
+  slot, while native still shows them the earlier row. In the kernel
+  and replicated loci every statement of a V1 or V3 writer is private
+  (`HETEROGENEITY.md`), so at H = 1 and 2 this happens when such a
+  writer contradicts a shared statement. The contradiction probe fails
+  either way (the stale value without supersession, no value with it);
+  only the failure changes.
 - Base rows, fillers, echoes and private facts have their own slots,
   so no other write retires them.
 - Mem0 rows of the new statement that name the old value as past
@@ -368,10 +418,11 @@ is the agent-managed reference here too.
   when it is accepted (`MemoryManager.stamp_syscall`), and handled
   through `MemoryPipeline.forget`; its reply's `metadata` holds the
   report.
-- **Every branch answers.** Each memory branch that runs this step's
-  code (add, update, get, retrieve, list, forget) catches every
-  exception and answers `success` false, so the scheduler always
-  answers (`BENCHMARK_V2.md`, "Before any v2 run").
+- **Every branch answers.** Each memory branch of `address_request`
+  (add, update, get, retrieve, `retrieve_memory_raw`, list, forget)
+  catches every exception and answers `success` false, a failed fetch
+  included, and so does an operation no branch serves, so the
+  scheduler always answers (`BENCHMARK_V2.md`, "Before any v2 run").
 - **The SDK.** `MemoryQuery.operation_type` gains `"forget_memory"`,
   and `cerebrum.memory.apis` gains `forget_memories(agent_name,
   fact_key, user_id)`. The installed copy is checked by
@@ -417,11 +468,13 @@ is the agent-managed reference here too.
 
 `BENCHMARK_V2.md`, Amendment 4, states these as the benchmark's rules:
 - **Settings and pre-flight:** `supersession: exclude` (`off` under
-  `no_supersession`), checked per control and recorded in
-  `run_settings`.
+  `no_supersession`), checked per control in kernel and replicated
+  cells (native runs no supersession; its setting is only recorded),
+  and recorded in `run_settings`.
 - **Per probe:** `after_supersession`, `superseded_rows`,
   `after_tombstone`, `tombstoned_rows` and `tombstoned_forms` (how many
-  forms the guard held for the user), and `retired_in_block`: injected
+  forms the guard held for the user; all five are None in native,
+  which runs neither stage), and `retired_in_block`: injected
   rows whose `provenance_event` is an earlier statement of a fact with
   a later one. The last is computed from the dataset, not from the
   marks, so it measures `no_supersession` too, and a marking that
@@ -429,7 +482,8 @@ is the agent-managed reference here too.
 - **Per user:**
   - each revoke's path (`forget` or `owner`), its ids by owner and
     reason, its value and form counts and its scrub counts;
-  - each write's swept, retired and lifted ids, and suppression;
+  - each write's swept and retired ids, the values it lifted, and
+    suppression;
   - `revoked_value_rows`, over every statement of the revoked slot,
     and the reappearance check, both read from the raw store ("The
     audit reads the store").
@@ -495,9 +549,12 @@ probes then failed; `s14b`'s revokes left those folds in place, and
 both passed. The smoke (`s15b`) deleted the same two folds in kernel
 and replicated Mem0, and both users failed recall in both; the
 analysis files such a failure as `target_forgotten` (Cerebrum
-`0995994`). In-house cells store utterances verbatim, and no revoked
-value appears in any other utterance of the same `pilot_v2` user, so
-they lose no fact this way.
+`0995994`). In-house cells store utterances verbatim. In `pilot_v2`
+the only other utterances that carry a revoked value are the 10
+echoes, each a carrier by design: its own value is the revoked value,
+and no probe asks for an echo's fact. Besides the 30 slot rows, the
+smoke's in-house forgets deleted exactly those 10 rows, so the in-house
+cells lose no probed fact this way.
 
 ## Tests
 
@@ -520,7 +577,13 @@ Each mechanism gets a test that fails without it:
   and the reply says suppressed; a restatement by the user (a new
   statement of the slot with the value or an alias) lifts the
   tombstone and is kept, and the next re-write is kept; a replay of the
-  forgotten statement is swept.
+  forgotten statement is swept, also after a restatement and a second
+  forget; a statement without an event, and an update without an event
+  of its own, lift nothing.
+- **A write's own rows:** a write that stored several rows (as Mem0's
+  extraction does) and lost its first to the sweep returns a kept
+  row's id and is not suppressed; one that lost them all is; a write
+  that shares an earlier write's event is judged by its own rows.
 - **The four paths:** with an escaped carrier planted in the store
   after a forget, injection, SDK search, `get_memory` and `list_own`
   each leave it out and log a WARNING, and the listing reports its id
@@ -529,24 +592,29 @@ Each mechanism gets a test that fails without it:
   across owners, without changing their text or embedding; the selector
   excludes them and records them; a listing still returns them; a
   forget deletes them; `off` marks nothing; agents cannot set or clear
-  marks; a write that stored nothing retires nothing.
+  marks; a write that stored nothing retires nothing, even when another
+  row carries its event; retired rows leave before dedupe and the
+  threshold.
 - **The kernel:** `forget_memory` through `execute_request` and
   `/query`; the barrier (a retrieval accepted after a forget sees no
-  deleted row); every branch answers on an exception; `/memory/config`
-  reports `supersession` and the history path.
+  deleted row); every branch, `retrieve_memory_raw` included, answers
+  on an exception; `/memory/config` reports `supersession` and the
+  history path.
 - **Mem0:** each client's history file is the store's; the scrub
   removes the value from the stored messages and history records of
   the user and nothing else, on a real `mem0ai` 2.0.2 history file;
-  a mark keeps the row's text, embedding and score.
+  a mark keeps the row's text, embedding and score; a failed read
+  raises instead of reading as a missing row, so a forget over it
+  fails.
 - **The writers:** they revoke through `forget` in kernel and
   replicated, and through list and delete in native and under
   `writer_scoped`; every statement carries `value_aliases`.
 - **The harness and the analysis:** the kernel and replicated listings
   come from the raw store, so `revoked_value_rows` sees a carrier the
   guard hides; `extraction_failure` excuses a write whose reply's rows
-  its own session removed, and still fails one whose reply named no
-  row; `retired_in_block` from the dataset; the new criteria, with the
-  budget reported, not required.
+  its own session removed, and a suppressed write, and still fails any
+  other whose reply named no row; `retired_in_block` from the dataset;
+  the new criteria, with the budget reported, not required.
 
 ## What this does not show
 
@@ -560,6 +628,8 @@ Each mechanism gets a test that fails without it:
   replicated store 10 of 10). No API call purges it while a client has
   the store open. Complete deletion here covers what the memory system
   reads: the rows, Mem0's messages and Mem0's history.
+- Writes that arrive out of statement order, or replays of an earlier
+  statement: supersession follows write order.
 - Concurrent writers during a forget: v2 runs sessions one at a time.
   A write that commits between a forget's listing and its tombstone
   stays stored (the read guard drops it from every read).
