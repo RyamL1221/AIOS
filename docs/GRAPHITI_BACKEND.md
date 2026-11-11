@@ -78,13 +78,17 @@ Every `add` is one `add_episode` call:
   format for conversation ("{role/name}: {message}";
   [adding episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes)).
   A conversation memory (`User: ...\nAssistant: ...`) becomes the same
-  turns as `user:` and `assistant:` lines. Content that parses as a JSON
-  object (v1's profile and task memories) is `source=EpisodeType.json`.
-  The exploration shows why not `text`: as `text`, "My team's chat tool
-  is Slack." and "I live in Utrecht and work as a data engineer." each
-  gave one entity and no fact, since the speaker is not an entity; as
-  `user:` messages every write gave at least one fact ("user lives in
-  Utrecht.", "user works as a data engineer.").
+  turns as `user:` and `assistant:` lines. Anything else, JSON included,
+  is one `user:` message, as Mem0 takes a write and the native agents
+  write theirs. The exploration shows why not `text`: as `text`, "My
+  team's chat tool is Slack." and "I live in Utrecht and work as a data
+  engineer." each gave one entity and no fact, since the speaker is not
+  an entity; as `user:` messages every write gave at least one fact
+  ("user lives in Utrecht.", "user works as a data engineer."). JSON was
+  first a `json` episode; the functional check's V5 writer (it stores
+  its structured JSON) then stored no fact for 12 writes of two users,
+  and two V5 payloads gave none as `json` and one each as `user:`
+  messages ("user lives in Utrecht").
 - `name`: `<owner_agent>:<memory_type>:<memory_note_id>`;
   `source_description`: `<owner_agent> <memory_type>`.
 - `reference_time`: the note's `created_at` (UTC, set by the kernel at

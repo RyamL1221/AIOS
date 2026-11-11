@@ -279,3 +279,22 @@ def test_capabilities_and_extraction():
     assert provider.backend_extraction is True
     assert GraphitiProvider.synchronous_commit is False
     assert topic("x") != topic("y")
+
+
+def test_json_is_written_as_the_users_message(provider):
+    """A JSON write (the V5 writer stores its structured JSON) is the
+    user's message, as any other statement: as a ``json`` episode it has
+    no subject, and Graphiti extracted no fact from one."""
+    content = '{"fact_key": "project", "value": "Larkspur migration"}'
+    first = provider.add(note(content, event="u0-e07"))
+    assert first
+
+    async def episode():
+        records, _, _ = await provider.graphiti.driver.execute_query(
+            "MATCH (ep:Episodic {uuid: $uuid}) "
+            "RETURN ep.content AS content, ep.source AS source",
+            params={"uuid": first.split(":")[1]})
+        return records[0]
+    stored = provider.runner.run(episode)
+    assert stored["content"] == f"user: {content}"
+    assert stored["source"] == "message"
