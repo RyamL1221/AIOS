@@ -188,12 +188,15 @@ and delete do now.
    reason (`fact_key`, `value` or `alias`), the number of values and
    forms, the values the caller may read (from its own and shared
    rows, spelled as those rows spell them), the scrub's counts,
-   `listed` (the rows it listed) and `not_found` (rows it listed but
-   found gone when deleting them, with a WARNING; their history is
+   `listed` (how many rows it listed) and `not_found` (rows it listed
+   but found gone when deleting them, with a WARNING; their history is
    scrubbed as a deleted row's). It names ids and owners, never another
    agent's text (Decision 1). A forget that found no value says so
    (`values_count` 0): it then deleted by `fact_key` only, deleted no
-   other carrier, scrubbed nothing and recorded no tombstone.
+   other carrier and no message (it has no form), and recorded no
+   tombstone; on Mem0 the history records of the rows it deleted (or
+   found gone) still lose their text, as Decision 3 says, and
+   `scrubbed.history` counts them.
 
 A provider error fails the forget. On Mem0 a failed read is an error,
 not a missing row: its Chroma adapter reports a missing id with
@@ -420,9 +423,11 @@ is the agent-managed reference here too.
   report.
 - **Every branch answers.** Each memory branch of `address_request`
   (add, update, get, retrieve, `retrieve_memory_raw`, list, forget)
-  catches every exception and answers `success` false, a failed fetch
-  included, and so does an operation no branch serves, so the
-  scheduler always answers (`BENCHMARK_V2.md`, "Before any v2 run").
+  catches every exception and answers `success` false, a failed own
+  fetch included (in SDK search with `sharing_policy` "shared", a
+  failed shared fetch is not reported, and the reply holds the own
+  rows), and so does an operation no branch serves, so the scheduler
+  always answers (`BENCHMARK_V2.md`, "Before any v2 run").
 - **The SDK.** `MemoryQuery.operation_type` gains `"forget_memory"`,
   and `cerebrum.memory.apis` gains `forget_memories(agent_name,
   fact_key, user_id)`. The installed copy is checked by
@@ -601,8 +606,10 @@ Each mechanism gets a test that fails without it:
   on an exception; `/memory/config` reports `supersession` and the
   history path.
 - **Mem0:** each client's history file is the store's; the scrub
-  removes the value from the stored messages and history records of
-  the user and nothing else, on a real `mem0ai` 2.0.2 history file;
+  removes the value from the user's stored messages and from the
+  history records of the rows it is given (the deleted rows and the
+  user's stored rows), and nothing else, on a real `mem0ai` 2.0.2
+  history file;
   a mark keeps the row's text, embedding and score; a failed read
   raises instead of reading as a missing row, so a forget over it
   fails.

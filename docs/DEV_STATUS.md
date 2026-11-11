@@ -1821,8 +1821,8 @@ Step 0 settles two items before the deletion and supersession work.
     the wake, while it wrote its fifth user. It wrote no results file,
     but its store (`.replicated_memory/f15b`) keeps 89 rows of its 5
     users, 4 tombstones, 99 history records and 67 messages, so that
-    cell and the rest ran again under a new run prefix, `f15b2` (known
-    issue 36; the results' `PROVENANCE.md`).
+    cell ran again, and the 19 cells after it ran, under a new run
+    prefix, `f15b2` (known issue 36; the results' `PROVENANCE.md`).
     - **Every criterion holds.** Amendment 4's, at H = 0 in the kernel
       and replicated cells on both backends:
       - all 20 deletion probes passed, no audit kept a carrier
@@ -2008,18 +2008,23 @@ Step 0 settles two items before the deletion and supersession work.
       sweeps all deleted is `target_forgotten`, no longer
       `not_in_block`, and the forget reading counts `same_writer` rows.
   - **Review** (rule 6; the code and the write-up of steps 0 and 1).
-    Eight scoped reviewers, each finding checked by an adversarial
-    verifier: 78 findings, none refuted (13 errors, 53 imprecisions, 12
-    style). The numbers the corrections quote were then re-derived
-    from the raw results, the dataset and the logs.
+    Eight scoped reviewers: 78 findings. Each of the 66 error or
+    imprecision findings was checked by an adversarial verifier (the 12
+    style findings were not), and none was refuted (55 confirmed, 11
+    partly); the verifiers rated 13 errors and 53 imprecisions, and the
+    12 style ratings are the reviewers' own. The numbers the
+    corrections quote were then re-derived from the raw results, the
+    dataset and the logs.
     - **Code fixes** (AIOS `c814a5d`, Cerebrum `ec623ab`), each with a
       test that fails without it. None changes a recorded result: in
       `f15b` and `s15b` no write lifted, swept or was suppressed (5,724
       writes), every write's reply named rows, no retire came from a
-      write that stored nothing (398), and no forget reported a row it
-      did not delete (320 revokes); no run used `retrieve_memory_raw`
-      or `--kernel-url`, and the one kernel log the old driver never
-      checked (`f15b`'s first agent phase) has no memory operation.
+      write that stored nothing (398 retiring writes), and no forget
+      reported a row it did not delete (180 forgets, 248 rows; the
+      other 140 of the 320 revokes took the owner path); no run used
+      `retrieve_memory_raw` or `--kernel-url`, and the one kernel log
+      the old driver never checked (`f15b`'s first agent phase) has no
+      memory operation.
       - a lift deleted the slot's forgotten statements with its
         tombstone, so after a restatement and a second forget a replay
         of the first forgotten statement lifted the new tombstone; they
@@ -2044,7 +2049,9 @@ Step 0 settles two items before the deletion and supersession work.
       - the driver's end-of-phase checks read only its own launch's
         kernel log, so a resumed phase's earlier logs, and a phase
         found finished, went unchecked; it reads every kernel log of
-        the phase now, and requires `RUN_PREFIX`;
+        the phase now, and requires `RUN_PREFIX` and `OUTROOT` (the
+        default `OUTROOT`s held Subtask 14's runs, whose logs the new
+        check would read and whose cells a new run overwrote);
       - a v2 run with `--kernel-url` naming another kernel ran the
         pre-flight on that one, while its agents used the configured
         one; it refuses now;
@@ -2085,13 +2092,45 @@ Step 0 settles two items before the deletion and supersession work.
       `synth_v2.py`'s `lean_start` docstring overstates the balance
       but is left: editing it would break the match between the
       generator's SHA-256 and revision 3's header.
+    - **Verification pass** (rule 6's second pass, on AIOS `b15f2dc`
+      and Cerebrum `80a3c7a`): six checkers over the review's 78
+      findings and the fix commits, each remaining error they claimed
+      confirmed by an adversarial agent. 70 findings were fixed as
+      made and 6 partly; 2 fixes were wrong, and the fix commits added
+      3 false sentences. Fixed in AIOS `8db0b35` and Cerebrum `ca91a13`,
+      and the documents after them. No recorded result changes.
+      - **Errors.** The driver's new check reads every kernel log in
+        `$OUTROOT/logs`, and the default `OUTROOT`s hold Subtask 14's
+        runs (`f14c`'s kernel logs hold 90 and 120 stored turns), so
+        the documented invocation would have stopped after its first
+        phase, and a new run there overwrote those runs' cells:
+        `OUTROOT` is now required, and a test pins it. The
+        `--kernel-url` help said the backend usage reads follow the
+        flag; they use the configured kernel. Three sentences the
+        fixes added were false: a forget that finds no value
+        "scrubbed nothing" (on Mem0 it clears the history records of
+        the rows it deleted); the review "checked each finding" (the
+        12 style findings were not); `address_request` "raises" on an
+        unserved operation (it answers now).
+      - **Two tests** the review's verification asked for were
+        missing, and mutants of exactly those rules survived: a
+        restatement whose value is the alias (a per-value-key record
+        of the forgotten statements) and a replay that stored nothing
+        (an event-and-slot gate). Both are added; each fails on its
+        mutant.
+      - **Wording:** a failed shared fetch is not reported, only a
+        failed own fetch; `listed` is a count; a restatement needs an
+        event (the SDK docstring); known issue 36's Mem0 consequence;
+        the counts above; the smoke's dates; the pre-flight records
+        the kernel's paths in every cell; the example config names
+        `history_db_path`; four docstrings.
     - **Not decided here** (the user's call): a forget deletes a Mem0
       fold row whole, so the row's own fact goes with it (the smoke's
       users 13 and 25 lost their recall targets). Rewriting the row
       without the forgotten value would keep that fact, at the cost of
       a write the forget makes on another agent's behalf.
-  - **Next:** the verification pass of the review's fixes and the
-    mutation run on the final code (rule 6), then the tag.
+  - **Next:** a third and last verification pass (rule 6: the second
+    found errors), the mutation run on the final code, then the tag.
 
 ## Open decisions
 
@@ -2169,7 +2208,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
   the same 19 failures and 2 errors, by name; AIOS unchanged) and the
   review's fixes (AIOS `c814a5d`, Cerebrum `ec623ab`: AIOS 632 passed,
   the 14 errors; Cerebrum 1064 passed, 4 skipped, the same 19 failures
-  and 2 errors, by name).
+  and 2 errors, by name) and the verification pass's (AIOS `8db0b35`,
+  Cerebrum `ca91a13`: AIOS 635 passed, the 14 errors; Cerebrum 1064
+  passed, 4 skipped, the same 19 failures and 2 errors, by name).
   The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
@@ -2345,11 +2386,16 @@ These fail on `workshop-postrun` too and are not caused by later work.
     tombstones: the re-run's statement of a fact the earlier attempt
     forgot replays a forgotten event, so the sweep deletes it and every
     echo of the value as soon as they are written, and its deletion
-    probe passes without testing the forget (only the forgets reading
-    shows it: `suppressed` and `swept` are 0 in a clean cell). Give a
-    re-run its own run id (as Subtask 11 and `f15b2` and `s15b` did);
-    the driver now requires `RUN_PREFIX`. For a kernel cell a fresh
-    store is not enough: the tombstone file is outside it.
+    probe passes without testing the forget. The forgets reading shows
+    it: in a clean cell `suppressed` and `swept` are 0 and each forget
+    deletes the slot's row. On Mem0 the sweeps have already deleted the
+    value's messages, so the forget scrubs none, and the functional
+    check's "every Mem0 forget at H = 0 scrubbed a message" fails;
+    in-house, and in the smoke, which runs no criteria, nothing fails.
+    Give a re-run its own run id (as Subtask 11 and `f15b2` and `s15b`
+    did); the driver now requires `RUN_PREFIX` and `OUTROOT`. For a
+    kernel cell a fresh store is not enough: the tombstone file is
+    outside it.
 37. Every v2 user has one probe of each type, so a cell's per-probe
     rate rests on n = 30 users in the smoke and 5 in the functional
     check. Report Wilson intervals and compare cells paired over users.
