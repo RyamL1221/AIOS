@@ -2293,6 +2293,16 @@ code.
   `writes_without_fact`, and the trial is scored (BENCHMARK_V2.md
   Amendment 5; v1 and v2). The two failed attempts are in
   `repo-artifacts/Cerebrum/bench_v2_functional_graphiti_failed_cell*`.
+- **Native Graphiti listed a V3 writer's rows by `owner_agent`**
+  (`f16d`). V3 omits it, so in native at H = 2 one user's V3 task agent
+  listed none of its six writes, which Amendment 5 then read as lost
+  (Neo4j held every fact; before the amendment the trial would have
+  failed). Its revokes would have found nothing. Fixed: the listing
+  filters by `agent_id`, as native Mem0 and in-house do; and Amendment
+  5 now covers only a write whose reply named no fact: a write whose
+  reply named rows that its writer does not list fails the trial
+  (`backend_rows_unlisted`). Every other write without a row named
+  none. The two H = 2 agent cells were re-run (`f16e`).
 
 ## Open decisions
 

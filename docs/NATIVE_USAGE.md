@@ -270,8 +270,9 @@ What the agents do:
 
 - **Store.** One Neo4j database, shared with the kernel's and the
   replicated agents' Graphiti stores (Community edition has one),
-  separated by group. Each agent constructs its own `Graphiti` client
-  from the same settings.
+  separated by group. The agents of one process share one `Graphiti`
+  client (`cerebrum/utils/graphiti.py`, `shared_graphiti`), built from
+  the same settings as the kernel's provider's.
 - **Group.** Graphiti accepts only letters, digits, `_` and `-` in a
   group id, so the agents use the user id's readable part and the first
   12 hex digits of its SHA-256 (the same form as the kernel's), not the
@@ -307,7 +308,10 @@ What the agents do:
   are reported apart from the kernel's supersession and credited to no
   locus.
 - **Revoke.** The writer finds its own episodes of the slot
-  (`get_by_group_ids` on the user's group, filtered by its metadata) and
+  (`get_by_group_ids` on the user's group, filtered by the `agent_id`
+  in their metadata, as native Mem0 and in-house list a writer's rows;
+  the V3 variant omits `owner_agent`, so a listing by it found none of
+  a V3 writer's rows, Subtask 16) and
   deletes each with `graphiti.remove_episode(uuid)`. The documentation
   shows no episode delete; `remove_episode` is the library's own and is
   what Graphiti's MCP server calls. It deletes a fact only when no other

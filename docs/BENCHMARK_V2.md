@@ -1333,6 +1333,19 @@ Graphiti (`EMPTY_WRITE_IS_LOSS`, Cerebrum
   against Graphiti's cells;
 - a trial with no backend LLM call, and any writer error, still fail.
 
+A write is lost only when its reply named no fact. In v2 a write's rows
+are counted from its writer's listing after the session (by
+`provenance_event`), so a write whose reply named facts that the
+listing does not show was stored and the listing failed: that fails
+the trial (`backend_rows_unlisted`). The first run under the amendment
+(`f16d`) found one: native Graphiti listed a writer's rows by
+`owner_agent`, which the V3 variant omits, so one user's V3 task agent
+(native, H = 2) listed none of its six writes, and they read as lost.
+It now lists by `agent_id`, as native Mem0 and in-house do. In every
+other write that stored no row, the reply named no fact (all seven,
+over three attempts). v1 counts a write's rows from its reply, so
+there the two agree.
+
 Mem0's rule is unchanged. The backend is the kernel's `/memory/config`
 `provider`, or the agents' memory backend.
 
