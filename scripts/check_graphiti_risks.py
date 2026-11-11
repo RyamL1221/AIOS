@@ -29,25 +29,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+# (owner, slot, event, utterance, value, aliases), as the v2 writers
+# store a statement: the value in ``structured``, its aliases in
+# ``value_aliases`` (the forget finds a fact's forms there).
 USERS = {
     "chat": [
         ("profile_agent", "team_chat", "u0-e1",
-         "My team's chat tool is Mattermost."),
+         "My team's chat tool is Mattermost.", "Mattermost", []),
         ("task_agent", "project", "u0-e2",
-         "I'm working on the Larkspur migration this quarter."),
+         "I'm working on the Larkspur migration this quarter.",
+         "Larkspur migration", ["Larkspur"]),
         ("calendar_agent", "retro", "u0-e3",
-         "Retro notes go in the Mattermost channel #retro."),
-        ("profile_agent", "home_city", "u0-e4", "I live in Utrecht."),
+         "Retro notes go in the Mattermost channel #retro.", "#retro", []),
+        ("profile_agent", "home_city", "u0-e4", "I live in Utrecht.",
+         "Utrecht", []),
     ],
     "lawyer": [
-        ("profile_agent", "lawyer", "u1-e1", "My lawyer is Greta Sandvik."),
-        ("calendar_agent", "call", "u1-e2", "Call with Sandvik on Friday."),
+        ("profile_agent", "lawyer", "u1-e1", "My lawyer is Greta Sandvik.",
+         "Greta Sandvik", ["Sandvik"]),
+        ("calendar_agent", "call", "u1-e2", "Call with Sandvik on Friday.",
+         "Friday", []),
         ("task_agent", "editor", "u1-e3",
-         "I edit code in VS Code with Python."),
+         "I edit code in VS Code with Python.", "VS Code", []),
     ],
 }
 FORGET = {"chat": ("team_chat", "Mattermost"),
-          "lawyer": ("lawyer", "Greta Sandvik")}
+          "lawyer": ("lawyer", "Sandvik")}
 KEYS = ("owner_agent", "user_id", "sharing_policy", "memory_type",
         "fact_key", "provenance_event")
 
@@ -88,7 +95,7 @@ def main(argv=None):
             found = report["users"][name] = {"writes": []}
             ids_by_event = {}
             with usage.tagged(user):
-                for owner, slot, event, text in statements:
+                for owner, slot, event, text, value, aliases in statements:
                     note = MemoryNote(content=text)
                     note.metadata = {
                         "owner_agent": owner, "user_id": user,
@@ -96,6 +103,11 @@ def main(argv=None):
                         "created_at": time.strftime(
                             "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
                         "fact_key": slot, "provenance_event": event,
+                        "event_type": "add", "session": 1,
+                        "structured": json.dumps({
+                            "event_type": "add", "fact_key": slot,
+                            "value": value}, sort_keys=True),
+                        "value_aliases": json.dumps(aliases),
                     }
                     started = time.time()
                     first = provider.add(note)
@@ -108,7 +120,7 @@ def main(argv=None):
             found["embedding"] = usage.summarize(records, usage.EMBEDDING)
             rows = provider.list(user, 1000)
             searched = provider.search(statements[0][3], user, 20)
-            events = {e for _, _, e, _ in statements}
+            events = {s[2] for s in statements}
             found["rows"] = [{"id": r.memory_id, "fact": r.content,
                               "event": r.metadata.get("provenance_event"),
                               "claims": r.metadata.get(
