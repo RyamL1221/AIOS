@@ -878,7 +878,7 @@ class Mem0Provider(MemoryProvider):
         Mem0's Chroma adapter signals a missing id with IndexError; any
         other error is a failed read and raises ``ProviderError``, so a
         delete or an update never takes a read error for a missing row
-        (a forget would report it deleted)."""
+        (a forget would file it under ``not_found`` and succeed)."""
         client = self._get_client_for_user(self._scope(user_id))
         try:
             item = client.get(memory_id)

@@ -31,14 +31,16 @@
 # trial, or the driver stops. One fresh kernel per model per phase, on a
 # port that must be free first; config.yaml restored byte for byte at
 # exit. Resumable: a finished cell is skipped, an unfinished one is
-# re-run whole. RUN_PREFIX is required and must be new for every run
-# and every re-run of a cell: the stores and tombstones a run leaves
-# are not reset (known issue 36). At the end of each phase, and for a
-# phase a resumed launch finds finished, the checks read every kernel
-# log of the phase in $OUTROOT/logs, earlier launches' included: move a
-# discarded attempt's logs out of $OUTROOT before reusing it.
+# re-run whole. RUN_PREFIX and OUTROOT are required. OUTROOT is the
+# run's own, new for every run, and a resume keeps it: a reused
+# OUTROOT's cells and cell logs are overwritten, and at the end of each
+# phase, and for a phase a resumed launch finds finished, the checks
+# read every kernel log of the phase in $OUTROOT/logs, earlier
+# launches' included (move a discarded attempt's logs out before
+# resuming). RUN_PREFIX is new for every run and every resume: the
+# stores and tombstones a run leaves are not reset (known issue 36).
 # Run from the AIOS repo, detached:
-#   MODE=functional RUN_PREFIX=f16 nohup bash scripts/run_bench_v2.sh > ../repo-artifacts/Cerebrum/bench_v2_functional.log 2>&1 &
+#   MODE=functional RUN_PREFIX=f16 OUTROOT=results/bench_v2_functional_f16 nohup bash scripts/run_bench_v2.sh > ../repo-artifacts/Cerebrum/bench_v2_functional_f16.log 2>&1 &
 set -u
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"
@@ -46,13 +48,11 @@ CONFIG="aios/config/config.yaml"
 MODE="${MODE:-functional}"
 case "$MODE" in
     functional)
-        OUTROOT="${OUTROOT:-results/bench_v2_functional}"
         TRIALS="${TRIALS:-5}"
         CONDITIONS="${CONDITIONS:-h0 h2 no_memory no_delete no_visibility writer_scoped no_supersession}"
         JUDGE_ARGS=(--no-judge)
         PHASES="${PHASES:-kmem0 kinh agent kmem0_ns kinh_ns agent_ns}" ;;
     smoke)
-        OUTROOT="${OUTROOT:-results/bench_v2_smoke}"
         TRIALS="${TRIALS:-30}"
         CONDITIONS="${CONDITIONS:-h0}"
         JUDGE_ARGS=(--judge-model "gpt-5.4:azure")
@@ -61,6 +61,8 @@ case "$MODE" in
 esac
 [ -n "${RUN_PREFIX:-}" ] || {
     echo "set RUN_PREFIX, new for every run (known issue 36)" >&2; exit 1; }
+[ -n "${OUTROOT:-}" ] || {
+    echo "set OUTROOT, the run's own (a resume keeps it)" >&2; exit 1; }
 LOGS="$CEREBRUM/$OUTROOT/logs"
 DATASET="pilot_v2"
 MODELS="${MODELS:-qwen}"

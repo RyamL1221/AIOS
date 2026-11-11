@@ -405,7 +405,8 @@ class MemoryPipeline:
         WARNING, and its id comes back as withheld, the second element
         of the result, so the caller can tell a carrier escaped the
         forget. The benchmark's audit does not read this listing; it
-        reads the raw store (``MemoryManager.audit_rows``).
+        reads the raw store (the kernel's ``MemoryManager.audit_rows``,
+        or a replicated store's provider ``list``).
         """
         scope = self.resolver.canonical(user_id) or agent_name
         limit = LIST_TOP_K if top_k is None else top_k

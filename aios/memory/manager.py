@@ -437,10 +437,13 @@ class MemoryManager:
         
         Returns:
             MemoryResponse containing the result of the operation
-        
+            (``retrieve_memory_raw``: a list of ``MemoryNote`` when it
+            succeeds). A failure, or an operation no branch serves, is
+            answered with ``success`` false, never raised: the
+            scheduler answers a syscall only when this returns.
+
         Raises:
             TypeError: If memory_syscall is not a MemorySyscall
-            ValueError: If the operation type is invalid
         """
         # Import here to avoid circular dependency
         from aios.syscall.memory import MemorySyscall

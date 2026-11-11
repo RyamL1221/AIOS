@@ -152,6 +152,7 @@ memory:
       config:
         collection_name: "mem0_memories"
         # path: ".mem0/chroma"  # ChromaDB persistence directory (default: .mem0/chroma)
+    # history_db_path: ".mem0/history.db"  # Mem0's history file (default: history.db next to vector_store.config.path)
 
   # Zep provider configuration (used when provider: "zep")
   zep:

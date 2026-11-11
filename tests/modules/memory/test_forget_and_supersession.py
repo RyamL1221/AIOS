@@ -1033,15 +1033,20 @@ def test_a_replay_or_another_value_lifts_nothing():
     assert list(stored(provider)) == [other]
 
 
-@pytest.mark.parametrize("spelling", [VALUE, "greta sandvik"])
+@pytest.mark.parametrize("spelling, aliases", [
+    (VALUE, (ALIAS,)), ("greta sandvik", (ALIAS,)), (ALIAS, (VALUE,)),
+], ids=["value", "respelled", "alias"])
 def test_a_replay_after_a_restatement_and_a_second_forget_is_swept(
-        spelling):
+        spelling, aliases):
     """Forget, restate (a new event lifts the tombstone), forget again:
     a replay of the first forgotten statement is then swept and lifts
-    nothing, and the value stays forgotten for every agent."""
+    nothing, and the value stays forgotten for every agent. A
+    restatement whose value is the alias records the second tombstone
+    under another value: the forgotten statements are the slot's, not
+    one value's."""
     provider, pipeline = forgotten_store()
     _, outcome = written(pipeline, WRITER, f"My lawyer is {spelling}.",
-                         **stated(spelling, "e3"))
+                         **stated(spelling, "e3", aliases=aliases))
     assert outcome["lifted"] == [spelling]
     pipeline.forget(WRITER, USER, SLOT)
     assert stored(provider) == {}
@@ -1171,6 +1176,25 @@ def test_a_write_is_judged_by_its_own_rows_not_its_event():
                               fact_key="meeting", provenance_event="e2")
     assert (second, outcome["suppressed"]) == ("", True)
     assert list(stored(provider)) == [first]
+
+
+def test_a_replay_that_stored_nothing_retires_nothing():
+    """A replay of an earlier statement whose write stored nothing
+    retires nothing, though the statement's own earlier rows are
+    listed: the later statement stays selectable."""
+    provider = DroppingStore()
+    pipeline = MemoryPipeline(provider, EXCLUDE)
+    write(pipeline, WRITER, "I live on Juniper Street.",
+          **home("Juniper Street", "e1", 1))
+    write(pipeline, WRITER, "I moved to Birch Road.",
+          **home("Birch Road", "e2", 2))
+    cedar = write(pipeline, WRITER, "I moved to Cedar Lane.",
+                  **home("Cedar Lane", "e3", 3))
+    provider.dropping = True
+    memory_id, outcome = written(pipeline, WRITER, "I moved to Birch Road.",
+                                 **home("Birch Road", "e2", 2))
+    assert (memory_id, outcome["retired"]) == ("", [])
+    assert "superseded_by" not in stored(provider)[cedar].metadata
 
 
 def test_a_statement_that_stored_nothing_retires_nothing_whatever_is_listed():
@@ -1500,9 +1524,9 @@ class DroppingStore(InHouseProvider):
 
 
 def test_a_write_that_stored_nothing_retires_nothing():
-    """A statement whose write stored no row (none of its
-    provenance_event is listed) retires nothing; once it stores one,
-    the same statement retires the earlier row."""
+    """A statement whose write stored no row (no listed row carries its
+    note's id) retires nothing; once it stores one, the same statement
+    retires the earlier row."""
     provider = DroppingStore()
     pipeline = MemoryPipeline(provider, EXCLUDE)
     juniper = write(pipeline, WRITER, "I live on Juniper Street.",

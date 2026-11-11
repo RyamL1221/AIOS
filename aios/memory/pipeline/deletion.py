@@ -6,8 +6,8 @@ Complete deletion and supersession (docs/DELETION_AND_SUPERSESSION.md).
   forms, of any agent, and scrubs the provider's history.
 - ``after_write`` is what a write or an update does next for the user:
   a restatement lifts its value's tombstone, every carrier of a
-  tombstoned form is swept, and, unless the write itself was swept, a
-  later statement retires the earlier rows of its slot.
+  tombstoned form is swept, and, unless the write stored nothing or was
+  swept, a later statement retires the earlier rows of its slot.
 
 Both act on the provider directly, across owners: a forget and a
 supersession are the user's, not an agent's (Decision 1).

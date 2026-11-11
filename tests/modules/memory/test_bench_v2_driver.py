@@ -80,7 +80,8 @@ def tree(tmp_path: Path) -> Path:
 
 def launch(aios: Path, phases: str, conditions: str,
            kernel_line: str = "", fail_run: str = "",
-           prefix: str = "t1") -> subprocess.CompletedProcess:
+           prefix: str = "t1",
+           outroot: str = "results/sim") -> subprocess.CompletedProcess:
     """One launch of the real driver over the stub tree. Launches a
     second apart, so each kernel log gets its own name."""
     time.sleep(1.1)
@@ -89,13 +90,13 @@ def launch(aios: Path, phases: str, conditions: str,
         "PATH": f"{aios.parent / 'bin'}:{os.environ['PATH']}",
         "MODE": "functional", "MODELS": "qwen", "TRIALS": "1",
         "PHASES": phases, "CONDITIONS": conditions,
-        "OUTROOT": "results/sim",
         "SIM_KERNEL_LINE": kernel_line, "SIM_FAIL_RUN": fail_run,
     }
-    if prefix:
-        env["RUN_PREFIX"] = prefix
-    else:
-        env.pop("RUN_PREFIX", None)
+    for key, value in (("RUN_PREFIX", prefix), ("OUTROOT", outroot)):
+        if value:
+            env[key] = value
+        else:
+            env.pop(key, None)
     return subprocess.run(
         ["bash", str(DRIVER)], cwd=aios, env=env, capture_output=True,
         text=True, timeout=120,
@@ -169,4 +170,15 @@ def test_a_run_needs_its_own_prefix(tmp_path):
     result = launch(aios, "kmem0", "h0", prefix="")
     assert result.returncode == 1
     assert "RUN_PREFIX" in result.stderr
+    assert not (tmp_path / "Cerebrum" / "results").exists()
+
+
+def test_a_run_needs_its_own_outroot(tmp_path):
+    """Without OUTROOT the driver refuses to start: a default one would
+    hold an earlier run's cells, which a run overwrites, and its kernel
+    logs, which the checks read."""
+    aios = tree(tmp_path)
+    result = launch(aios, "kmem0", "h0", outroot="")
+    assert result.returncode == 1
+    assert "OUTROOT" in result.stderr
     assert not (tmp_path / "Cerebrum" / "results").exists()
