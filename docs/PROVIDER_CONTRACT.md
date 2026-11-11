@@ -51,8 +51,9 @@ The contract tests check honesty: `scored_search` true means every
 
 `synchronous_commit` (class attribute, default `False`): `True` when a
 write is durable once `add` returns. The write barrier is skipped for
-such providers, since a wait would only add latency. The in-memory and
-Zep providers set it; Mem0 and the Chroma in-house provider do not.
+such providers, since a wait would only add latency. The in-memory
+provider sets it; Mem0, the Chroma in-house provider and Graphiti do
+not.
 
 ## Required metadata
 
@@ -104,7 +105,7 @@ row was scored).
 | `ChromaInHouseProvider` | `in-house` | yes | yes | yes | no | no |
 | `Mem0Provider` | `mem0` | yes | yes | yes | yes | yes |
 | `InHouseProvider` (dict, tests only) | `in-memory` | yes | yes | no | no | no |
-| `ZepProvider` | `zep` | no | yes | yes | yes | yes |
+| `GraphitiProvider` | `graphiti` | yes | no | yes | yes | yes |
 
 ### In-house (Chroma)
 
@@ -168,13 +169,19 @@ search could not have been trusted either way.
 Native mode (Subtask 6) is Mem0 used as shipped, so it calls Mem0's own
 `search()` and keeps its scores, bugs included.
 
-### Zep
+### Graphiti
 
-Does not conform. Zep stores text only, so the required metadata is lost,
-and every row it returns fails the user partition and the visibility
-rule, which fail closed. `list` and `update` raise `ProviderError`. It
-loads and runs so existing configs keep working; it is not one of the
-paper's backends.
+Since Subtask 16, replacing the Zep Cloud provider (`zep.py`, removed:
+Zep stored text only, so the required metadata was lost and its rows
+failed the user partition and the visibility rule). Graphiti, Zep's
+open-source temporal knowledge graph on Neo4j, extracts facts from every
+write with `memory.backend_llm`; a row is one fact as one write claims
+it, with that write's metadata from a sidecar on its episode. `search`
+is Graphiti's own `search()`, unscored, so `scored_search` is false.
+The design, what deleting an episode leaves and the forget's scrub are
+in `GRAPHITI_BACKEND.md`. The contract tests run it on the local Neo4j
+with a scripted LLM that makes each write one fact worded as the write,
+as Mem0's run with extraction off.
 
 ## Adding a provider
 

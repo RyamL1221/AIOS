@@ -15,7 +15,8 @@ The seven preservation cases below correspond to clauses 3.1-3.7 in
 - 2b Unrelated user_id Preservation           (Clause 3.2)
 - 2c Drained State Preservation               (Clauses 3.1, 3.4, 3.6, 3.7)
 - 2d InHouseProvider Preservation             (Clause 3.5)
-- 2e ZepProvider Preservation                 (Clause 3.5)
+  (2e, the ZepProvider case, went with the Zep provider in NeurIPS
+  Subtask 16.)
 - 2f auto_inject=false Preservation           (Clause 3.5)
 - 2g Single-Agent Serial Preservation         (Clause 3.6)
 
@@ -39,7 +40,7 @@ each scenario against the unfixed kernel and capturing the baseline:
 - 2c / 2g: serial ``add`` -> wait-for-commit -> ``retrieve`` returns
   the stored memory; the round-trip latency is dominated by the
   provider, not by any barrier wait.
-- 2d / 2e: under ``InHouseProvider`` / ``ZepProvider``, the kernel
+- 2d: under ``InHouseProvider``, the kernel
   retrieval path consults no pending-write registry and reaches the
   provider directly.  Stub providers that subclass the production
   classes verify the type-check identity is preserved.
@@ -69,7 +70,6 @@ from cerebrum.memory.apis import MemoryQuery, MemoryResponse
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
 from aios.memory.providers.in_house import InHouseProvider
-from aios.memory.providers.zep import ZepProvider
 from aios.memory.write_barrier import MemoryWriteBarrier
 from aios.syscall.memory import MemorySyscall
 
@@ -232,45 +232,6 @@ class StubInHouseProvider(InHouseProvider):
             content=note.content,
             metadata=dict(note.metadata or {}),
         )
-
-    def search(self, query_text, user_id, top_k) -> List:
-        self.retrieve_calls += 1
-        self.last_query_params = {
-            "content": query_text, "user_id": user_id, "top_k": top_k,
-        }
-        return []
-
-    def close(self) -> None:
-        return None
-
-
-class StubZepProvider(ZepProvider):
-    """Subclass of the production ``ZepProvider`` that bypasses its
-    Zep client wiring.  Same intent as ``StubInHouseProvider``."""
-
-    def __init__(self) -> None:  # noqa: D401 - test double
-        self.client = None
-        self.default_user_id = "aios_default_user"
-        self.default_session_id = "default"
-        self.add_calls: int = 0
-        self.retrieve_calls: int = 0
-        self.last_query_params: Dict[str, Any] | None = None
-
-    def initialize(self, config: Dict[str, Any]) -> None:
-        return None
-
-    def add_memory(self, memory_note) -> MemoryResponse:
-        self.add_calls += 1
-        return MemoryResponse(success=True, memory_id=memory_note.id)
-
-    def remove_memory(self, memory_id: str) -> MemoryResponse:
-        return MemoryResponse(success=True, memory_id=memory_id)
-
-    def update_memory(self, memory_note) -> MemoryResponse:
-        return MemoryResponse(success=True, memory_id=memory_note.id)
-
-    def get_memory(self, memory_id: str) -> MemoryResponse:
-        return MemoryResponse(success=False, error="not found")
 
     def search(self, query_text, user_id, top_k) -> List:
         self.retrieve_calls += 1
@@ -600,37 +561,6 @@ class InHouseProviderPreservationTests(unittest.TestCase):
         self.assertEqual(provider.add_calls, 0)
         # Providers get the user scope, never the agent: the kernel
         # applies visibility (docs/PROVIDER_CONTRACT.md).
-        self.assertEqual(provider.last_query_params.get("user_id"), "alex")
-        self.assertLessEqual(elapsed, FAST_PATH_BUDGET_S)
-
-
-# ----------------------------------------------------------------------
-# 2e - ZepProvider Preservation (Clause 3.5)
-# ----------------------------------------------------------------------
-
-
-class ZepProviderPreservationTests(unittest.TestCase):
-    """Same shape as 2d, but for the ZepProvider type identity."""
-
-    def test_zep_retrieval_does_not_consult_barrier(self) -> None:
-        provider = StubZepProvider()
-        self.assertIsInstance(provider, ZepProvider)
-
-        manager = _make_manager(provider)
-
-        retrieve_syscall = _make_retrieve_syscall(
-            agent_name="ReaderAgent",
-            content="anything",
-            user_id="alex",
-        )
-
-        t0 = time.perf_counter()
-        response = manager.address_request(retrieve_syscall)
-        elapsed = time.perf_counter() - t0
-
-        self.assertTrue(response.success, msg=str(response))
-        self.assertEqual(provider.retrieve_calls, 1)
-        self.assertEqual(provider.add_calls, 0)
         self.assertEqual(provider.last_query_params.get("user_id"), "alex")
         self.assertLessEqual(elapsed, FAST_PATH_BUDGET_S)
 

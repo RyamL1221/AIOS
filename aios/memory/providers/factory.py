@@ -13,8 +13,8 @@ from aios.memory.embedding import EmbeddingConfig
 from .base import MemoryProvider
 from .chroma_inhouse import ChromaInHouseProvider
 from .in_house import InHouseProvider
+from .graphiti import GraphitiProvider
 from .mem0 import Mem0Provider
-from .zep import ZepProvider
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def provider_config(
     providers with this, so they configure them the same way.
 
     Args:
-        provider_type: "in-house", "in-memory", "mem0" or "zep".
+        provider_type: "in-house", "in-memory", "mem0" or "graphiti".
         memory_config: The ``memory:`` block, or a part of it holding
             the provider's section and ``embedding``.
     """
@@ -63,8 +63,14 @@ def provider_config(
             # each client it builds (Subtask 10).
             mem0_config["llm_seed"] = backend_llm.get("seed")
         return mem0_config
-    elif provider_type == "zep":
-        return memory_config.get("zep", {})
+    elif provider_type == "graphiti":
+        # Graphiti extracts with the pinned internal LLM and embeds with
+        # the pinned model, in every locus (docs/GRAPHITI_BACKEND.md).
+        return {
+            **(memory_config.get("graphiti") or {}),
+            "embedding": embedding.as_dict(),
+            "backend_llm": dict(memory_config.get("backend_llm") or {}),
+        }
     return {}
 
 
@@ -76,7 +82,7 @@ class ProviderFactory:
     
     The factory supports:
     - Creating providers by type name ("in-house", "in-memory", "mem0",
-      "zep")
+      "graphiti")
     - Passing provider-specific configuration to the created provider
     - Runtime registration of new provider types for extensibility
     
@@ -88,7 +94,7 @@ class ProviderFactory:
         "in-house": ChromaInHouseProvider,
         "in-memory": InHouseProvider,
         "mem0": Mem0Provider,
-        "zep": ZepProvider
+        "graphiti": GraphitiProvider,
     }
     
     @classmethod
@@ -100,7 +106,7 @@ class ProviderFactory:
         
         Args:
             provider_type: The type of provider to create. Must be one of
-                          the registered provider types ("in-house", "mem0", "zep")
+                          the registered provider types ("in-house", "mem0", "graphiti")
                           or a custom registered type.
             config: Provider-specific configuration dictionary to pass to
                    the provider's initialize() method.
@@ -158,6 +164,6 @@ class ProviderFactory:
         
         Example:
             >>> ProviderFactory.get_available_providers()
-            ['in-house', 'in-memory', 'mem0', 'zep']
+            ['in-house', 'in-memory', 'mem0', 'graphiti']
         """
         return list(cls.PROVIDERS.keys())

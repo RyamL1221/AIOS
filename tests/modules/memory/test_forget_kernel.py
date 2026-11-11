@@ -62,6 +62,9 @@ from tests.modules.memory.test_list_and_delete import (
     request,
 )
 from tests.modules.memory.test_provider_contract import needs_ollama
+from tests.modules.memory._graphiti_script import (
+    drop, needs_neo4j, scripted_llm,
+)
 from tests.modules.memory.test_set_memory_mode import (
     EXAMPLE,
     MODE_KEYS,
@@ -910,19 +913,27 @@ def test_two_kernels_on_one_tombstones_file_share_a_forget(tmp_path):
 
 
 @needs_ollama
-@pytest.mark.parametrize("backend", ["in-house", "mem0"])
+@pytest.mark.parametrize("backend", [
+    "in-house", "mem0",
+    pytest.param("graphiti", marks=needs_neo4j),
+])
 def test_a_kernel_forget_on_a_real_store(backend, tmp_path):
     """On the production stores, a forget through the kernel deletes the
     slot's row and every carrier, across owners, keeps the user's other
     rows and other users' rows, and leaves nothing for the guard to
-    drop."""
+    drop. Graphiti (Subtask 16) runs on the local Neo4j with the
+    scripted LLM, in a namespace of its own, and its scrub blanks the
+    forgotten statement's and the carriers' episodes."""
     root = tmp_path / "store"
-    config = (
-        {"provider": "mem0", "mem0": mem0_config(root)}
-        if backend == "mem0"
-        else {"provider": "in-house",
-              "chroma_inhouse": {"path": str(root / "chroma")}}
-    )
+    if backend == "mem0":
+        config = {"provider": "mem0", "mem0": mem0_config(root)}
+    elif backend == "graphiti":
+        config = {"provider": "graphiti", "graphiti": {
+            "namespace": f"fk{tmp_path.name[-8:]}".replace(".", "_"),
+            "llm_client": scripted_llm()}}
+    else:
+        config = {"provider": "in-house",
+                  "chroma_inhouse": {"path": str(root / "chroma")}}
     manager = kernel(config)
     try:
         seeded = seed(manager)
@@ -944,8 +955,37 @@ def test_a_kernel_forget_on_a_real_store(backend, tmp_path):
         )
         assert diagnostics["tombstoned_forms"] == 2
         assert diagnostics["tombstoned_rows"] == []
+        if backend == "graphiti":
+            # Each deleted row was its episode's only fact, so the
+            # episode went with it; the scrub blanked the summaries
+            # that collected the facts. Nothing Graphiti keeps for
+            # the user still names the lawyer.
+            assert graphiti_texts(manager.provider, USER)
+            assert not [t for t in graphiti_texts(manager.provider, USER)
+                        if "Sandvik" in t]
+            assert forgotten.metadata["scrubbed"]["history"] >= 1
+            # The three deleted rows' episodes, gone with them.
+            assert forgotten.metadata["scrubbed"]["messages"] == 3
     finally:
-        manager.close()
+        if backend == "graphiti":
+            drop(manager.provider)
+        else:
+            manager.close()
+
+
+def graphiti_texts(provider, user):
+    """Every text Graphiti keeps for ``user``: episode contents, entity
+    names and summaries, fact sentences."""
+    async def texts():
+        records, _, _ = await provider.graphiti.driver.execute_query(
+            "MATCH (n {group_id: $group}) "
+            "RETURN coalesce(n.content, '') AS a, coalesce(n.name, '') AS b, "
+            "coalesce(n.summary, '') AS c "
+            "UNION ALL MATCH ()-[r:RELATES_TO {group_id: $group}]->() "
+            "RETURN r.fact AS a, '' AS b, '' AS c",
+            params={"group": provider._group(user)})
+        return [t for r in records for t in (r["a"], r["b"], r["c"]) if t]
+    return provider.runner.run(texts)
 
 
 # --- scripts/set_memory_mode.py --supersession --------------------------

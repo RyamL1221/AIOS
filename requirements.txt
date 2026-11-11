@@ -39,5 +39,8 @@ opentelemetry-proto>=1.25.0
 
 # Memory provider integrations (optional)
 mem0ai==2.0.2  # pinned in both repos (Subtask 9d)
-# Pinned to 2.0.0 — later versions have API incompatibilities with Zep free tier
-zep-cloud==2.0.0
+# Graphiti (Zep's open-source temporal graph) on Neo4j 5.26.33; pinned
+# in both repos (Subtask 16, docs/GRAPHITI_BACKEND.md). Its tenacity>=9
+# is outside llama-index-core 0.10.19's declared range; see DEV_STATUS.
+graphiti-core==0.31.2
+neo4j==6.4.1

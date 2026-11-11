@@ -10,6 +10,14 @@
 #   phases kmem0_ns, kinh_ns, agent_ns: the same kernels with
 #                memory.supersession off, for the no_supersession control
 #                (kernel_shared; replicated_mem0, replicated_inhouse)
+#   Graphiti (Subtask 16, docs/GRAPHITI_BACKEND.md), chosen with PHASES:
+#   phase kgra:  Graphiti, kernel injection on, extraction off:
+#                kernel_shared
+#   phase agent_gra: a Graphiti kernel with memory off:
+#                replicated_graphiti, native_graphiti; 0 kernel memory
+#                ops checked
+#   phases kgra_ns, agent_gra_ns: the no_supersession control
+#                (kernel_shared; replicated_graphiti)
 # Every phase runs with session ages on (memory.block_recency true, unit
 # session), the write barrier at 60 s, k 10 and a 300-token budget, set
 # through set_memory_mode.py; a probe writes nothing (Amendment 3: the
@@ -179,6 +187,9 @@ methods_of() {  # $1 = phase
         kmem0|kinh|kmem0_ns|kinh_ns) echo "kernel_shared" ;;
         agent) echo "replicated_mem0 replicated_inhouse native_mem0 native_inhouse" ;;
         agent_ns) echo "replicated_mem0 replicated_inhouse" ;;
+        kgra|kgra_ns) echo "kernel_shared" ;;
+        agent_gra) echo "replicated_graphiti native_graphiti" ;;
+        agent_gra_ns) echo "replicated_graphiti" ;;
     esac
 }
 
@@ -190,7 +201,7 @@ check_phase() {  # $1 = model, $2 = phase: every kernel log of the phase
     set -- "$LOGS"/kernel_${model}_${phase}_2*.log
     [ -e "$1" ] || { echo "$(date) NO KERNEL LOG $model $phase"; exit 1; }
     case $phase in
-    agent|agent_ns)
+    agent|agent_ns|agent_gra|agent_gra_ns)
         ops=$(cat "$@" | grep -cE "$MEMORY_OPS")
         echo "$(date) $model $phase kernel_memory_ops=$ops"
         [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; } ;;
@@ -227,6 +238,10 @@ for model in $MODELS; do
             kinh|kinh_ns)  mode --provider in-house --kernel-memory on --extract off
                    provider=in-house ;;
             agent|agent_ns) mode --provider mem0 --kernel-memory off; provider="" ;;
+            kgra|kgra_ns) mode --provider graphiti --kernel-memory on --extract off
+                   provider=graphiti ;;
+            agent_gra|agent_gra_ns)
+                   mode --provider graphiti --kernel-memory off; provider="" ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
         phase_needed "$model" "$phase" || {

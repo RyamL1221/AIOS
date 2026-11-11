@@ -183,3 +183,28 @@ def test_a_run_needs_its_own_outroot(tmp_path):
     assert result.returncode == 1
     assert "OUTROOT" in result.stderr
     assert not (tmp_path / "Cerebrum" / "results").exists()
+
+
+def test_the_graphiti_phases_run_the_graphiti_cells(tmp_path):
+    """The Graphiti phases (Subtask 16) run kernel_shared in ``kgra`` and
+    the replicated and native Graphiti methods in ``agent_gra``, with the
+    controls that apply: writer_scoped outside native, no_visibility in
+    native only, no_memory never (it runs in kinh only)."""
+    aios = tree(tmp_path)
+    result = launch(aios, "kgra agent_gra",
+                    "h0 no_memory no_visibility writer_scoped")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == [
+        "agent_gra/h0_native_graphiti",
+        "agent_gra/h0_replicated_graphiti",
+        "agent_gra/no_visibility_native_graphiti",
+        "agent_gra/writer_scoped_replicated_graphiti",
+        "kgra/h0_kernel_shared",
+        "kgra/writer_scoped_kernel_shared",
+    ]
+    assert "kernel_memory_ops=0" in result.stdout
+    assert "stored_conversation_turns=0" in result.stdout

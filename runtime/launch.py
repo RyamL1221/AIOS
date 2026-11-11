@@ -27,7 +27,7 @@ from aios.memory.conversation_extractor import ConversationExtractor
 from aios.utils.redact import redact_secrets
 
 # Providers that get the context injector and conversation extractor.
-PERSONALIZATION_PROVIDERS = ("mem0", "in-house")
+PERSONALIZATION_PROVIDERS = ("mem0", "in-house", "graphiti")
 
 from cerebrum.llm.apis import LLMQuery, LLMResponse
 
@@ -549,6 +549,9 @@ async def get_memory_config():
         "history_db_path": getattr(
             manager.provider, "history_db_path", None
         ),
+        # The backend library and server versions a provider reports
+        # (Graphiti: graphiti-core, the Neo4j driver and server).
+        "backend_versions": getattr(manager.provider, "versions", None),
     }
 
 

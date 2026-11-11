@@ -67,7 +67,7 @@ llms:
 
 memory:
   log_mode: "console" # choose from [console, file]
-  provider: "in-house"  # Options: in-house (Chroma), mem0, zep, in-memory (tests)
+  provider: "in-house"  # Options: in-house (Chroma), mem0, graphiti, in-memory (tests)
 
   # Personalization settings (all opt-in, disabled by default)
   # auto_extract: saves conversation turns as memories after each chat LLM call
@@ -96,10 +96,11 @@ memory:
     dimension: 768
     ollama_base_url: "http://localhost:11434"
 
-  # Internal LLM for Mem0's fact extraction, pinned separately from the
-  # assistant model: the kernel's Mem0 with mem0.infer, and the native
-  # and replicated agents' Mem0 (docs/NATIVE_USAGE.md). Credentials come
-  # from AZURE_API_* in the environment.
+  # Internal LLM for Mem0's and Graphiti's extraction, pinned separately
+  # from the assistant model: the kernel's Mem0 with mem0.infer, the
+  # kernel's Graphiti, and the native and replicated agents' Mem0 and
+  # Graphiti (docs/NATIVE_USAGE.md, docs/GRAPHITI_BACKEND.md).
+  # Credentials come from AZURE_API_* in the environment.
   backend_llm:
     provider: "azure_openai"
     model: "gpt-4o"
@@ -154,11 +155,12 @@ memory:
         # path: ".mem0/chroma"  # ChromaDB persistence directory (default: .mem0/chroma)
     # history_db_path: ".mem0/history.db"  # Mem0's history file (default: history.db next to vector_store.config.path)
 
-  # Zep provider configuration (used when provider: "zep")
-  zep:
-    api_key: ""  # Zep Cloud API key, or leave empty for self-hosted
-    base_url: "http://localhost:8000"  # For self-hosted Zep; remove for Zep Cloud
-    session_id: "default"
+  # Graphiti provider (used when provider: "graphiti"; Subtask 16,
+  # docs/GRAPHITI_BACKEND.md). Neo4j comes from NEO4J_URI, NEO4J_USER
+  # and NEO4J_PASSWORD in the environment (AIOS/.env); the LLM is
+  # memory.backend_llm and the embedder memory.embedding.
+  graphiti:
+    user_id: "default"
 storage:
   root_dir: "root"
   use_vector_db: true
