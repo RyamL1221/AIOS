@@ -1,14 +1,15 @@
 # Native Usage: agent-managed memory conditions
 
-The conditions `native_mem0` and `native_inhouse` are the first locus
-condition of the design: the agents manage memory themselves, using each
-backend the way its documentation says to, and the kernel takes no part
-in memory. This is how people deploy these backends today. This document
-fixes, before any code, exactly what each agent does, so a reviewer can
-check the agent code against it.
+The conditions `native_mem0`, `native_inhouse` and (since Subtask 16)
+`native_graphiti` are the first locus condition of the design: the
+agents manage memory themselves, using each backend the way its
+documentation says to, and the kernel takes no part in memory. This is
+how people deploy these backends today. This document fixes, before any
+code, exactly what each agent does, so a reviewer can check the agent
+code against it.
 
 Code: Cerebrum `cerebrum/example/agents/native/`. Harness:
-`run_evaluation.py --method native_mem0|native_inhouse`.
+`run_evaluation.py --method native_mem0|native_inhouse|native_graphiti`.
 
 ## What "agent-managed" rules out
 
@@ -30,7 +31,7 @@ Code: Cerebrum `cerebrum/example/agents/native/`. Harness:
 The kernel still serves every LLM call (`llm_chat`,
 `llm_chat_with_json_output`): only memory is agent-managed.
 
-## Shared by both conditions
+## Shared by every native condition
 
 **Agents.** `NativeProfileAgent`, `NativeTaskAgent` and
 `NativeAssistantAgent`. The writers extract exactly as the kernel
@@ -96,13 +97,16 @@ trial it is written after retrieval, so it cannot change that trial. A
 benchmark v2 probe turn writes nothing (`store_conversation` false;
 BENCHMARK_V2.md, Amendment 3).
 
-**Configuration.** One pinned embedding model for both conditions,
+**Configuration.** One pinned embedding model for every condition,
 `memory.embedding` (Subtask 5), and one pinned internal LLM for Mem0's
-extraction, `memory.backend_llm`, separate from the assistant's model.
+and Graphiti's extraction, `memory.backend_llm`, separate from the
+assistant's model.
 The AssistantAgent and writers read both from the kernel's
 `/memory/config`, so every results file records them in
 `config_snapshot`. Stores live under the harness's working directory
-(`.native_memory/<condition>/`), apart from the kernel's stores.
+(`.native_memory/<condition>/`), apart from the kernel's stores;
+Graphiti's lives in the shared Neo4j database, in the users' own
+groups.
 
 **Diagnostics parity.** The AssistantAgent records its own
 `injection_diagnostics` with the kernel's keys, so the harness stores
@@ -222,6 +226,97 @@ the minimal one a careful developer would write on Chroma
   distance` (cosine), then the sharing convention.
 - **Conversation.** Written verbatim as `User: ... Assistant: ...`,
   private.
+
+## native_graphiti
+
+Added in Subtask 16. Follows the Graphiti documentation for
+`graphiti-core` 0.31 (installed: 0.31.2; Neo4j 5.26.33 Community), as
+read on 2026-11-11. How Graphiti stores, merges and deletes is in
+`GRAPHITI_BACKEND.md`; this section fixes only what the agents call.
+
+- Configuration: `Graphiti(uri, user, password, llm_client=...,
+  embedder=..., cross_encoder=...)`, then
+  `build_indices_and_constraints()` once
+  ([quick start](https://help.getzep.com/graphiti/getting-started/quick-start),
+  [LLM configuration](https://help.getzep.com/graphiti/configuration/llm-configuration),
+  [Neo4j configuration](https://help.getzep.com/graphiti/configuration/neo4j-configuration)).
+  The documentation configures Azure through `AzureOpenAILLMClient`;
+  the agents pass an `LLMClient` that calls the same deployment through
+  LiteLLM instead (`cerebrum/utils/graphiti.py`, shared with the kernel's
+  provider), because Graphiti ships no LiteLLM client and the backend's
+  calls must reach the Subtask 7 callback to be counted per trial: the
+  pinned `memory.backend_llm` (Azure gpt-4o, temperature 0, seed) for
+  both of Graphiti's model sizes, as Mem0's extraction uses. The
+  embedder is the pinned Ollama model through the same Ollama call as
+  the other conditions, and no cross-encoder is used: `search()` calls
+  none. Telemetry is off (`GRAPHITI_TELEMETRY_ENABLED=false`;
+  [telemetry](https://help.getzep.com/graphiti/other/telemetry)).
+- Writing: `add_episode(name=..., episode_body=..., source=EpisodeType.message,
+  source_description=..., reference_time=..., group_id=...)`
+  ([adding episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes)),
+  with messages in the documented "{role/name}: {message}" form.
+- Partition: `group_id` per user, the documented way to keep tenants
+  apart ([graph namespacing](https://help.getzep.com/graphiti/core-concepts/graph-namespacing)).
+- Searching: `search(query, group_ids=[<group>], num_results=k)`, which
+  returns facts (edges, with `fact`, `valid_at`, `invalid_at`), fused
+  from BM25 and cosine by reciprocal rank
+  ([searching](https://help.getzep.com/graphiti/working-with-data/searching)).
+  It returns no score.
+- Reading episodes: `graphiti.nodes.episode.get_by_uuids(...)` and
+  `get_by_group_ids(...)`
+  ([CRUD operations](https://help.getzep.com/graphiti/working-with-data/crud-operations)).
+
+What the agents do:
+
+- **Store.** One Neo4j database, shared with the kernel's and the
+  replicated agents' Graphiti stores (Community edition has one),
+  separated by group. Each agent constructs its own `Graphiti` client
+  from the same settings.
+- **Group.** Graphiti accepts only letters, digits, `_` and `-` in a
+  group id, so the agents use the user id's readable part and the first
+  12 hex digits of its SHA-256 (the same form as the kernel's), not the
+  raw id, which can hold `@` and `.`.
+- **Writers.** `add_episode(name=<agent>:<memory_type>:<uuid>,
+  episode_body="user: <memory text>", source=EpisodeType.message,
+  source_description=<metadata JSON>, reference_time=<now, UTC>,
+  group_id=<group>)`. Graphiti's episodes have no metadata field, so the
+  agents keep theirs, the same keys as the other conditions plus the v2
+  statement fields, as JSON in `source_description`, a free-text field
+  the message prompts never read (only Graphiti's JSON-episode prompt
+  does: `prompts/extract_nodes.py:244`). Graphiti extracts the facts;
+  the stored facts are Graphiti's, not the agent's text. Writers do not
+  search before writing. Writing the statement as the user's message
+  matters: as a `text` episode, a first-person statement ("I live in
+  Utrecht") gave Graphiti no fact (`GRAPHITI_BACKEND.md`).
+- **Sharing.** The AssistantAgent searches the user's group only. For
+  each fact it reads the metadata of the episodes in the fact's
+  `episodes` and applies the sharing convention: the fact is visible
+  when at least one of its episodes is (the agent's own, or `shared`,
+  for this user). A fact Graphiti merged from a private and a shared
+  write is therefore visible through the shared one.
+- **Order and scores.** Facts are used in the order `search()` returns
+  them, with no score filtering (there is no score), cut at `k` after
+  the sharing convention as for the other conditions. `num_results` is
+  `k` (10), which is also the limit of the search recipe `search()`
+  writes it into (`EDGE_HYBRID_SEARCH_RRF`), a shared object Graphiti's
+  ingestion reads too, so these calls leave it unchanged.
+- **Validity.** `search()` returns facts Graphiti has invalidated as
+  well. The block prints each fact's sentence only, as the other native
+  conditions print theirs; the agents record each fact's `invalid_at`
+  and `expired_at` in their diagnostics, so Graphiti's own invalidations
+  are reported apart from the kernel's supersession and credited to no
+  locus.
+- **Revoke.** The writer finds its own episodes of the slot
+  (`get_by_group_ids` on the user's group, filtered by its metadata) and
+  deletes each with `graphiti.remove_episode(uuid)`. The documentation
+  shows no episode delete; `remove_episode` is the library's own and is
+  what Graphiti's MCP server calls. It deletes a fact only when no other
+  episode claims it, and it rebuilds the summaries of the entities the
+  episode mentioned with the LLM; those calls are counted like the
+  others. Like the other native writers, it deletes nothing of other
+  agents.
+- **Conversation.** `add_episode` with `"user: <query>\nassistant:
+  <response>"` as a message episode, private.
 
 ## Mem0 extraction check
 

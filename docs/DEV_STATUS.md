@@ -45,6 +45,7 @@ do not describe this branch.
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
 | 15 | Complete deletion and supersession | Done |
+| 16 | Graphiti backend and native condition | In progress (spec) |
 
 ### Subtask 1
 
@@ -2244,6 +2245,43 @@ Step 0 settles two items before the deletion and supersession work.
     In the code only tests and docstrings changed, and no recorded
     result changes. The mutants, their results and the reruns are in
     `repo-artifacts/AIOS/mutation15/`.
+
+### Subtask 16
+
+Graphiti (Zep's open-source temporal knowledge graph) as the third
+backend, in all three loci; the Zep Cloud provider is retired. Design:
+`GRAPHITI_BACKEND.md`; the native condition: `NATIVE_USAGE.md`,
+"native_graphiti". Both were written and committed before any provider
+code.
+
+- **Setup** (2026-11-11). `graphiti-core==0.31.2` in both venvs (with
+  `neo4j==6.4.1`; `certifi` 2026.10.23); Neo4j `5.26.33-community` in
+  Docker (`aios-graphiti-neo4j`, digest `sha256:ec10d705…`, bolt on
+  127.0.0.1:7687), credentials in `AIOS/.env`, telemetry off. The AIOS
+  venv's `tenacity` went from 8.5.0 to 9.2.1, which `llama-index-core`
+  0.10.19 declares it does not accept (`<9`); every name it imports from
+  `tenacity` exists in 9.2.1.
+- **Decisions from the user** (2026-11-11): Graphiti's extraction LLM is
+  Azure gpt-4o, as Mem0's, and every call a write makes is a
+  `backend_extraction` record of its trial; search is Graphiti's
+  documented `search()`, unscored (`scored_search: false`) in every
+  locus, with no reranker unless the native agents get the same; the
+  benchmark measures the kernel's slot supersession, and Graphiti's own
+  invalidations are recorded apart and credited to no locus.
+- **Exploration** (five writes of one user, Azure gpt-4o, before the
+  spec). As `text` episodes, first-person statements gave no fact; as
+  `user:` messages, every write gave one or more. A restatement was
+  merged onto an earlier fact and gave no fact of its own, so rows are
+  per fact and write. Graphiti invalidated the newer of two
+  contradicting facts ("moved to Mattermost last week" against "chat
+  tool is Slack"). Deleting an episode left a fact another episode
+  shared, with the deleted episode's sentence. 3.6 LLM calls and 6,656
+  prompt tokens a write, 4 to 7 s. The deployment ignores
+  `json_object` (API version 2024-02-15-preview): JSON is schema-guided.
+  The usage logger counts synchronous LiteLLM calls only, so Graphiti's
+  client calls `litellm.completion` in a worker thread with the trial's
+  tag carried into Graphiti's event loop; the counts above came through
+  that path.
 
 ## Open decisions
 
