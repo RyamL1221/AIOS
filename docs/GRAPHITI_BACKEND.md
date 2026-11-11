@@ -133,8 +133,9 @@ work as for any other write. A fact claimed by several writes appears as
 several rows with the same text; the kernel's dedupe keeps one.
 
 - `add` returns the id of the write's first row, or `""` when the write
-  gave no fact (as Mem0 does when it extracts nothing). The facts the
-  write merely invalidated are not its rows.
+  gave no fact (as Mem0 does when it extracts nothing; a lost memory,
+  BENCHMARK_V2.md Amendment 5). The facts the write merely invalidated
+  are not its rows.
 - `capabilities()`: `scored_search` **false**, `semantic_search` true,
   `internal_llm` true, `native_sdk` true. `backend_extraction` is true:
   there is no verbatim mode.
@@ -376,9 +377,14 @@ serialized by a lock.
    compensates by deleting carrier facts and scrubbing episode texts,
    entity names and summaries; what stays is listed above.
 3. **Writes with no fact.** A write Graphiti extracts nothing from
-   stores no row, and the harness fails its trial, as for Mem0. As
-   messages, every write in the exploration gave a fact; the functional
-   check measures it.
+   stores no row. As messages, every write in the exploration gave a
+   fact; the functional check found 3 of 720 that did not (entities,
+   the statement in an entity's summary, no edge; the same writes gave
+   a fact in other runs). The harness first failed such a trial, as for
+   Mem0; since BENCHMARK_V2.md Amendment 5 a Graphiti write that stored
+   no fact is a lost memory, recorded in `writes_without_fact`, and the
+   trial is scored (Graphiti's extraction errors raise, Mem0's are
+   swallowed).
 4. **Graphiti's temporal reasoning** can invalidate the newer fact
    (exploration); recorded, credited to no locus.
 5. **Schema-guided JSON** depends on LiteLLM's handling of

@@ -2282,6 +2282,17 @@ code.
   client calls `litellm.completion` in a worker thread with the trial's
   tag carried into Graphiti's event loop; the counts above came through
   that path.
+- **Functional check, writes with no fact** (`f16b`, `f16c`). Graphiti
+  sometimes extracted a write's entities but no fact (the statement in
+  an entity's summary, no edge), and its `search()` returns facts
+  only: 3 of 720 writes, 3 of 40 users, all in replicated at H = 2
+  (two V5 raw-JSON payloads and one plain statement; each write gave a
+  fact in another run). The extraction rule failed each trial and the
+  cell twice. Decision from the user (2026-11-11): on Graphiti, whose
+  extraction errors raise, such a write is a lost memory, recorded in
+  `writes_without_fact`, and the trial is scored (BENCHMARK_V2.md
+  Amendment 5; v1 and v2). The two failed attempts are in
+  `repo-artifacts/Cerebrum/bench_v2_functional_graphiti_failed_cell*`.
 
 ## Open decisions
 

@@ -595,7 +595,9 @@ into the top level:
   the library suppressed, and one whose reply named rows that its own
   session then removed, every one. Any other write whose reply named
   no row never is (a suppressed write's names none; Amendment 4,
-  "Corrected during the smoke").
+  "Corrected during the smoke"). On Graphiti, whose extraction errors
+  raise, such a write is a lost memory and the trial is scored
+  (Amendment 5).
 
 A cell with a failed user is re-run whole under a new run id (known
 issue 36).
@@ -1300,3 +1302,46 @@ row it did not delete; no run used `retrieve_memory_raw` or
   own, which a resume keeps.
 - **One kernel.** A v2 run refuses a `--kernel-url` other than the
   configured kernel, which its agents, the audit and the judge use.
+
+## Amendment 5 (2026-11-11, Subtask 16, during the Graphiti functional check)
+
+**Why.** Graphiti sometimes extracts a write's entities but no fact.
+"user: I'm enrolled in a nighttime class for Calligraphy." gave the
+entities Calligraphy and user, the statement in Calligraphy's summary,
+and no edge; Graphiti's `search()` returns facts (edges) only, so the
+write is lost to every locus. The same write gave a fact in two other
+runs: Azure GPT-4o at temperature 0 with a seed is not deterministic
+here. In the Graphiti functional check (`f16b`, `f16c`), 3 of 720
+writes stored no fact (3 of 40 users, all in replicated at H = 2), and
+under the extraction rule ("A v2 extraction failure", in "Harness")
+each failed its trial and the cell, twice.
+
+**The rule.** The extraction rule exists because Mem0 logs and swallows
+its extraction LLM's errors, so an empty Mem0 write may be a failed
+call. Graphiti does not swallow them: graphiti_core re-raises an entity
+or edge extraction call's error after its retries (only its timestamp
+extraction, date parsing and database candidate lookups log and go
+on), so a Graphiti write that returned and stored no row found no
+fact. (It also drops, with a WARNING, an extracted fact whose entity
+was not extracted; none of the three writes logged one.) On
+Graphiti (`EMPTY_WRITE_IS_LOSS`, Cerebrum
+`benchmarks/shared_memory/models.py`):
+- such a write is a lost memory, not a failure: the trial is scored and
+  records the write in `writes_without_fact` (v2: event ids; v1: the
+  writers whose write stored no row);
+- a probe on its fact is scored like any other, so the loss counts
+  against Graphiti's cells;
+- a trial with no backend LLM call, and any writer error, still fail.
+
+Mem0's rule is unchanged. The backend is the kernel's `/memory/config`
+`provider`, or the agents' memory backend.
+
+**Reported.** The analysis's reading "Graphiti writes that stored no
+fact (Amendment 5)" gives, per Graphiti cell, the scored trials, those
+with such a write, the writes, and the probes whose target was one,
+with their passes.
+
+**What it changes.** Every Graphiti cell finished before it recorded no
+such write (each passed the stricter rule), so it reads the same under
+this one. The two failed attempts of replicated at H = 2 are kept in
+`repo-artifacts`.
