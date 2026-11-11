@@ -1630,7 +1630,8 @@ def test_an_update_never_retires_other_rows():
 def test_the_supersession_setting():
     """``supersession`` is "off" unless the memory config says
     "exclude", travels in ``as_dict`` (the /memory/config report a
-    replicated agent copies), and any other value is refused."""
+    replicated agent copies), and another value ("bogus") is
+    refused."""
     assert SUPERSESSION_MODES == ("off", "exclude")
     assert PipelineSettings().supersession == "off"
     assert PipelineSettings.from_memory_config({}).supersession == "off"

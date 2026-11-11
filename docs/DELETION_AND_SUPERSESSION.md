@@ -578,8 +578,9 @@ Each mechanism gets a test that fails without it:
 - **Forget:** it deletes the owner's rows, another writer's echo, a
   Mem0 fold by value and a row naming only an alias; it leaves rows
   that carry no form; it records the tombstone before its deletes; it
-  waits for earlier writes and blocks later retrievals without waiting
-  on itself; it fails cleanly on a provider error and on a listing at
+  waits for earlier writes and does not wait on itself; holding the
+  sequence stamped for it (as the kernel stamps one), it blocks later
+  retrievals; it fails cleanly on a provider error and on a listing at
   its limit; its reply names no other agent's text.
 - **Suppression:** a re-write by another agent after the forget is
   swept (a statement row, an echo, a conversation row, an alias only),
@@ -599,11 +600,12 @@ Each mechanism gets a test that fails without it:
   as withheld.
 - **Supersession:** a later statement retires earlier rows of its slot,
   across owners, without changing their text or embedding; the selector
-  excludes them and records them; a listing still returns them; a
-  forget deletes them; `off` marks nothing; agents cannot set or clear
-  marks; a write that stored nothing retires nothing, even when another
-  row carries its event; retired rows leave before dedupe and the
-  threshold.
+  excludes them and records them (the tests' statements carry a
+  session, so their rows carry both marks); a listing still returns
+  them; a forget deletes them; `off` marks nothing; agents cannot set
+  or clear marks; a write that stored nothing retires nothing, even
+  when another row carries its event; retired rows leave before dedupe
+  and the threshold.
 - **The kernel:** `forget_memory` through `execute_request` and
   `/query`; the barrier (a retrieval accepted after a forget sees no
   deleted row); every branch, `retrieve_memory_raw` included, answers

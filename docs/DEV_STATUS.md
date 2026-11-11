@@ -44,7 +44,7 @@ do not describe this branch.
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
-| 15 | Complete deletion and supersession | In progress (review, mutation run) |
+| 15 | Complete deletion and supersession | Done |
 
 ### Subtask 1
 
@@ -1805,7 +1805,8 @@ Step 0 settles two items before the deletion and supersession work.
     1050 passed, 4 skipped, the same 19 failures and 2 errors, by name.
     The test agents checked their tests against mutants of the rules
     they pin; the subtask's review, its verification pass and the
-    mutation run on the final code follow ("Review", below).
+    mutation run on the final code follow ("Review" and "Mutation
+    run", below).
   - **Functional check under Amendment 4** (`f15b`; Cerebrum
     `results/bench_v2_functional_a4/`, `5b3295e`): `pilot_v2` users 0
     to 4, Qwen, no judge, 29 cells (Subtask 14's 21, plus
@@ -2149,8 +2150,100 @@ Step 0 settles two items before the deletion and supersession work.
       users 13 and 25 lost their recall targets). Rewriting the row
       without the forgotten value would keep that fact, at the cost of
       a write the forget makes on another agent's behalf.
-  - **Next:** the mutation run on the final code (rule 6), then the
-    tag.
+  - **Mutation run** (rule 6, once, on the final code: AIOS `28ac914`,
+    Cerebrum `e1e1ff7`). Eight module owners wrote 319 mutants of rules
+    the documents state and ran each on a scratch copy against their
+    area's tests; 249 were killed. Each survivor was then rerun, with a
+    local Ollama allowed, until a test killed it or the full suite of
+    every repo whose tests load its file (the AIOS library's: both)
+    passed on it. Of the 70:
+    - 8 are killed by tests outside their area's run: 3 by tests that
+      need Ollama, which the run's network guard skipped (the Mem0
+      provider's history path in its store, `/memory/config` reporting
+      it, an in-house mark making no embedding call); 2 of the
+      matcher's rules (casefolding; `_` and `/` as separators) by
+      Cerebrum's matcher tests, which load the library's file; and 3
+      by the rest of Cerebrum's suite: the scorer importing the `aios`
+      package instead of loading the matcher by path (five test
+      modules then fail to import), the library dropping the usage tag
+      it is given (the replicated checks), and the `--kernel-url`
+      refusal applied to a v1 run (a `main` test of a v1 run).
+    - 8 could change a reported number; each now fails a test
+      (Cerebrum `c2f1ed3`): a v2 trial's `retired_rows` (the field, and
+      the orchestrator's argument), without which the supersession
+      reading's `earlier_rows` and `marked` read 0 (`f15b`'s 10 of 10
+      per cell, the smoke's 60 marked rows per cell); `retired_in_block`
+      in the native locus (the smoke's native 168 and 131 would read
+      0); the budget reading's in-house cells (`f15b`'s 0 would read
+      2); a guard stage that kept no row (`f15b`'s guard criterion
+      would fail on kernel in-house `no_memory`'s 30 probes); the scrub
+      criterion's H = 0 (`f15b`'s 10 forgets would read 20); and the
+      supersession reading's probes and rows (the smoke's native
+      in-house 168 would read 246, and the 360 excluded rows of each
+      kernel and replicated cell 180).
+    - 14 are in `synth_v2.py`; six would have changed a request
+      revision 3's build sent, so its counts (344 calls, 22 fallbacks)
+      could differ. A test now checks `users_v2`'s `generator_sha256`
+      against the generator's own hash, and fails on all 14. It pins
+      that this file built revision 3, not each rule: no test of its
+      own pins `generate`'s alternation past a slot's first user,
+      `check`'s assignment check, the word-family rule, the family
+      table's week and report forms, the family forms a request names
+      as words not to use, the lean rules on a retry and on reuse,
+      home_city's workplace words past "work", client's "building
+      project" and "project we", the catalog check of every pool value,
+      or the new contradiction templates in the catalog check.
+    - 40 can change no reported result: none acts in `f15b` or `s15b`,
+      or nothing reported reads it (three would change what a new run
+      records of its pre-flight, which the runs' `PROVENANCE.md`
+      describe). Each holds in the code (its area's owner checked it),
+      but no test of either repo pins it, so this file claims no more:
+      - the library: a forget's forms from its own slot's tombstones
+        only; a value's aliases from every row stating it; the
+        matcher's ASCII boundary (a value beside Chinese text); a
+        restatement lifting by its value, not its own aliases; the
+        post-write scrub after any write of a user with tombstones,
+        not only after a sweep; a write that stored nothing not
+        suppressed; a forget that found no value still scrubbing its
+        deleted rows' history; a row retired without a session
+        excluded; the guard reading a row's formatted text with its
+        metadata; the sweep inside the write's barrier hold; a forget
+        without a stamped sequence holding its own; "Exclude" refused
+        as a setting;
+      - the kernel: the audit's listing limit; the usage tag it passes
+        the library (injection's embedding calls would count to no
+        user; no report gives cost);
+      - the harness: `forgotten_ids` only for rows its own session
+        removed; a session's `stored_rows` without later deletions;
+        `probe_writes` over other agents' rows (the consumer's are
+        pinned); a private statement among its slot's statements;
+        `revoked_value_rows` for rows outside the four agents;
+      - the scorer and the run: the matcher found through `AIOS_ROOT`;
+        `deleted_ids_in_block` in every probe and over every owner (no
+        reading uses it); a source event's row without a `fact_key`;
+        `main` passing the control to the pre-flight; the history check
+        for kernel methods only; the paths returned for every method;
+        the barrier timeout and the session unit; a `--kernel-url` with
+        a trailing slash; `run_settings`' pre-flight, and `main`
+        handing it on;
+      - the writers: an empty reply recorded as not suppressed; a
+        replicated store's own tombstone file when `/memory/config`
+        reports the kernel's;
+      - the analysis: a revoke without a `revoke_path`; an unscored
+        `writer_scoped` echo probe; an owner's revoke in the scrub
+        criterion; `swept` and `retired` counting rows; the
+        supersession reading leaving failed trials out; a target's
+        listed rows.
+
+    Corrected with it: the spec's Tests section (the forget's hold on
+    later retrievals is tested with a stamped sequence; the selector's
+    exclusion, with rows that carry both marks), the analysis's
+    `library_criteria` docstring (only the deletion criterion counts a
+    failed trial or an unscored probe against itself; it now says
+    which conditions each criterion reads) and two tests' docstrings.
+    In the code only tests and docstrings changed, and no recorded
+    result changes. The mutants, their results and the reruns are in
+    `repo-artifacts/AIOS/mutation15/`.
 
 ## Open decisions
 
@@ -2230,8 +2323,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   the 14 errors; Cerebrum 1064 passed, 4 skipped, the same 19 failures
   and 2 errors, by name) and the verification pass's (AIOS `8db0b35`,
   Cerebrum `ca91a13`: AIOS 635 passed, the 14 errors; Cerebrum 1064
-  passed, 4 skipped, the same 19 failures and 2 errors, by name).
-  The names
+  passed, 4 skipped, the same 19 failures and 2 errors, by name) and
+  the mutation run's tests (Cerebrum `c2f1ed3`: 1082 passed, 4
+  skipped, the same 19 failures and 2 errors, by name; AIOS unchanged:
+  635 passed, the 14 errors). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
