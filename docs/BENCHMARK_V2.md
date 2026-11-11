@@ -375,7 +375,10 @@ replicated, the raw store) after every session and after the probes.
 From these it records:
 - each event's stored rows and ids, matched by `provenance_event`.
   This covers Mem0's sibling facts, since the kernel's Mem0 `add`
-  returns only the first id;
+  returns only the first id. A row that a forget or a sweep deleted
+  later in the same session is in no listing; the event keeps the ids
+  its reply named (`reported_ids`) and, since Amendment 4, those its
+  session removed (`forgotten_ids`);
 - the ids each revoke deleted, and any deleted id that reappears in a
   later listing or among a probe's injected rows;
 - `revoked_value_rows`: every row, of any agent, that carries a revoked
@@ -535,7 +538,9 @@ Each value is recorded with the results.
 **TrialResult additions** (all defaulted, so v1 files still load):
 - `user_id`;
 - `sessions[]`: per session the writer, its events with the rows and
-  ids each stored or deleted, the listings' counts, and any error;
+  ids each stored or deleted (for a write, the rows listed after the
+  session, the ids its reply named and, since Amendment 4, those its
+  session removed), the listings' counts, and any error;
 - `probe_results[]`: per probe:
   - the type, question, `expected` and `forbidden`, and the observed
     answer;
@@ -578,10 +583,13 @@ into the top level:
   exempt; see "Recency").
 - **A judge failure** after retries.
 - **A v2 extraction failure.** With backend extraction, every write
-  event must store at least one row, counted from the listings by
-  `provenance_event`, and a cell that wrote must record backend LLM
-  calls. This replaces v1's "every writer creates", which a revoke
-  would break.
+  event must store at least one row, counted in the listing after its
+  session by `provenance_event`, and a trial that wrote must record
+  backend LLM calls. This replaces v1's "every writer creates", which
+  a revoke would break. Since Amendment 4 two writes are excused: one
+  the library suppressed, and one whose reply named rows that its own
+  session then removed, every one. A write whose reply named no row
+  never is (Amendment 4, "Corrected during the smoke").
 
 A cell with a failed user is re-run whole under a new run id (known
 issue 36).
@@ -848,8 +856,9 @@ smoke run again on it, with the changes below.
   listing followed: the writer failed, or the listing raised. A writer
   that raised records its session with the error and no events, and the
   session's `stored_rows` None. They are `[]` and 0 when the listing
-  ran and held no row of the event, which is the Mem0 "stored nothing"
-  case.
+  ran and held no row of the event: Mem0 stored nothing, the library
+  suppressed the write, or (Amendment 4) a forget or a sweep later in
+  its session deleted its rows, which its `forgotten_ids` then name.
 - **Reuse is checked.** `--reuse` accepts only a whole version 2 file
   with at least the users to build, drawn with the run's seed and
   paraphrased by its model. A limited name such as `pilot_v2` names
@@ -1112,8 +1121,11 @@ both backends:
   forget, its ids by owner and reason, its value and form counts and
   its scrub counts. `deleted_ids` covers every owner's rows, so the
   reappearance check covers them too.
-- **per write event:** the ids it swept, retired and lifted, and
-  `suppressed`. A suppressed write is not an extraction failure.
+- **per write event:** the ids it swept, retired and lifted,
+  `suppressed`, and `forgotten_ids` (the ids its reply named that its
+  own session removed). A suppressed write is not an extraction
+  failure, nor is one whose session removed every row its reply named
+  ("Corrected during the smoke").
 - **per user:** `revoked_value_rows` takes every statement of the
   revoked slot, from the raw store.
 
@@ -1182,3 +1194,29 @@ this does not show").
 - **Mem0's scrub** deletes a carrying message whole and clears a
   history record's text, keeping the record. A store without a history
   path of its own scrubs the file its clients use.
+
+**Corrected during the smoke** (2026-11-10, after its first cell;
+Cerebrum `64da5f7`). The smoke's first attempt (`s15`) stopped after
+its first cell, kernel Mem0 at H = 0: the extraction check failed user
+19 (`backend_extraction_failed: stored no rows: u019-e08`). Mem0 had
+folded the revoked codename into the only row of `u019-e08`, the task
+writer's write just before the revoke in the same session, and the
+forget deleted that row by value, as this amendment requires. The
+listing after the session then held no row of the write.
+- **The check.** A write whose reply named rows, every one of which
+  its own session removed (a revoke's `deleted_ids` or a write's
+  `swept_ids`), is no extraction failure, and its record names them
+  (`forgotten_ids`). A write whose reply named no row still fails, and
+  so does one whose named rows a later session removed or nothing
+  removed.
+- **What a fold costs.** A fold row also states its own fact, and the
+  forget deletes it whole. In that cell the forgets deleted three
+  folds: user 19's, in a filler's row, and the only rows of users 13's
+  and 25's recall targets, whose recall probes then failed. `s14b`,
+  whose revokes left folds in place, passed both and failed their
+  deletion instead. A fold in a contradiction's later statement would
+  leave its slot with no selectable row: the earlier statement stays
+  retired.
+
+The cell is re-run whole under a new run id (known issue 36). No
+design decision, probe or scoring rule changes.

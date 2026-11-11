@@ -1876,8 +1876,32 @@ Step 0 settles two items before the deletion and supersession work.
       replicated Mem0's users 0 to 2 on 2026-11-10 and users 3 and 4
       on 2026-11-11, and both `no_supersession` Mem0 cells on
       2026-11-11.
-    - **Next:** the 30-user smoke (H = 0, the six cells, judge v2 on
-      the integration probe).
+  - **Smoke, first attempt** (`s15`; Cerebrum `5b3295e`, AIOS
+    `52bf922`; started 2026-11-10 19:52 EST). Its first cell, kernel
+    Mem0 at H = 0, ran its 30 users, and the driver stopped on one
+    failed trial: the extraction check failed user 19
+    (`backend_extraction_failed: stored no rows: u019-e08`). Mem0 had
+    folded the revoked codename into the only row of `u019-e08`, the
+    task writer's write just before the revoke, and the forget deleted
+    that row by value, as Amendment 4 requires. All five of user 19's
+    judge-free probes passed, and its audit kept no carrier.
+    - Fixed in Cerebrum `64da5f7` (`BENCHMARK_V2.md`, Amendment 4,
+      "Corrected during the smoke"; known issues 32 and 38). Replayed
+      on the saved records, the fixed check excuses only `u019-e08`
+      and flags nothing in `f15a`, `f15b` or the attempt's cell.
+    - A read-only sweep of the harness, the analysis, the library and
+      the documents for the same assumption found no other check that
+      a same-session forget breaks, and one reading to correct: the
+      analysis files a failed recall whose target's only row a forget
+      deleted under `not_in_block` ("never stored, or selection lost
+      it"). In the attempt's cell those were users 13 and 25, the only
+      recall failures (28 of 30 passed): Mem0 had folded a revoked
+      value into each target's row ("Not pre-stated",
+      `DELETION_AND_SUPERSESSION.md`).
+    - The attempt's results and run log are in
+      `repo-artifacts/Cerebrum/bench_v2_smoke_a4_s15/`.
+    - **Next:** the smoke again, under a new run prefix (known issue
+      36).
 
 ## Open decisions
 
@@ -2082,9 +2106,15 @@ These fail on `workshop-postrun` too and are not caused by later work.
     stores. The native backend adds a hash. Not fixed here.
 32. Mem0 swallows extraction LLM errors (Azure firewall refusals
     included) and stores nothing. Since Subtask 10 the harness fails
-    such trials (`backend_extraction_failed`). Any other caller of
-    Mem0, including the kernel's own conversation writes, still gets
-    an empty result with no error.
+    such trials (`backend_extraction_failed`). In v2 the check reads
+    each write's rows in the listing after its session, so until
+    Cerebrum `64da5f7` it also failed a write whose rows a forget later
+    in that session deleted: the smoke's first attempt (`s15`), kernel
+    Mem0, user 19 (`u019-e08`, a fold of the revoked codename; known
+    issue 38). It now excuses a write whose reply named rows that its
+    own session removed, every one; a write whose reply named no row
+    still fails. Any other caller of Mem0, including the kernel's own
+    conversation writes, still gets an empty result with no error.
 33. Two Subtask 10 native Mem0 H0 runs were excluded: one was cut off
     by a laptop shutdown, the other ran from a network Azure refused.
     Both are in `repo-artifacts/Cerebrum/heterogeneity_check_interrupted/`.
@@ -2111,7 +2141,14 @@ These fail on `workshop-postrun` too and are not caused by later work.
 38. Fixed in Subtask 15, step 1, for the kernel and replicated loci
     (AIOS `a610dcd`): a revoke there is a forget, which deletes every
     carrier of the value, of any agent, folds included; in `f15b` no
-    audit at H = 0 kept one. Native deletion stays writer-scoped
+    audit at H = 0 kept one. `f15b`'s forgets deleted no fold (each
+    cell's value deletions were users 0 and 4's echoes). The smoke's
+    first attempt (`s15`, kernel Mem0) deleted the folds of users 13,
+    19 and 25, `s14b`'s three. A fold row also states its own fact, so
+    users 13 and 25 lost their recall targets' only rows and failed
+    recall, which `s14b` passed; user 19's fold was in a write just
+    before the revoke in its session, which the extraction check then
+    misread (known issue 32). Native deletion stays writer-scoped
     (`DELETION_AND_SUPERSESSION.md`, Decision 4). There, under the
     `writer_scoped` control, and in every locus before step 1, a
     revoke leaves in place:

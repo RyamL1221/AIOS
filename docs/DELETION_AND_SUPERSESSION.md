@@ -252,6 +252,13 @@ harness's listings after each session and after the probes.
   with its text. A deletion probe's pass alone could come from the
   guard; the check also requires an empty audit and a guard that
   dropped nothing.
+- **A write a forget emptied.** A forget can delete every row of a
+  write made earlier in its own session (a Mem0 fold of the value), so
+  the listing after the session holds no row of that write.
+  `extraction_failure` excuses it when the write's reply named rows and
+  the session removed every one, as it excuses a suppressed write; a
+  write whose reply named no row still fails it (`BENCHMARK_V2.md`,
+  Amendment 4, "Corrected during the smoke").
 
 **Decision 1, authority (settled: yes).** A forget deletes other
 agents' rows, which the library's owner-only rule (Subtask 2) forbids.
@@ -337,6 +344,9 @@ deletes them too.
   (`transition_marked`).
 - Folds: a row of another fact that carries the stale value is not
   retired (its `fact_key` differs). It is counted apart, by value.
+- A forget that later deletes the new statement's rows (a Mem0 fold of
+  a forgotten value) leaves the earlier rows retired: the slot then
+  has no selectable row.
 
 With `supersession: off` (the default, and the `no_supersession`
 control) nothing is marked or excluded, as before.
@@ -477,6 +487,15 @@ Expectations, not rules:
   cells never exercise suppression. Their correctness rests on the unit
   tests, and on the criterion that the guard drops nothing.
 
+**Not pre-stated** (found in the smoke's first attempt, `s15`): a Mem0
+fold row also states its own fact, and the forget deletes it whole, so
+that fact goes with it. In its kernel Mem0 cell the forgets deleted
+the only rows of users 13's and 25's recall targets, whose recall
+probes then failed; `s14b`'s revokes left those folds in place, and
+both passed. In-house cells store utterances verbatim, and no revoked
+value appears in any other utterance of the same `pilot_v2` user, so
+they lose no fact this way.
+
 ## Tests
 
 Each mechanism gets a test that fails without it:
@@ -521,8 +540,10 @@ Each mechanism gets a test that fails without it:
   `writer_scoped`; every statement carries `value_aliases`.
 - **The harness and the analysis:** the kernel and replicated listings
   come from the raw store, so `revoked_value_rows` sees a carrier the
-  guard hides; `retired_in_block` from the dataset; the new criteria,
-  with the budget reported, not required.
+  guard hides; `extraction_failure` excuses a write whose reply's rows
+  its own session removed, and still fails one whose reply named no
+  row; `retired_in_block` from the dataset; the new criteria, with the
+  budget reported, not required.
 
 ## What this does not show
 
