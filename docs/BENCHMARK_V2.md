@@ -1128,7 +1128,8 @@ exclude` (`set_memory_mode.py --supersession exclude`). The pre-flight
 checks it per control for a kernel or replicated method (`off` under
 `no_supersession`). For a kernel method it requires a tombstone file
 and, on Mem0, refuses a history path that is missing or under
-`~/.mem0`; every cell records the kernel's two paths.
+`~/.mem0`; every cell records the kernel's two paths, the history
+path null where the kernel runs in-house (it keeps no Mem0 history).
 
 **Two more controls**, at H = 0 in the kernel and replicated cells on
 both backends:
@@ -1294,7 +1295,8 @@ row it did not delete; no run used `retrieve_memory_raw` or
   serves raised; both answer `success` false now.
 - **The driver checks every kernel log of a phase**, earlier launches'
   included, also for a phase a resumed launch finds finished, and it
-  requires `RUN_PREFIX` and `OUTROOT`, each the run's own (a resume
-  keeps `OUTROOT`).
+  requires `RUN_PREFIX`, new for every run and every resume, and
+  (since AIOS `8db0b35`, the verification pass) `OUTROOT`, the run's
+  own, which a resume keeps.
 - **One kernel.** A v2 run refuses a `--kernel-url` other than the
   configured kernel, which its agents, the audit and the judge use.

@@ -4,7 +4,8 @@ NeurIPS Subtask 15 review).
 A phase's checks (no kernel memory operation in an agent phase; no
 stored probe turn in a kernel phase) read every kernel log of the
 phase, an earlier launch's included, and run again for a phase a
-resumed launch finds finished; ``RUN_PREFIX`` is required.
+resumed launch finds finished; ``RUN_PREFIX`` and ``OUTROOT`` are
+required.
 
 The real script runs in a temporary tree, with stubs for git, lsof,
 curl, the kernel, the harness, set_memory_mode.py and the cell check.
@@ -175,8 +176,8 @@ def test_a_run_needs_its_own_prefix(tmp_path):
 
 def test_a_run_needs_its_own_outroot(tmp_path):
     """Without OUTROOT the driver refuses to start: a default one would
-    hold an earlier run's cells, which a run overwrites, and its kernel
-    logs, which the checks read."""
+    hold an earlier run's cells, which a run would overwrite or count
+    as its own, and its kernel logs, which the checks read."""
     aios = tree(tmp_path)
     result = launch(aios, "kmem0", "h0", outroot="")
     assert result.returncode == 1

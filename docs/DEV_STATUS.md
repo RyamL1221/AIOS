@@ -2049,9 +2049,8 @@ Step 0 settles two items before the deletion and supersession work.
       - the driver's end-of-phase checks read only its own launch's
         kernel log, so a resumed phase's earlier logs, and a phase
         found finished, went unchecked; it reads every kernel log of
-        the phase now, and requires `RUN_PREFIX` and `OUTROOT` (the
-        default `OUTROOT`s held Subtask 14's runs, whose logs the new
-        check would read and whose cells a new run overwrote);
+        the phase now, and requires `RUN_PREFIX` (and, since the
+        verification pass, `OUTROOT`);
       - a v2 run with `--kernel-url` naming another kernel ran the
         pre-flight on that one, while its agents used the configured
         one; it refuses now;
@@ -2097,21 +2096,23 @@ Step 0 settles two items before the deletion and supersession work.
       findings and the fix commits, each remaining error they claimed
       confirmed by an adversarial agent. 70 findings were fixed as
       made and 6 partly; 2 fixes were wrong, and the fix commits added
-      3 false sentences. Fixed in AIOS `8db0b35` and Cerebrum `ca91a13`,
-      and the documents after them. No recorded result changes.
+      2 false sentences and made a third false. Fixed in AIOS `8db0b35`
+      and Cerebrum `ca91a13`, and the documents after them. No recorded
+      result changes.
       - **Errors.** The driver's new check reads every kernel log in
         `$OUTROOT/logs`, and the default `OUTROOT`s hold Subtask 14's
         runs (`f14c`'s kernel logs hold 90 and 120 stored turns), so
         the documented invocation would have stopped after its first
-        phase, and a new run there overwrote those runs' cells:
-        `OUTROOT` is now required, and a test pins it. The
-        `--kernel-url` help said the backend usage reads follow the
-        flag; they use the configured kernel. Three sentences the
+        phase, and a new run there would have overwritten those runs'
+        cells (none did): `OUTROOT` is now required, and a test pins
+        it. The `--kernel-url` help said the backend usage reads follow
+        the flag; they use the configured kernel. Two sentences the
         fixes added were false: a forget that finds no value
         "scrubbed nothing" (on Mem0 it clears the history records of
-        the rows it deleted); the review "checked each finding" (the
-        12 style findings were not); `address_request` "raises" on an
-        unserved operation (it answers now).
+        the rows it deleted), and the review's "each finding checked
+        by an adversarial verifier" (the 12 style findings were not);
+        and `c814a5d` made `address_request` answer an unserved
+        operation while its docstring still said it raises.
       - **Two tests** the review's verification asked for were
         missing, and mutants of exactly those rules survived: a
         restatement whose value is the alias (a per-value-key record
@@ -2123,14 +2124,33 @@ Step 0 settles two items before the deletion and supersession work.
         event (the SDK docstring); known issue 36's Mem0 consequence;
         the counts above; the smoke's dates; the pre-flight records
         the kernel's paths in every cell; the example config names
-        `history_db_path`; four docstrings.
+        `history_db_path`; the Mem0 scrub test's scope; `slot_rows`'
+        docstring and four others.
+    - **Third verification pass** (rule 6: the second found errors;
+      on AIOS `72324e8` and Cerebrum `05e5cb7`): three checkers over
+      the second pass's open items and this round's commits. Of those
+      items 22 were fixed and 3 only partly (`address_request`'s
+      docstring, twice, and the pre-flight's paths). It found no
+      error: the one it claimed, "every cell
+      records the kernel's two paths" (7 in-house kernel cells record
+      a null history path), its adversarial confirmation rated an
+      imprecision. Corrected in the text, with no code change (rule
+      6): `address_request`'s "never raised" (a request whose
+      `params.metadata` is not a dict still raises; over `/query` it
+      fails with HTTP 500 before it is queued), and the same in the
+      spec's "Every branch answers"; `OUTROOT` credited to the
+      review's commit; two tense slips ("overwrote"); the false
+      sentences' verb above; a reused `OUTROOT`'s finished cells are
+      counted, not overwritten; the scrub test's bullet; the own
+      fetch's rows; the smoke's December rows. Rule 6 allows no
+      fourth pass.
     - **Not decided here** (the user's call): a forget deletes a Mem0
       fold row whole, so the row's own fact goes with it (the smoke's
       users 13 and 25 lost their recall targets). Rewriting the row
       without the forgotten value would keep that fact, at the cost of
       a write the forget makes on another agent's behalf.
-  - **Next:** a third and last verification pass (rule 6: the second
-    found errors), the mutation run on the final code, then the tag.
+  - **Next:** the mutation run on the final code (rule 6), then the
+    tag.
 
 ## Open decisions
 

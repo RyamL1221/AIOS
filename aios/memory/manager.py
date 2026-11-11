@@ -438,9 +438,14 @@ class MemoryManager:
         Returns:
             MemoryResponse containing the result of the operation
             (``retrieve_memory_raw``: a list of ``MemoryNote`` when it
-            succeeds). A failure, or an operation no branch serves, is
-            answered with ``success`` false, never raised: the
-            scheduler answers a syscall only when this returns.
+            succeeds). A failed provider or store call inside a branch,
+            a request a branch cannot serve, and an operation no branch
+            serves are answered with ``success`` false, not raised: the
+            scheduler answers a syscall only when this returns. A
+            request whose ``params.metadata`` is not a dict can still
+            raise ``AttributeError`` (the usage tag, and the add
+            branch's log line, read it as a dict); over ``/query`` one
+            that would fails with HTTP 500 before it is queued.
 
         Raises:
             TypeError: If memory_syscall is not a MemorySyscall

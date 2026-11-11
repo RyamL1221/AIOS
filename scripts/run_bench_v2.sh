@@ -31,14 +31,16 @@
 # trial, or the driver stops. One fresh kernel per model per phase, on a
 # port that must be free first; config.yaml restored byte for byte at
 # exit. Resumable: a finished cell is skipped, an unfinished one is
-# re-run whole. RUN_PREFIX and OUTROOT are required. OUTROOT is the
-# run's own, new for every run, and a resume keeps it: a reused
-# OUTROOT's cells and cell logs are overwritten, and at the end of each
-# phase, and for a phase a resumed launch finds finished, the checks
-# read every kernel log of the phase in $OUTROOT/logs, earlier
-# launches' included (move a discarded attempt's logs out before
-# resuming). RUN_PREFIX is new for every run and every resume: the
-# stores and tombstones a run leaves are not reset (known issue 36).
+# re-run whole. RUN_PREFIX and OUTROOT are required. OUTROOT, a path
+# relative to the Cerebrum checkout, is the run's own, new for every
+# run, and a resume keeps it: in a reused OUTROOT an unfinished cell is
+# overwritten, and one finished at the current commits is skipped and
+# counted as this run's; and at the end of each phase, and for a phase
+# a resumed launch finds finished, the checks read every kernel log of
+# the phase in $OUTROOT/logs, earlier launches' included (move a
+# discarded attempt's logs out before resuming). RUN_PREFIX is new for
+# every run and every resume: the stores and tombstones a run leaves
+# are not reset (known issue 36).
 # Run from the AIOS repo, detached:
 #   MODE=functional RUN_PREFIX=f16 OUTROOT=results/bench_v2_functional_f16 nohup bash scripts/run_bench_v2.sh > ../repo-artifacts/Cerebrum/bench_v2_functional_f16.log 2>&1 &
 set -u

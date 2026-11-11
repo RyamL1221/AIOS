@@ -423,11 +423,15 @@ is the agent-managed reference here too.
   report.
 - **Every branch answers.** Each memory branch of `address_request`
   (add, update, get, retrieve, `retrieve_memory_raw`, list, forget)
-  catches every exception and answers `success` false, a failed own
-  fetch included (in SDK search with `sharing_policy` "shared", a
-  failed shared fetch is not reported, and the reply holds the own
-  rows), and so does an operation no branch serves, so the scheduler
-  always answers (`BENCHMARK_V2.md`, "Before any v2 run").
+  catches every exception of its provider and store calls and answers
+  `success` false, a failed own fetch included (in SDK search with
+  `sharing_policy` "shared", a failed shared fetch is not reported,
+  and the reply holds the own fetch's rows), and so does an operation
+  no branch serves, so the scheduler answers every request `/query`
+  accepts (`BENCHMARK_V2.md`, "Before any v2 run"). A request whose
+  `params.metadata` is not a dict can still raise before or inside a
+  branch; over `/query` one that would fails with HTTP 500 before it
+  is queued.
 - **The SDK.** `MemoryQuery.operation_type` gains `"forget_memory"`,
   and `cerebrum.memory.apis` gains `forget_memories(agent_name,
   fact_key, user_id)`. The installed copy is checked by
@@ -606,10 +610,10 @@ Each mechanism gets a test that fails without it:
   on an exception; `/memory/config` reports `supersession` and the
   history path.
 - **Mem0:** each client's history file is the store's; the scrub
-  removes the value from the user's stored messages and from the
-  history records of the rows it is given (the deleted rows and the
-  user's stored rows), and nothing else, on a real `mem0ai` 2.0.2
-  history file;
+  deletes the user's messages that carry a form, clears every history
+  record of the rows it deleted and the carrying text of the user's
+  other rows' records, and changes nothing else, on a real `mem0ai`
+  2.0.2 history file;
   a mark keeps the row's text, embedding and score; a failed read
   raises instead of reading as a missing row, so a forget over it
   fails.
