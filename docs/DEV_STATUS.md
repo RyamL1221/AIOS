@@ -44,7 +44,7 @@ do not describe this branch.
 | 10 | Heterogeneity stress dimension (variants V1-V5, judge-free measures) | Done |
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
-| 15 | Complete deletion and supersession | In progress (step 1 functional check) |
+| 15 | Complete deletion and supersession | In progress (step 1 smoke) |
 
 ### Subtask 1
 
@@ -1798,7 +1798,86 @@ Step 0 settles two items before the deletion and supersession work.
     The test agents checked their tests against mutants of the rules
     they pin; the subtask's mutation run, on the final code, is still
     due (rule 6), as are its review and verification passes.
-  - **Functional check** (`f15b`): pending.
+  - **Functional check under Amendment 4** (`f15b`; Cerebrum
+    `results/bench_v2_functional_a4/`, `5b3295e`): `pilot_v2` users 0
+    to 4, Qwen, no judge, 29 cells (Subtask 14's 21, plus
+    `writer_scoped` and `no_supersession` in the kernel and replicated
+    cells of both backends), on Cerebrum `059e5a5` and AIOS `945548e`.
+    145 user-trials, 0 failed: no user failed `probe_writes`, no kernel
+    phase's log shows a stored conversation turn or a guard warning,
+    and the agent phases made no kernel memory operation. 0 of the 725
+    judge-free probes are contaminated, and no block held a probe
+    answer. The first launch was stopped in its first agent cell, which
+    wrote nothing, before the Mac slept; the rest ran under a new run
+    prefix (known issue 36; the results' `PROVENANCE.md`).
+    - **Every criterion holds.** Amendment 4's, at H = 0 in the kernel
+      and replicated cells on both backends:
+      - all 20 deletion probes passed, no audit kept a carrier
+        (`revoked_value_rows`), and all 20 revokes went through the
+        forget. Each cell's 5 forgets deleted 7 rows: the revoking
+        writer's row by `fact_key` for every user, and for users 0 and
+        4 another agent's echo, by value;
+      - `writer_scoped` failed 6 of its 8 echo-user deletion probes:
+        users 0 and 4 in-house, user 4 on Mem0 (user 0's Mem0 echo
+        rows stayed in the store but out of its block);
+      - every earlier statement's row was marked (10 of 10 per cell),
+        and no block held one (0 of 120 probes); `no_supersession`
+        marked none and put one in 109 of its 120 probes;
+      - the guard reported its stage in all 510 probes of the 17 cells
+        built on H = 0, was armed in every probe after a forget, and
+        dropped nothing;
+      - every Mem0 forget scrubbed a message: 7 messages and 14 history
+        records per cell, in the store's own history file.
+    - Subtask 14's, in the real conditions (H = 0 and 2), with the
+      control: deletion passed 57 and failed 3 (native in-house, the
+      echo rows of users 0 and 4), and `no_delete` failed 25 of 30;
+      privacy 59 and 1 (native in-house's V3 consumer, H = 2),
+      `no_visibility` 6 of 10; recall 47 and 13, recency 34 and 26,
+      contradiction 38 and 22, each failing 5 of 5 under `no_memory`.
+      Non-echo in-house deletion passed 18 of 18, the kernel's privacy
+      probe never failed (55 probes), and the cap bound in 54 of 60
+      kernel probes per backend, 36 of 60 replicated in-house and 42 of
+      60 replicated Mem0.
+    - **The budget** bound in no in-house probe (the largest kernel or
+      replicated in-house block was 296 estimated tokens) and in 10
+      Mem0 probes, 5 per locus: 6 recency, 2 integration, 1 deletion
+      and 1 recall (`f15a`: 3). Reported, not required (Amendment 4).
+    - **Against `f15a`** (step 0's code; the same data, users and
+      settings), the real-condition passes are deletion 57 (46),
+      privacy 59 (59), recall 47 (47), recency 34 (15) and
+      contradiction 38 (23). With supersession off, the in-house cells
+      repeat `f15a`'s H = 0 rates in both loci (recency 1 of 5,
+      contradiction 3 of 5), and their blocks are `f15a`'s in 19 of 30
+      probes; the other 11 are users 0 and 4's, whose echo rows the
+      forget now deletes. The Mem0 `no_supersession` cells do not
+      repeat `f15a` (kernel recency 4 of 5, `f15a` 1 of 5): Mem0's
+      extraction varies between runs (known issue 42).
+    - **What supersession leaves**, as `DELETION_AND_SUPERSESSION.md`
+      says it would. At H = 0 no in-house block held a stale value.
+      Kernel Mem0 failed 2 recency probes (users 1 and 2) through the
+      new statement's own row, which Mem0's extraction wrote as a
+      transition ("relocated to Kaunas from Utrecht"); both answers
+      named the old value as past. Replicated Mem0's rows of those
+      events name only the new value, so the loci differ in those 2 of
+      25 paired Mem0 outcomes (in-house: 30 of 30 blocks identical).
+      In replicated Mem0, user 2's earlier client reached a
+      contradiction block through two task rows of other facts into
+      which Mem0 folded it; the answer passed.
+    - **H = 2** (reported, not required): replicated leaves user 4's
+      first `home_city` row unmarked on both backends. Its V2 profile
+      writer stores it under `…@users.example`, and the later
+      statement, under the canonical id, does not reach that partition
+      (the spec's "rows another identity convention puts in another
+      partition"). The kernel folds the domain into the canonical id
+      and marks the row.
+    - **UTC dates** (known issue 42): the run crossed 00:00 UTC. The
+      kernel Mem0 cells and the agent phase's Mem0 cells through
+      `no_visibility` ran on 2026-11-10 UTC, `writer_scoped`
+      replicated Mem0's users 0 to 2 on 2026-11-10 and users 3 and 4
+      on 2026-11-11, and both `no_supersession` Mem0 cells on
+      2026-11-11.
+    - **Next:** the 30-user smoke (H = 0, the six cells, judge v2 on
+      the integration probe).
 
 ## Open decisions
 
@@ -2029,8 +2108,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
 37. Every v2 user has one probe of each type, so a cell's per-probe
     rate rests on n = 30 users in the smoke and 5 in the functional
     check. Report Wilson intervals and compare cells paired over users.
-38. Deletion is writer-scoped (Subtask 15 completes it). In every
-    locus, a revoke leaves in place:
+38. Fixed in Subtask 15, step 1, for the kernel and replicated loci
+    (AIOS `a610dcd`): a revoke there is a forget, which deletes every
+    carrier of the value, of any agent, folds included; in `f15b` no
+    audit at H = 0 kept one. Native deletion stays writer-scoped
+    (`DELETION_AND_SUPERSESSION.md`, Decision 4). There, under the
+    `writer_scoped` control, and in every locus before step 1, a
+    revoke leaves in place:
     - an echo of the value in another writer's rows;
     - any assistant conversation row that quoted the value;
     - in Mem0 cells, another fact's row by the same writer into which
@@ -2060,11 +2144,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
       replicated, whose fetch returned every stored row, the cap did.
       Under Amendment 3 (`f15a`, users 0 to 4), the real conditions'
       deletion failures came through the echo rows of users 0 and 4,
-      and once through a fold (replicated Mem0, H = 0, user 1).
+      and once through a fold (replicated Mem0, H = 0, user 1). Under
+      Amendment 4 (`f15b`), they were native in-house's, through the
+      same echo rows.
 39. `config.yaml` keeps `max_memory_tokens: 2000` for v1. v2 runs set
     300 through the driver (`BENCHMARK_V2.md`, Amendment 3; 500 under
     Amendment 1), and the pre-flight check refuses anything else. In
-    `f15a` it bound in no in-house probe (open decision 4).
+    `f15a` and `f15b` it bound in no in-house probe (open decision 4).
 40. Fixed in Subtask 14 (Amendment 2, AIOS `554a408`): the kernel's
     conversation rows carry `provenance_event`, the probe that wrote
     them, as the replicated and native assistants' do. In `f14c`, 382
@@ -2106,7 +2192,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
       so its kernel Mem0 cells were extracted under November 8 and its
       replicated and native Mem0 cells under November 9; all of `f14c`
       ran on 2026-11-09 UTC. Keep a run's Mem0 phases on one UTC date
-      (00:00 UTC is 19:00 EST), or report the date per cell.
+      (00:00 UTC is 19:00 EST), or report the date per cell, as
+      `f15b`, which crossed it, does in its `PROVENANCE.md`.
     - It can drop a conflict cue: user 0's "the only person I have a
       weekly one-on-one with" was stored without "only", as an addition
       ("User has a weekly one-on-one meeting with Sofia Lindqvist."),
