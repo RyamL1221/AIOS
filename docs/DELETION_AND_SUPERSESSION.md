@@ -492,7 +492,10 @@ fold row also states its own fact, and the forget deletes it whole, so
 that fact goes with it. In its kernel Mem0 cell the forgets deleted
 the only rows of users 13's and 25's recall targets, whose recall
 probes then failed; `s14b`'s revokes left those folds in place, and
-both passed. In-house cells store utterances verbatim, and no revoked
+both passed. The smoke (`s15b`) deleted the same two folds in kernel
+and replicated Mem0, and both users failed recall in both; the
+analysis files such a failure as `target_forgotten` (Cerebrum
+`0995994`). In-house cells store utterances verbatim, and no revoked
 value appears in any other utterance of the same `pilot_v2` user, so
 they lose no fact this way.
 

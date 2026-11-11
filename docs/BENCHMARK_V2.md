@@ -1219,4 +1219,11 @@ listing after the session then held no row of the write.
   retired.
 
 The cell is re-run whole under a new run id (known issue 36). No
-design decision, probe or scoring rule changes.
+design decision, probe or scoring rule changes. The re-run (`s15b`)
+finished all six cells with no failed trial (Cerebrum
+`results/bench_v2_smoke_a4/`). The analysis, which changes no run
+data, gained two readings after it (Cerebrum `0995994`): a failed probe
+whose target's rows the trial's forgets or sweeps all deleted is
+`target_forgotten`, not `not_in_block`, and the forget reading counts
+the revoking writer's rows it deleted by a value or an alias
+(`same_writer`).
