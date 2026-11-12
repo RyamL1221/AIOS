@@ -2330,6 +2330,19 @@ code.
      (Subtask 11) the same race could drop the turn's embedding calls.
   The functional check ran before these fixes; its criteria do not
   depend on them, and the two smokes run after.
+- **Verification pass.** All six fixes since the review began verified
+  (static). Two follow-ups, fixed with tests that fail without them:
+  - Rows of one Graphiti fact came oldest claim first, so the dedupe
+    kept the fact as first stated (its oldest session age); under
+    `no_supersession` a restatement after a change lost its newer age.
+    They now come newest claim first.
+  - The pilot_v1 driver left the config's 5 s write barrier: the
+    relaunched smoke (`pg16b`, 20:26) had 7 of its first 12 cost reads
+    time out (the kernel's WARNING), so it was stopped at 20:40, in its
+    first cell. The driver now sets 60 s, as the v2 driver does.
+  Not changed: the harness does not record the cost read's
+  `barrier_wait`; a timed-out read is in the kernel log, which the
+  smoke's audit checks.
 
 ## Open decisions
 

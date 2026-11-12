@@ -130,8 +130,10 @@ Mattermost last week", whose `episodes` became both writes. One row per
 fact and write keeps the restating write's own row, with its own
 metadata, so its extraction check, its supersession and visibility all
 work as for any other write. A fact claimed by several writes appears as
-several rows with the same text; the selector's exact-content dedupe
-keeps the highest ranked. It covers the own fetch's rows since the
+several rows with the same text, newest claim first; the selector's
+exact-content dedupe keeps the first, so the block shows the fact as
+last stated (its session age and event). It covers the own fetch's rows
+since the
 Subtask 16 review: before, two claims of a fact in the own fetch both
 reached the block (the functional check's replicated `no_delete` cell:
 12 extra rows in 10 of 30 probes; no other Graphiti cell, and no Mem0

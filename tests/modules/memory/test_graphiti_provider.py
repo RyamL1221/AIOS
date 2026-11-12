@@ -139,6 +139,19 @@ def test_deleting_a_writes_rows_removes_them_and_keeps_the_others(
     assert edges_of(splitting) == {}
 
 
+def test_search_gives_a_facts_newest_claim_first(provider):
+    """A fact's rows share its rank, and the selector keeps the first of
+    rows with one text: newest first, the block shows the fact as last
+    stated (its session age, its event), not as first stated."""
+    first = provider.add(note("My team's chat tool is Mattermost.",
+                              event="u0-e01", session=1))
+    later = provider.add(note("My team's chat tool is Mattermost.",
+                              owner="calendar_agent", slot="retro_room",
+                              event="u0-e09", session=5))
+    found = provider.search("team chat tool", USER, 10)
+    assert [r.memory_id for r in found] == [later, first]
+
+
 def test_updating_a_shared_fact_splits_it(provider):
     """New content replaces the row's fact and is re-embedded; another
     write's row keeps the old sentence on a copy, with its own changes,

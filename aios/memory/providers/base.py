@@ -205,14 +205,16 @@ class MemoryProvider(ABC):
         forms: List[str],
         deleted_ids: List[str] = (),
         kept_ids: List[str] = (),
-    ) -> Dict[str, int]:
+    ) -> Dict[str, Any]:
         """Remove forgotten forms from what the backend keeps besides
         its rows (Mem0: its stored messages and history records), after
         a forget or a sweep deleted rows. ``deleted_ids`` are the rows
         just deleted: their records' text is cleared whatever it holds.
         ``kept_ids`` are the user's other rows: their records' text is
         cleared where it carries a form. Returns the counts removed or
-        cleared; the default keeps nothing but rows and returns zeros."""
+        cleared, and ``detached``, the rows it deleted besides
+        (``{memory_id, owner_agent}``; Graphiti), when there are some;
+        the default keeps nothing but rows and returns zeros."""
         return {"messages": 0, "history": 0}
 
     def close(self) -> None:

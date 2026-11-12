@@ -61,8 +61,11 @@ WHERE r.uuid IN $edges
 MATCH (ep:Episodic {group_id: $group})
 WHERE ep.aios_metadata IS NOT NULL AND ep.uuid IN r.episodes
 RETURN """ + _ROW_FIELDS + """
-ORDER BY ep.created_at, ep.uuid
+ORDER BY ep.created_at DESC, ep.uuid DESC
 """
+# A fact's rows, newest claim first: they share the fact's rank, and the
+# selector keeps the first of rows with one text, so the block shows the
+# fact as last stated (Subtask 16 verification).
 
 ONE_ROW = """
 MATCH (ep:Episodic {uuid: $episode, group_id: $group})

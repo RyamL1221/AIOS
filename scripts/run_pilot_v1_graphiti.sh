@@ -53,7 +53,13 @@ stop_kernel() {
 }
 finish() { stop_kernel; cp "$SAVED" "$CONFIG"; rm -f "$SAVED"; }
 trap finish EXIT
-mode() { "$AIOS/.venv/bin/python" scripts/set_memory_mode.py "$CONFIG" "$@"; }
+# A 60 s write barrier, as benchmark v2's: the kernel's cost read waits on
+# it for the chat turn it stores in the background, and a Graphiti turn
+# takes longer than the config's 5 s (Subtask 16).
+mode() {
+    "$AIOS/.venv/bin/python" scripts/set_memory_mode.py "$CONFIG" "$@" \
+        --barrier-timeout-ms 60000
+}
 cell_done() {
     python3 "$AIOS/scripts/pilot_cell_done.py" "$1" "$TRIALS" --strict \
         --commit "$HARNESS_COMMIT" --kernel-commit "$KERNEL_COMMIT"
