@@ -45,7 +45,7 @@ do not describe this branch.
 | 11 | Pre-registered locus × heterogeneity pilot on pilot_v1: GO | Done |
 | 14 | Accumulating multi-session benchmark (v2) | Done |
 | 15 | Complete deletion and supersession | Done |
-| 16 | Graphiti backend and native condition | In progress (spec) |
+| 16 | Graphiti backend and native condition | Done |
 
 ### Subtask 1
 
@@ -2407,6 +2407,104 @@ code.
   `test_zep_provider.py` are deleted; the factory offers `in-house`,
   `in-memory`, `mem0` and `graphiti`. Known issues 4 and 11 (Zep's
   contract gaps) are closed with it.
+- **Mutation run** (rule 6, once, on the final code: AIOS `2bbf567`,
+  Cerebrum `3a6bf98`). Five module owners (the AIOS Graphiti provider;
+  the AIOS selector, deletion, manager, launch and drivers; Cerebrum's
+  Graphiti clients and native and replicated agents; its harness; its
+  analysis tools) wrote 200 mutants of rules the documents state and
+  ran each on a scratch copy against their area's tests, with the
+  local Neo4j and Ollama, behind a loopback-only network guard; 96
+  were killed. Each survivor was then rerun against the full suite of
+  every repo whose tests load its file (the AIOS library's and
+  `cerebrum/`'s: both). Of the 104:
+  - 9 are killed by AIOS tests: Graphiti's LLM and embedder clients,
+    shared from `cerebrum/utils/graphiti.py`, are tested only in AIOS
+    (`test_graphiti_cost.py`, the group id in
+    `test_graphiti_provider.py`).
+  - 5 are equivalent: an edge marked expired is also marked invalid in
+    `graphiti-core` 0.31.2; `add_episode` returns invalidated edges
+    only beside resolved ones; `run_coroutine_threadsafe` carries the
+    caller's usage tag already; nothing calls the cross-encoder; the
+    factory's embedder defaults equal `memory.embedding`'s.
+  - 23 could change a reported number, and the records cannot show
+    the rule held; each now fails a test (AIOS `789eb67`, Cerebrum
+    `6a29089`): the analysis reading the `kgra`, `kgra_ns` and
+    `agent_gra` cells as Graphiti and pairing kernel with replicated
+    on it (the smoke's 150 agreeing pairs), the Graphiti scrub
+    criterion at H = 0 only (the functional check's 10 forgets would
+    read 20); the
+    pilot_v1 report's cell paths, `latency_s` in seconds, the pilot
+    reference of the same model and contrast, and its gap columns;
+    Graphiti's own marks kept out of `retired_in_block` and
+    `retired_rows` (the smoke's replicated 0 would read 5, native's 0
+    marked rows 53); native Graphiti's UTC reference time, its order
+    for dated facts, the first visible episode's metadata, and the
+    assistant's own search passing its name; the selector's
+    exact-content dedupe; the provider's update split and
+    re-embedding, the scrub blanking a deleted row's episode, counting
+    an entity once and matching forms as the scorer does (the
+    `messages` and `history` counts), a conversation turn as its two
+    messages (pilot_v1's 33 and 32 turns with no fact), and an episode
+    dated by its note.
+  - 67 hold in the code (their owners checked each) but no test of
+    either repo pins them, so this file claims no more. None changes a
+    reported number: the condition never arises in the runs, nothing
+    reported reads it, a broken rule would fail the trial or the run,
+    or the records show it held:
+    - the provider: an episode's id for a write with no fact (the
+      Amendment 5 writes were scored as lost); the search limit (shared
+      fetches above Graphiti's default 10 in 736 of 840 kernel and
+      replicated fetches) and the cut at k (never over k); invalidated
+      facts kept in search (5 replicated blocks held one); a row's
+      changes merged, not replaced; a fact-less blank episode deleted;
+      `backend_versions` (every cell recorded them); the group lock; a
+      read outside the user's group; `graphiti_invalid_at` and
+      `graphiti_expired_at` read from their own fields (all 214
+      recorded invalidated rows carry both);
+    - the kernel: a scrub-detached row of the writing note counted as
+      gone (no forget detached a fact); `/memory/cost` canonicalizing
+      before it waits (every run's ids are canonical); the Graphiti
+      kernel's injector (its blocks held rows);
+    - the drivers: `run_bench_v2.sh`'s `_ns` phases' methods and
+      checks, extraction off, agent-phase memory off and the provider
+      check; `run_pilot_v1_graphiti.sh`'s native cells, levels,
+      extraction on, `--schedule`, `--kernel-commit`, `--strict`, the
+      clean-repo and provider checks, the memory-ops check over every
+      log, and the config restore (each cell records both commits, the
+      schedule's hash, 0 failed trials and its stored turns; the
+      functional check ran every `_ns` cell it reports);
+    - the harness: embedding tokens of a V2 agent's id (no report gives
+      embedding cost); a v1 kernel trial's backend (no v1 kernel writer
+      stored no fact); `native_graphiti` and `replicated_graphiti`
+      dispatched to Graphiti in v1 (17.7 to 19.3 backend calls a trial,
+      Mem0's 3); a v2 Graphiti trial with no backend call failing; the
+      two conditions' membership (the CLI would refuse them);
+      `heterogeneity_report.py` on Graphiti cells (no report runs it on
+      them);
+    - the agents: one shared client; the episode name; the native
+      search's group (the partition dropped nothing in 390 native
+      fetches), `num_results` (never over k), the unscored row under a
+      threshold (`after_threshold` equals `after_visibility`, the V4
+      consumers' included) and the tagging of `remove_episode` (every
+      trial's calls match its logs); the search's embedding tag (no
+      report gives embedding cost); `agent_id` on native v2 rows and
+      the rows a write names (a trial would fail); recorded
+      `invalid_at` and `expired_at` values (the counts read either);
+      the conversation rows' `agent_id`; the group lock; replicated
+      Graphiti's backend (a run would fail);
+    - the analysis: the Graphiti scrub criterion over no forgets,
+      failed trials or owner revokes, `same_writer` with `entity`
+      deletions, an unscored probe on a lost write (none in the runs);
+      the forget note's `entity` clause; `backend_usd` against
+      `total_usd` (equal in every committed cell); `same_direction`
+      over every scope (each pilot scope has one sign); the cost CSV
+      (not committed).
+
+    The mutants, their results and the reruns are in
+    `repo-artifacts/AIOS/mutation16/` (one replay log, which had
+    captured the Azure key in a LiteLLM traceback, redacted; the
+    network guard had blocked the call). One test is flaky under load
+    (known issue 47).
 
 ## Open decisions
 
@@ -2454,7 +2552,8 @@ These fail on `workshop-postrun` too and are not caused by later work.
 
 - AIOS: `tests/modules/memory/test_memory.py` fails at collection, and 14
   tests in `test_mem0_provider.py` / `test_zep_provider.py` error (their
-  `manager` argument is collected as a missing fixture).
+  `manager` argument is collected as a missing fixture); 7 since Subtask
+  16, which deleted `test_zep_provider.py`.
 - Cerebrum `tests/agents`: 19 failures, 2 errors at
   `neurips-subtask-03` (one flaky test makes it 19 or 20); unchanged at
   `neurips-subtask-07` (AIOS 310 passed, Cerebrum 303 passed) and
@@ -2489,7 +2588,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   passed, 4 skipped, the same 19 failures and 2 errors, by name) and
   the mutation run's tests (Cerebrum `c2f1ed3`: 1082 passed, 4
   skipped, the same 19 failures and 2 errors, by name; AIOS unchanged:
-  635 passed, the 14 errors). The names
+  635 passed, the 14 errors) and the end of Subtask 16 (AIOS
+  `789eb67`, the same set: 677 passed, the 7 errors; Cerebrum
+  `6a29089`: 1133 passed, 4 skipped, the same 19 failures and 2
+  errors, by name; known issues 6 and 47 are flaky under load). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -2946,6 +3048,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
     deleted value stays there (`DELETION_AND_SUPERSESSION.md`,
     Decision 3). Native Mem0 keeps its history in its own store
     directory (`cerebrum/example/agents/native/backends.py`).
+47. `test_forget_kernel.py::test_a_kernel_forget_on_a_real_store[graphiti]`
+    is flaky under load: in the Subtask 16 mutation run it failed in 5
+    of about 70 full AIOS runs while other suites used the same Neo4j
+    (none of 3 baselines, nor any run of the suite alone). Each time
+    the forget listed no row of the slot (`values=0, deleted=0`), once
+    after a Neo4j `DeadlockDetected` retry during the seed writes. Not
+    investigated; no benchmark run shares its Neo4j with a test run.
 
 ## Fixed
 
