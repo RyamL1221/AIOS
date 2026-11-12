@@ -24,7 +24,11 @@ from aios.config.config_manager import config
 from aios.memory.context_injector import ContextInjector
 from aios.memory.pipeline import PIPELINE_VERSION
 from aios.memory.conversation_extractor import ConversationExtractor
-from aios.utils.redact import redact_secrets
+from aios.utils.redact import (
+    install_log_redaction,
+    redact_secrets,
+    secret_values,
+)
 
 # Providers that get the context injector and conversation extractor.
 PERSONALIZATION_PROVIDERS = ("mem0", "in-house", "graphiti")
@@ -47,6 +51,10 @@ import uvicorn
 import copy
 
 load_dotenv()
+
+# No key value reaches a log record or its traceback (Subtask 17,
+# Decision 3): the environment's, .env's and config.yaml's.
+install_log_redaction(secret_values(config.config))
 
 app = FastAPI()
 
