@@ -19,8 +19,10 @@
 #   phases kgra_ns, agent_gra_ns: the no_supersession control
 #                (kernel_shared; replicated_graphiti)
 # Every phase runs with session ages on (memory.block_recency true, unit
-# session), the write barrier at 60 s, k 10 and a 300-token budget, set
-# through set_memory_mode.py; a probe writes nothing (Amendment 3: the
+# session), the write barrier at 60 s, k 30 and a 300-token budget (since
+# Amendment 6 the budget, not the cap, limits a kernel or replicated
+# block; the harness keeps native consumers at k 10), set through
+# set_memory_mode.py; a probe writes nothing (Amendment 3: the
 # kernel's auto_extract is off, the agents skip their probe writes);
 # supersession is exclude, off in the _ns phases (Amendment 4); the
 # harness's pre-flight refuses any other setting (supersession only in
@@ -49,6 +51,9 @@
 # discarded attempt's logs out before resuming). RUN_PREFIX is new for
 # every run and every resume: the stores and tombstones a run leaves
 # are not reset (known issue 36).
+# METHODS, when set, runs only those methods' cells (Amendment 6's
+# re-verification ran the kernel and replicated cells); a phase none
+# of whose methods it names must be left out of PHASES.
 # Run from the AIOS repo, detached:
 #   MODE=functional RUN_PREFIX=f16 OUTROOT=results/bench_v2_functional_f16 nohup bash scripts/run_bench_v2.sh > ../repo-artifacts/Cerebrum/bench_v2_functional_f16.log 2>&1 &
 set -u
@@ -102,7 +107,7 @@ trap finish EXIT
 SUPERSESSION=exclude
 mode() {  # supersession from $SUPERSESSION (off in the _ns phases)
     "$AIOS/.venv/bin/python" scripts/set_memory_mode.py "$CONFIG" "$@" \
-        --recency session --barrier-timeout-ms 60000 --k 10 --budget 300 \
+        --recency session --barrier-timeout-ms 60000 --k 30 --budget 300 \
         --supersession "$SUPERSESSION"
 }
 cell_done() {
@@ -182,15 +187,19 @@ run_cell() {  # $1 = model, $2 = phase, $3 = method, $4 = condition, [$5 = provi
     echo "$(date) done $name"
 }
 
-methods_of() {  # $1 = phase
+methods_of() {  # $1 = phase; with $METHODS set, only those methods
+    local all method
     case "$1" in
-        kmem0|kinh|kmem0_ns|kinh_ns) echo "kernel_shared" ;;
-        agent) echo "replicated_mem0 replicated_inhouse native_mem0 native_inhouse" ;;
-        agent_ns) echo "replicated_mem0 replicated_inhouse" ;;
-        kgra|kgra_ns) echo "kernel_shared" ;;
-        agent_gra) echo "replicated_graphiti native_graphiti" ;;
-        agent_gra_ns) echo "replicated_graphiti" ;;
+        kmem0|kinh|kmem0_ns|kinh_ns) all="kernel_shared" ;;
+        agent) all="replicated_mem0 replicated_inhouse native_mem0 native_inhouse" ;;
+        agent_ns) all="replicated_mem0 replicated_inhouse" ;;
+        kgra|kgra_ns) all="kernel_shared" ;;
+        agent_gra) all="replicated_graphiti native_graphiti" ;;
+        agent_gra_ns) all="replicated_graphiti" ;;
     esac
+    for method in $all; do
+        case " ${METHODS:-$all} " in *" $method "*) echo "$method" ;; esac
+    done
 }
 
 check_phase() {  # $1 = model, $2 = phase: every kernel log of the phase

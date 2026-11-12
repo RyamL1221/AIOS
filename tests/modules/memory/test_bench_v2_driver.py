@@ -21,6 +21,10 @@ DRIVER = Path(__file__).resolve().parents[3] / "scripts" / "run_bench_v2.sh"
 # The AIOS venv's python: as the kernel, prints $SIM_KERNEL_LINE once
 # and waits to be stopped; as set_memory_mode.py, does nothing.
 KERNEL = """#!/bin/bash
+if [ "$1" = "scripts/set_memory_mode.py" ]; then
+    [ -n "${SIM_MODE_LOG:-}" ] && echo "$*" >> "$SIM_MODE_LOG"
+    exit 0
+fi
 if [ "$1" = "-m" ] && [ "$2" = "uvicorn" ]; then
     [ -n "${SIM_KERNEL_LINE:-}" ] && echo "$SIM_KERNEL_LINE"
     exec sleep 600
@@ -82,7 +86,8 @@ def tree(tmp_path: Path) -> Path:
 def launch(aios: Path, phases: str, conditions: str,
            kernel_line: str = "", fail_run: str = "",
            prefix: str = "t1",
-           outroot: str = "results/sim") -> subprocess.CompletedProcess:
+           outroot: str = "results/sim",
+           extra: dict = None) -> subprocess.CompletedProcess:
     """One launch of the real driver over the stub tree. Launches a
     second apart, so each kernel log gets its own name."""
     time.sleep(1.1)
@@ -92,6 +97,7 @@ def launch(aios: Path, phases: str, conditions: str,
         "MODE": "functional", "MODELS": "qwen", "TRIALS": "1",
         "PHASES": phases, "CONDITIONS": conditions,
         "SIM_KERNEL_LINE": kernel_line, "SIM_FAIL_RUN": fail_run,
+        **(extra or {}),
     }
     for key, value in (("RUN_PREFIX", prefix), ("OUTROOT", outroot)):
         if value:
@@ -208,3 +214,32 @@ def test_the_graphiti_phases_run_the_graphiti_cells(tmp_path):
     ]
     assert "kernel_memory_ops=0" in result.stdout
     assert "stored_conversation_turns=0" in result.stdout
+
+
+def test_every_phase_sets_k_30_and_the_300_token_budget(tmp_path):
+    """Amendment 6 (docs/BENCHMARK_V2.md): every v2 phase's kernel runs
+    with k 30 and a 300-token budget, so the budget, not the cap,
+    limits a kernel or replicated block."""
+    aios = tree(tmp_path)
+    log = tmp_path / "mode.log"
+    result = launch(aios, "kgra agent_gra", "h0",
+                    extra={"SIM_MODE_LOG": str(log)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = log.read_text().splitlines()
+    assert len(calls) == 2
+    assert all("--k 30 --budget 300" in call for call in calls), calls
+
+
+def test_methods_runs_only_the_named_cells(tmp_path):
+    """``METHODS`` runs only the methods it names (Amendment 6's
+    re-verification ran the kernel and replicated cells, not native)."""
+    aios = tree(tmp_path)
+    result = launch(aios, "kgra agent_gra", "h0", extra={
+        "METHODS": "kernel_shared replicated_graphiti"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == ["agent_gra/h0_replicated_graphiti",
+                     "kgra/h0_kernel_shared"]

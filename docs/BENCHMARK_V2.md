@@ -403,8 +403,10 @@ All six cells run v2: `kernel_shared` on Mem0 and on in-house,
 By-design differences that the probes will show, stated before any
 run:
 - **Kernel and replicated** fetch own k plus shared 4k rows, then cap
-  at k = 10 by score, then fit the 300-token budget (Amendments 1 and
-  3).
+  at k by score, then fit the 300-token budget (Amendments 1 and 3);
+  k is 30 since Amendment 6 (10 before), so the budget limits the
+  block.
+- **Native** consumers keep k = 10 (Amendment 6).
 - **Native** fetches k rows from the backend and applies visibility
   afterwards, so other agents' private rows take slots (and, before
   Amendment 3, the assistant's own conversations). It has no budget.
@@ -526,7 +528,8 @@ trial per user, trial *i* = user *i*, as v1 does. For each user:
 `/memory/config` reports:
 - recency on with unit `session` (or off, with `--no-recency` for an
   ablation);
-- `max_injected_memories` 10, `max_memory_tokens` 300 (Amendment 3),
+- `max_injected_memories` 30 (Amendment 6; 10 before),
+  `max_memory_tokens` 300 (Amendment 3),
   `relevance_threshold` 0.0 and `block_format` compact;
 - `write_barrier.timeout_ms` of at least 60,000 for a kernel method
   (see below);
@@ -677,9 +680,10 @@ check passes when:
 - deletion passes among non-echo users in the in-house cells, which
   shows the delete path works, and fails under `no_delete`;
 - the kernel's privacy probe never fails, on the block or the answer;
-- the cap binds in some probes of every kernel and replicated cell.
-  Whether the budget binds is reported, not required (Amendment 4;
-  before it, a budget that never bound failed the check);
+- a limit, the budget or the cap, binds in some probes of every kernel
+  and replicated cell (Amendment 6; from Amendment 4 until it, the cap
+  had to bind and the budget's binding was reported, not required;
+  before Amendment 4, a budget that never bound failed the check);
 - the deletion and supersession criteria of Amendment 4.
 
 **Smoke.** `pilot_v2`, all 30 users, Qwen, H = 0, all six cells, with
@@ -1361,3 +1365,45 @@ with their passes.
 such write (each passed the stricter rule), so it reads the same under
 this one. The two failed attempts of replicated at H = 2 are kept in
 `repo-artifacts`.
+
+## Amendment 6 (2026-11-12, Subtask 17, after the Graphiti smoke)
+
+**Why.** In the Graphiti smoke (`s16`, Cerebrum
+`results/bench_v2_smoke_graphiti`) the cap (k = 10) bound in all 540
+probes and the 300-token budget in none (the longest block was 197
+estimated tokens). Graphiti stores a write as one or more short facts,
+the base profile as 3 to 5, so ten rows held 37% of the base profile's
+values in the kernel and replicated integration blocks (in-house 100%,
+Mem0 76 to 80%, `bench_v2_smoke_a4`), and integration scored 2.20 and
+1.97 against 2.87 in-house and 3.57 to 3.60 on Mem0. The cap, a row
+count, limited the block on a backend whose rows are short; the
+budget, a token count, is the limit that treats backends with long
+and short rows alike.
+
+**The rule** (decided by the user, 2026-11-12):
+- Every v2 kernel runs with `max_injected_memories` 30 and
+  `max_memory_tokens` 300 (`scripts/run_bench_v2.sh`, `--k 30`), and
+  the pre-flight refuses any other k. Kernel and replicated fetch own
+  30 and shared 120 rows, cap at 30 and fit the 300-token budget, so
+  the budget limits the block (at about 20 tokens a row in-house, 25
+  on Mem0 and 17 on Graphiti, it holds about 15, 12 and 17 rows).
+- A native consumer has no budget, so it keeps k = 10, the reference
+  consumer's (`V2_NATIVE_K`, Cerebrum
+  `benchmarks/shared_memory/pipeline.py`), whatever the kernel's k.
+  Native cells are unchanged.
+- The functional check's limit criterion: a limit, the budget or the
+  cap, binds in some probes of every kernel and replicated cell
+  (`bench_v2_analysis.py`), each reported. Before, the cap had to bind
+  (Amendment 4), which k = 30 would make fail by design.
+
+**Re-verification.** The smoke's six kernel and replicated cells (in-house,
+Mem0, Graphiti) are run again under this rule (`METHODS` in
+`run_bench_v2.sh` runs those cells only); the native cells stand. The
+earlier cells (`bench_v2_smoke_a4`, `bench_v2_smoke_graphiti`) are
+kept: their numbers are k = 10's.
+
+**What it changes.** Kernel and replicated blocks can hold more rows,
+up to the budget, so more of a user's store reaches the assistant and
+more stale or forgotten rows could, were they not retired or removed;
+a probe's `cap_bound` and `budget_bound` swap roles. The v1 runs keep
+k = 10 and a 2,000-token budget.
