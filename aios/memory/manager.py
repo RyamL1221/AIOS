@@ -286,6 +286,12 @@ class MemoryManager:
             user_id, barrier_snapshot
         )
 
+    def await_writes(self, user_id: Optional[str]) -> WaitOutcome:
+        """Wait for every write of ``user_id`` accepted so far, as a
+        retrieval accepted now would (``GET /memory/cost`` reads a
+        trial's backend usage after them)."""
+        return self._await_pending_writes(user_id)
+
     def stamp_syscall(self, memory_syscall) -> None:
         """Stamp a memory syscall against the write barrier.
 

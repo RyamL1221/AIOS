@@ -604,7 +604,10 @@ issue 36).
 
 **Cost.** Token and backend usage are summed over sessions and probes.
 The kernel's `/memory/cost` is read once per user, after the last
-probe.
+probe. The kernel first waits for the user's writes accepted before the
+read (the write barrier, as a retrieval does), since a write still being
+stored, such as the kernel's own chat turn in v1, makes its backend
+calls one after another (Subtask 16).
 
 ## Before any v2 run
 

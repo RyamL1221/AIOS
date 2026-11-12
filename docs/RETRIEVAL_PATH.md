@@ -29,7 +29,8 @@ no visibility filtering in the provider.
 5. Visibility: `apply_sharing_filter` (`aios/memory/pipeline/visibility.py`), the
    only place it runs; providers never filter. `sharing_policy="shared"` only selects the shared fetch; any
    other value also narrows the rule (`"private"`: own private only).
-6. Exact-content dedupe of shared rows against earlier rows, own first.
+6. Exact-content dedupe, own first: a row whose text matches an
+   earlier row is dropped, own rows included (Subtask 16).
 7. Relevance threshold, only on rows with a score. Default 0.0: rank,
    drop nothing.
 8. Sort by score when any row has one; otherwise keep provider order.
@@ -102,9 +103,12 @@ Also changed:
 - **Unscoped SDK search on the in-house provider.** The partition check
   now requires `metadata.user_id == agent_name`.
 
-Unchanged: dedupe does not remove duplicates inside the own list, because
-own retrieval returns every row of the user. So a text stored twice can
-be injected twice when both rows are own-list rows.
+Until Subtask 16, dedupe did not remove duplicates inside the own list,
+so a text stored twice could be injected twice when both rows were
+own-list rows. Graphiti made that common (a fact several writes claim is
+several rows with one text), so the dedupe now covers the own list too.
+No Mem0 or in-house block of the Subtask 15 runs held two rows with one
+text, so their results read the same under it.
 
 ## Not on this path
 

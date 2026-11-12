@@ -579,16 +579,28 @@ async def get_memory_audit(user_id: str):
 async def get_memory_cost(user_id: str, wait: float = 5.0):
     """Remove and return the token usage the memory backend's own LLM
     and embedding calls recorded for one trial's user
-    (``cerebrum.utils.usage``). Waits up to ``wait`` seconds for calls
-    still being recorded. Reading empties the record."""
+    (``cerebrum.utils.usage``). It first waits, as a retrieval does,
+    for the user's writes accepted before it (``barrier_wait``: the
+    outcome), then up to ``wait`` seconds for calls still being
+    recorded. Reading empties the record.
+
+    The wait on the writes is needed because the kernel stores a chat
+    turn after the reply, in the background, and a Graphiti write makes
+    its LLM calls one after another: between two of them none is in
+    flight, and a read taken then missed the later ones (Subtask 16)."""
     manager = active_components.get("memory")
+    barrier_wait = None
     if manager is not None:  # usage is tagged with canonical ids
         user_id = manager.canonical_user_id(user_id)
+        barrier_wait = (
+            await asyncio.to_thread(manager.await_writes, user_id)
+        ).name
     records = await asyncio.to_thread(
         backend_usage.ACCUMULATOR.take, user_id, wait
     )
     return {
         "user_id": user_id,
+        "barrier_wait": barrier_wait,
         "backend_llm_tokens": backend_usage.summarize(
             records, backend_usage.BACKEND_EXTRACTION
         ),

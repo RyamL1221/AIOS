@@ -185,7 +185,9 @@ and delete do now.
 6. **The history.** It scrubs the provider's stored messages and
    history (Mem0, Decision 3).
 7. **The reply.** It returns the ids deleted, each with its owner and
-   reason (`fact_key`, `value` or `alias`), the number of values and
+   reason (`fact_key`, `value` or `alias`; `entity` for a row the
+   provider's scrub deleted with an entity a form names, Graphiti,
+   Subtask 16), the number of values and
    forms, the values the caller may read (from its own and shared
    rows, spelled as those rows spell them), the scrub's counts,
    `listed` (how many rows it listed) and `not_found` (rows it listed

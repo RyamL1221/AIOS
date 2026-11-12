@@ -298,9 +298,13 @@ What the agents do:
 - **Order and scores.** Facts are used in the order `search()` returns
   them, with no score filtering (there is no score), cut at `k` after
   the sharing convention as for the other conditions. `num_results` is
-  `k` (10), which is also the limit of the search recipe `search()`
-  writes it into (`EDGE_HYBRID_SEARCH_RRF`), a shared object Graphiti's
-  ingestion reads too, so these calls leave it unchanged.
+  `k` (10; 5 for a V4 consumer at H = 2). `search()` writes it into
+  its search recipe (`EDGE_HYBRID_SEARCH_RRF`), a shared object
+  Graphiti's ingestion reads too (`edge_operations.py:532, :564`), so
+  the agents put the recipe's limit back after each call: one user's
+  consumer must not change how the next writes are ingested. The call
+  itself is the documented one. (Until the Subtask 16 review it was not
+  put back, so a V4 consumer's 5 stayed for the next users' writes.)
 - **Validity.** `search()` returns facts Graphiti has invalidated as
   well. The block prints each fact's sentence only, as the other native
   conditions print theirs; the agents record each fact's `invalid_at`

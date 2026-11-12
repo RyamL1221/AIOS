@@ -34,6 +34,10 @@ LIST_TOP_K = 10_000
 REASON_FACT_KEY = "fact_key"
 REASON_VALUE = "value"
 REASON_ALIAS = "alias"
+# A row the provider's history scrub deleted with an entity a form names
+# (Graphiti: the facts still attached to it, which carried no form).
+REASON_ENTITY = "entity"
+DETACHED = "detached"
 
 # The supersession marks: set only by the library, never by an agent.
 MARKS = ("superseded_by", "superseded_session")
@@ -159,7 +163,8 @@ def forget_fact(
 
     gone = {entry["memory_id"] for entry in deleted} | set(not_found)
     kept = [row.memory_id for row in rows if row.memory_id not in gone]
-    scrubbed = provider.scrub_history(scope, forms, sorted(gone), kept)
+    scrubbed, detached = _scrub(provider, scope, forms, sorted(gone), kept)
+    deleted.extend(dict(entry, reason=REASON_ENTITY) for entry in detached)
     logger.info(
         "forget: agent=%s user_id=%s fact_key=%s values=%d forms=%d "
         "deleted=%d scrubbed=%s",
@@ -178,6 +183,26 @@ def forget_fact(
         "not_found": not_found,
         "scrubbed": scrubbed,
     }
+
+
+def _scrub(
+    provider: MemoryProvider,
+    scope: str,
+    forms: List[str],
+    gone: List[str],
+    kept: List[str],
+) -> tuple:
+    """The provider's history scrub: ``(counts, detached)``, the counts
+    it reports and the rows it deleted with an entity a form names
+    (``{memory_id, owner_agent}``; Graphiti only), which no listing
+    showed as carriers, so the forget and the sweep report them."""
+    counts = dict(provider.scrub_history(scope, forms, gone, kept) or {})
+    detached = [
+        {"memory_id": str(entry["memory_id"]),
+         "owner_agent": entry.get("owner_agent", "")}
+        for entry in counts.pop(DETACHED, None) or []
+    ]
+    return counts, detached
 
 
 def _supersede(
@@ -287,9 +312,11 @@ def after_write(
                 })
         gone = {entry["memory_id"] for entry in swept}
         kept = [row.memory_id for row in rows if row.memory_id not in gone]
-        outcome["scrubbed"] = provider.scrub_history(
-            scope, forms, sorted(gone), kept,
+        outcome["scrubbed"], detached = _scrub(
+            provider, scope, forms, sorted(gone), kept,
         )
+        swept.extend(detached)
+        gone |= {entry["memory_id"] for entry in detached}
         outcome["suppressed"] = bool(own) and own <= gone
         rows = [row for row in rows if row.memory_id not in gone]
         if swept:

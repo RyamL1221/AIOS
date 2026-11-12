@@ -102,15 +102,16 @@ class Selector:
 
     @staticmethod
     def merge_and_deduplicate(own: list, shared: list) -> list:
-        """Merge own and shared results, dropping shared rows whose
-        content exactly matches an earlier row. Own rows always come
-        first and are never dropped."""
+        """Merge own and shared results, own first, dropping every row
+        whose content exactly matches an earlier row, own rows
+        included: a Graphiti fact several writes claimed is several
+        rows with its text (docs/GRAPHITI_BACKEND.md), shown once, as
+        its highest ranked row. Until Subtask 16 own rows were never
+        dropped; no Mem0 or in-house block of the Subtask 15 runs held
+        two rows with one text."""
         seen_content: set = set()
         merged: list = []
-        for mem in own:
-            seen_content.add(mem.get("content", ""))
-            merged.append(mem)
-        for mem in shared:
+        for mem in list(own) + list(shared):
             content = mem.get("content", "")
             if content not in seen_content:
                 seen_content.add(content)
@@ -306,9 +307,7 @@ class Selector:
         diagnostics["after_tombstone"] = len(own) + len(shared)
         diagnostics["tombstoned_rows"] = sorted(tombstoned)
 
-        results = (
-            self.merge_and_deduplicate(own, shared) if shared else own
-        )
+        results = self.merge_and_deduplicate(own, shared)
         diagnostics["after_dedupe"] = len(results)
 
         # A provider without scored search returns no scores: the

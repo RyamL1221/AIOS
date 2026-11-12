@@ -2303,6 +2303,33 @@ code.
   reply named rows that its writer does not list fails the trial
   (`backend_rows_unlisted`). Every other write without a row named
   none. The two H = 2 agent cells were re-run (`f16e`).
+- **Review (one pass, during the first pilot_v1 smoke launch).** Four
+  findings, each verified in code and fixed with a test that fails
+  without it; the smoke (`pg16`, started 19:37) was stopped at 20:01,
+  in its first cell, so it runs on the fixed code:
+  1. Native Graphiti's `search()` wrote its `num_results` into the
+     shared recipe Graphiti's ingestion reads; a V4 consumer's k 5
+     stayed for the next users' writes (native, H = 2: the functional
+     check's `f16e` native H = 2 cell ran with it). The agents put the
+     limit back after each call.
+  2. The selector never deduped the own fetch: two claims of one
+     Graphiti fact both reached the block (functional `no_delete`
+     replicated: 12 extra rows in 10 of 30 probes). The exact-content
+     dedupe now covers own rows; no Mem0 or in-house block of the
+     Subtask 15 runs held two rows with one text.
+  3. The Graphiti scrub's `DETACH DELETE` of an entity a form names
+     deleted the facts attached to it unreported. They are now reported
+     (`detached`; forget reason `entity`, or swept), so the harness
+     counts them as removed and the analysis shows them.
+  4. v1 kernel cost: the kernel's chat turn is written in the
+     background, and `/memory/cost` waited only for calls in flight, so
+     a Graphiti turn's later calls were lost (the 1-user v1 try: kernel
+     17 and 12 backend calls, replicated 24 and 15). The read now waits
+     on the user's write barrier first; the harness's read timeout
+     (120 s) outlasts the barrier's (60 s). In v1 Mem0 kernel cells
+     (Subtask 11) the same race could drop the turn's embedding calls.
+  The functional check ran before these fixes; its criteria do not
+  depend on them, and the two smokes run after.
 
 ## Open decisions
 

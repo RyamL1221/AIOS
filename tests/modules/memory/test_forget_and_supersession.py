@@ -984,6 +984,52 @@ def test_forget_and_sweep_scrub_the_providers_history():
     assert provider.scrubs[-1] == (USER, [VALUE, ALIAS], [swept], [city])
 
 
+class Detaching(Scrubbing):
+    """The recording store, but its scrub also deletes ``detach`` and
+    reports it as ``detached``, as Graphiti's does with the facts still
+    attached to an entity a form names (docs/GRAPHITI_BACKEND.md)."""
+
+    detach = None
+
+    def scrub_history(self, user_id, forms, deleted_ids=(), kept_ids=()):
+        counts = super().scrub_history(user_id, forms, deleted_ids,
+                                       kept_ids)
+        row = stored(self).get(self.detach)
+        if row is None:
+            return counts
+        self.delete(self.detach, user_id)
+        return {**counts, "detached": [
+            {"memory_id": self.detach,
+             "owner_agent": row.metadata["owner_agent"]}]}
+
+
+def test_the_rows_a_scrub_detaches_are_deleted_and_swept_rows():
+    """A fact whose sentence carries no form is no carrier, so the forget
+    keeps it; when the scrub deletes it with an entity a form names, the
+    forget reports it as deleted (reason ``entity``) and a sweep as
+    swept, and the scrub's counts stay counts."""
+    provider = Detaching()
+    pipeline = MemoryPipeline(provider)
+    statement = write(pipeline, WRITER, "My lawyer is Greta Sandvik.",
+                      **stated(VALUE, "e1"))
+    review = write(pipeline, TASK, "Contract review on Friday.",
+                   memory_type="task_context", fact_key="meeting")
+    city = write(pipeline, WRITER, "I live in Tallinn.", fact_key=HOME)
+    provider.detach = review
+    report = pipeline.forget(WRITER, USER, SLOT)
+    assert deleted(report) == {statement: (WRITER, "fact_key"),
+                               review: (TASK, "entity")}
+    assert report["scrubbed"] == {"messages": 2, "history": 3}
+
+    provider.detach = city
+    _, outcome = written(pipeline, CALENDAR, "Standup at nine.",
+                         memory_type="calendar", fact_key="standup")
+    assert outcome["swept"] == [{"memory_id": city, "owner_agent": WRITER}]
+    assert outcome["scrubbed"] == {"messages": 2, "history": 3}
+    assert outcome["suppressed"] is False
+    assert city not in stored(provider)
+
+
 # --- after a forget: the user's restatement ----------------------------
 
 

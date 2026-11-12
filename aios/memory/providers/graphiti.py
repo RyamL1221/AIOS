@@ -488,7 +488,7 @@ class GraphitiProvider(MemoryProvider):
         forms: List[str],
         deleted_ids: List[str] = (),
         kept_ids: List[str] = (),
-    ) -> Dict[str, int]:
+    ) -> Dict[str, Any]:
         """Remove forgotten forms from what Graphiti keeps besides its
         facts (docs/GRAPHITI_BACKEND.md, "The forget on Graphiti"), with
         no LLM call:
@@ -502,6 +502,11 @@ class GraphitiProvider(MemoryProvider):
         - ``history``: the user's entities whose name carries a form are
           deleted, with any fact still attached; the summaries that
           carry one are blanked. Counted once per entity.
+        - ``detached`` (only when there are some): the rows of the facts
+          deleted with those entities, ``{memory_id, owner_agent}``. No
+          sentence of theirs carries a form, or the forget or the sweep
+          would have deleted them first; the library reports them as
+          deleted (reason ``entity``) or swept.
 
         ``kept_ids`` are not needed: every episode and entity of the
         user is checked."""
@@ -515,7 +520,7 @@ class GraphitiProvider(MemoryProvider):
             raise ProviderError(
                 f"Graphiti scrub failed: {type(e).__name__}: {e}") from e
 
-    async def _scrub(self, group, forms, deleted_ids) -> Dict[str, int]:
+    async def _scrub(self, group, forms, deleted_ids) -> Dict[str, Any]:
         from aios.memory.pipeline.matching import match_forms
 
         def carries(text: Optional[str]) -> bool:
@@ -552,7 +557,21 @@ class GraphitiProvider(MemoryProvider):
             summarized = sorted(
                 r["uuid"] for r in entities
                 if r["uuid"] not in named and carries(r["summary"]))
+            detached: List[Candidate] = []
             if named:
+                # The facts still attached go with the entity. None
+                # carries a form (the forget or the sweep deleted every
+                # carrier first), so each row is reported, not hidden.
+                attached = await self._query(
+                    "MATCH (n:Entity {group_id: $group})"
+                    "-[r:RELATES_TO {group_id: $group}]-(:Entity) "
+                    "WHERE n.uuid IN $uuids RETURN DISTINCT r.uuid AS uuid",
+                    group=group, uuids=named)
+                edges = sorted({record["uuid"] for record in attached})
+                if edges:
+                    detached = [self._candidate(record) for record in
+                                await self._query(ROWS_OF_EDGES,
+                                                  edges=edges, group=group)]
                 await self._query(
                     "MATCH (n:Entity {group_id: $group}) "
                     "WHERE n.uuid IN $uuids DETACH DELETE n",
@@ -566,7 +585,15 @@ class GraphitiProvider(MemoryProvider):
             logger.info(
                 "Graphiti scrub of %s: %d episode(s) blanked, %d gone "
                 "with their last fact, %d entity name(s), %d "
-                "summary(ies)", group, len(blank), len(gone), len(named),
-                len(summarized))
-        return {"messages": len(blank) + len(gone),
-                "history": len(named) + len(summarized)}
+                "summary(ies), %d row(s) deleted with an entity", group,
+                len(blank), len(gone), len(named), len(summarized),
+                len(detached))
+        counts: Dict[str, Any] = {
+            "messages": len(blank) + len(gone),
+            "history": len(named) + len(summarized)}
+        if detached:
+            counts["detached"] = [
+                {"memory_id": row.memory_id,
+                 "owner_agent": (row.metadata or {}).get("owner_agent", "")}
+                for row in detached]
+        return counts

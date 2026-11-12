@@ -130,7 +130,13 @@ Mattermost last week", whose `episodes` became both writes. One row per
 fact and write keeps the restating write's own row, with its own
 metadata, so its extraction check, its supersession and visibility all
 work as for any other write. A fact claimed by several writes appears as
-several rows with the same text; the kernel's dedupe keeps one.
+several rows with the same text; the selector's exact-content dedupe
+keeps the highest ranked. It covers the own fetch's rows since the
+Subtask 16 review: before, two claims of a fact in the own fetch both
+reached the block (the functional check's replicated `no_delete` cell:
+12 extra rows in 10 of 30 probes; no other Graphiti cell, and no Mem0
+or in-house block of the Subtask 15 runs, held two rows with one
+text).
 
 - `add` returns the id of the write's first row, or `""` when the write
   gave no fact (as Mem0 does when it extracts nothing; a lost memory,
@@ -165,8 +171,10 @@ ingestion also uses to find duplicate and contradicted facts
 (`edge_operations.py:532`, `:563`). A kernel fetch of 40 would change how
 every later write is resolved. In the exploration both calls returned
 the same facts in the same order; a test checks it. The native agents
-call `search()` with `num_results` 10, the recipe's own limit, so their
-calls change nothing.
+call `search()` with `num_results` k, 10 except for a V4 consumer (5,
+at H = 2), and put the recipe's limit back after each call, so one
+user's consumer does not change how the next writes are ingested
+(found by the Subtask 16 review; a test checks it).
 
 Each fact becomes its rows (one per write claiming it), in Graphiti's
 order, cut at `top_k` rows. Facts Graphiti has invalidated come back,
@@ -245,12 +253,17 @@ with no LLM call:
 1. blanks the `content` of the user's episodes that carry a form, and of
    the deleted rows' episodes whatever they hold;
 2. deletes an episode left with no fact and no content;
-3. deletes the user's entities whose name carries a form (with any
-   facts still attached, which would carry the form too);
+3. deletes the user's entities whose name carries a form, with the
+   facts still attached. The forget or the sweep deleted every carrier
+   first, so none of those carries a form: they are returned as
+   `detached` rows, which the library reports as deleted (reason
+   `entity`) or swept, so the harness and the analysis count them;
 4. blanks the summaries of the user's entities that carry a form.
 
 It returns `{"messages": <episodes scrubbed or deleted>, "history":
-<entity names and summaries scrubbed>}`, the keys Mem0's scrub reports.
+<entity names and summaries scrubbed>}`, the keys Mem0's scrub reports,
+and `detached` (`{memory_id, owner_agent}` per row) when step 3 deleted
+facts.
 The library calls it after every forget and every sweep.
 
 What it does not reach, reported rather than hidden:
@@ -260,6 +273,9 @@ What it does not reach, reported rather than hidden:
   forgotten.
 - Facts another write extracted with the forgotten text in its context,
   whose sentence does not carry a form.
+- Facts attached to an entity a form names are deleted with it, though
+  their sentences carry no form: reported (reason `entity`), not
+  hidden.
 - A blanked summary loses its entity's other facts too; summaries are
   rebuilt from later writes as Graphiti appends to them. Search does not
   return summaries.

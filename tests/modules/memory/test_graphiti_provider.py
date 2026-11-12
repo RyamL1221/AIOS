@@ -231,6 +231,29 @@ def test_the_scrub_reaches_episodes_names_and_summaries(provider):
     assert {r.memory_id for r in provider.list(USER, 100)} == {kept, echo}
 
 
+def test_the_scrub_reports_the_facts_it_deletes_with_an_entity(provider):
+    """An entity named by a form is deleted with the facts still
+    attached to it; a fact whose sentence does not carry the form (no
+    carrier, so the forget kept it) goes with it, and the scrub reports
+    each of its rows as ``detached``, so the forget can count them."""
+    sentence = "Our team moved chat tools last week."
+    row = provider.add(note(sentence, event="u0-e01"))
+    kept = provider.add(note("I live in Utrecht.", slot="home_city",
+                             event="u0-e02"))
+
+    async def rename():
+        await provider.graphiti.driver.execute_query(
+            "MATCH (n:Entity {group_id: $group, name: $name}) "
+            "SET n.name = 'Mattermost'",
+            params={"group": provider._group(USER),
+                    "name": topic(sentence)})
+    provider.runner.run(rename)
+    counts = provider.scrub_history(USER, ["Mattermost"], [], [row, kept])
+    assert counts["detached"] == [
+        {"memory_id": row, "owner_agent": "profile_agent"}]
+    assert {r.memory_id for r in provider.list(USER, 100)} == {kept}
+
+
 def test_search_is_graphitis_own_and_leaves_its_recipe_alone(provider):
     """``search`` returns Graphiti's ``search()`` facts in its order,
     unscored, and never changes the shared recipe ``search()`` and

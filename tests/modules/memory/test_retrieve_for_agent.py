@@ -211,6 +211,24 @@ def test_k_caps_after_dedupe():
     ]
 
 
+def test_own_rows_with_one_text_reach_the_block_once():
+    """A Graphiti fact two writes claimed is two rows with its text
+    (docs/GRAPHITI_BACKEND.md); both in the own fetch, the block shows
+    it once, the higher ranked row, with or without a shared fetch."""
+    first = row("Uses Linear.", owner="profile_agent", policy="shared")
+    second = dict(row("Uses Linear.", owner="task_agent", policy="shared"),
+                  memory_id="id-second-claim")
+    rows = [first, second, row("Lives in Utrecht.")]
+    for include_shared in (False, True):
+        manager = make_manager(rows)
+        results, diagnostics = manager.retrieve_for_agent(
+            AGENT, USER, "q", k=5, include_shared=include_shared
+        )
+        assert [r["memory_id"] for r in results] == [
+            "id-Uses Linear.", "id-Lives in Utrecht."]
+        assert diagnostics["after_dedupe"] == 2
+
+
 def test_explicit_top_k_reaches_the_provider():
     manager = make_manager([])
     _, diagnostics = manager.retrieve_for_agent(
