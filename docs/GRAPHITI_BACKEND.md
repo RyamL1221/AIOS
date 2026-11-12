@@ -348,6 +348,46 @@ columns, and no criterion reads them.
   `mem0_llm_config` is shared today, so the loci share one
   configuration.
 
+## Measured in the smokes
+
+From the pilot_v1 smoke (Cerebrum `results/pilot_v1_graphiti`) and the
+benchmark v2 smoke (`results/bench_v2_smoke_graphiti`), against the
+Mem0 and in-house cells of `pilot_v1_hetero` and `bench_v2_smoke_a4`
+(same users, inputs and settings). Per user, H = 0; USD is the
+backend's (gpt-4o at the committed price table). Every trial's
+recorded calls match the calls its logs show, except the H = 2 agent
+cells of pilot_v1, which are lower bounds (`v2_trials`; Cerebrum
+`a836d69`).
+
+| | Graphiti calls | per write | USD | Mem0 calls | per write | USD |
+|---|---:|---:|---:|---:|---:|---:|
+| pilot_v1 (3 writes) | 17.7 to 19.3 | about 6 | 0.094 to 0.101 | 3.0 | 1 | 0.064 to 0.065 |
+| v2 (17.8 writes) | 72.4 to 74.9 | 4.1 to 4.2 | 0.41 to 0.43 | 17.8 | 1 | 0.36 |
+
+- **Latency.** `add_episode` took a median of 6.3 to 6.5 s a write in
+  the v2 smoke (p90 7.1 to 7.6 s, longest 18.3 s), about 116 s per
+  user. A v2 user took 182 to 191 s in the Graphiti cells, against 95 to
+  102 s on Mem0 and 73 to 77 s in-house.
+- **Granularity.** Graphiti stores a statement as about one fact, but
+  the base profile as 3 to 5 facts and the base task context as 1 to
+  11: about 23 facts per v2 user, of which a block holds k = 10. The v2
+  integration block held 37% of the base profile's values (25% native),
+  against 100% in-house and 76 to 80% on Mem0, and the budget never
+  bound (longest block 197 of 300 estimated tokens). Integration scored
+  2.20 (kernel) and 1.97 (replicated), against 2.87 in-house and 3.57
+  to 3.60 on Mem0.
+- **Graphiti's invalidations against the kernel's supersession.** In
+  the v2 smoke Graphiti marked invalid 52 of the kernel cell's 60
+  retired rows (replicated: 54 of 60), and 1 to 3 rows per cell that
+  are a slot's latest statement. In native, which retires nothing, 32
+  of the 36 recency and contradiction failures held the stale value in
+  a fact Graphiti had marked invalid (`NATIVE_USAGE.md`, "Evidence:
+  native Graphiti's search as returned").
+- **Writes with no fact.** None in the v2 smoke (534 writes per cell).
+  In the pilot_v1 smoke 33 of the kernel's and 32 of replicated's 60
+  conversation turns gave no fact (no v1 score reads the turn), and one
+  native task write stored none.
+
 ## Store and partition
 
 One Neo4j database holds every store: Community edition has one, so the

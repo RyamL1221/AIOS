@@ -2343,6 +2343,70 @@ code.
   Not changed: the harness does not record the cost read's
   `barrier_wait`; a timed-out read is in the kernel log, which the
   smoke's audit checks.
+- **Functional check** (Cerebrum `results/bench_v2_functional_graphiti`,
+  14 cells over three result folders, users 0 to 4, 70 user-trials, 0
+  failed). Every criterion that applies to the Graphiti cells holds:
+  deletion and privacy pass and fail in real conditions and fail under
+  `no_delete` (15 of 15) and `no_visibility` (5 of 5); kernel and
+  replicated delete completely at H = 0; `writer_scoped` fails 2 of 4
+  echo users; no block holds a retired row at H = 0 and
+  `no_supersession` puts one in 48 probes; the guard was armed and
+  dropped nothing; every Graphiti forget scrubbed an episode; the cap
+  binds. The others need the in-house, Mem0 or `no_memory` cells
+  (Subtask 15's).
+- **pilot_v1 smoke** (Cerebrum `results/pilot_v1_graphiti`, `pg16e`,
+  qwen, H = 0 and 2, 180 user-trials, 0 failed). Kernel 3.90 / 4.17 /
+  3.83 (profile / task / integration) at H = 0 and 3.20 / 3.40 / 2.77
+  at H = 2; replicated 3.70 / 4.10 / 3.70 and 2.47 / 2.63 / 1.77;
+  native 4.00 / 4.17 / 3.90 and 2.63 / 2.77 / 2.07. Kernel minus
+  replicated: H = 0 profile +0.20 [-0.03, +0.43], integration +0.13
+  [-0.12, +0.39]; H = 2 profile +0.73 [+0.23, +1.23], integration +1.00
+  [+0.57, +1.43]. Kernel minus native: H = 0 -0.10 and -0.07, H = 2
+  +0.57 [+0.03, +1.10] and +0.70 [+0.20, +1.20]. Both readings (the
+  H = 0 tie, an H = 2 gap in Subtask 11's direction) hold for both
+  contrasts; reported, not required.
+- **A V2 agent's backend calls were not counted in v1** (Cerebrum
+  `a836d69`, with a test that fails without it). A V2 agent tags its
+  calls with its rewritten user id, and the v1 agent-managed trial read
+  only the assistant's id (v2's harness reads every id, Amendment 2).
+  The pilot_v1 smoke's H = 2 agent cells recorded 338 of 393
+  (replicated) and 394 of 439 (native) logged calls, exactly their 12
+  V2 trials; not re-run, reported as lower bounds (`v2_trials` in its
+  cost table). The same holds for `pilot_v1_hetero`'s H = 1 and H = 2
+  Mem0 agent cells (Subtask 11): their V2 trials record 1.5 to 1.75
+  backend calls against 3 for the others. No report gave agent-locus
+  backend cost at H > 0. The kernel reads usage under canonical ids
+  and is unaffected.
+- **Benchmark v2 smoke** (Cerebrum `results/bench_v2_smoke_graphiti`,
+  `s16`, pilot_v2, H = 0, 90 user-trials, 0 failed; beside
+  `bench_v2_smoke_a4`). Kernel and replicated pass every judge-free
+  probe (30 of 30 each for deletion, privacy, recall, recency and
+  contradiction) and agree on all 150 pairs; Amendment 4's criteria that
+  need no control hold; no write gave no fact. Native: deletion 23 of
+  30 (7 echoes), recall 30, recency 11, contradiction 13; in 32 of its
+  36 recency and contradiction failures the stale fact was one Graphiti
+  had marked invalid, which `search()` returns. Integration is low in
+  every Graphiti cell: 2.20 kernel, 1.97 replicated, 2.00 native,
+  against 2.87 in-house and 3.57 to 3.60 Mem0. Graphiti splits the base
+  profile into 3 to 5 facts (about 23 facts per user), the cap (10)
+  binds in every probe and the budget in none, and the integration
+  block held 37% of the profile's values (100% in-house, about 80%
+  Mem0). Graphiti marked invalid 52 of the kernel's 60 retired rows,
+  and 1 to 3 latest statements per cell.
+- **Cost and latency** (`GRAPHITI_BACKEND.md`, "Measured in the
+  smokes"): Graphiti makes about 4 backend calls a v2 write and 6 a v1
+  write, against Mem0's 1; per v2 user $0.41 to 0.43 against $0.36,
+  and 182 to 191 s against 95 to 102 s (in-house 73 to 77 s);
+  `add_episode` 6.3 to 6.5 s a write (median). Every trial's recorded
+  calls match its logs, the pilot_v1 H = 2 agent cells' V2 trials
+  excepted (above).
+- **Native Graphiti's evidence**: `NATIVE_USAGE.md`, "Evidence: native
+  Graphiti's search as returned" (order, no score, no score filtering,
+  invalidated facts included).
+- **Zep retired.** `aios/memory/providers/zep.py` and
+  `test_zep_provider.py` are deleted; the factory offers `in-house`,
+  `in-memory`, `mem0` and `graphiti`. Known issues 4 and 11 (Zep's
+  contract gaps) are closed with it.
 
 ## Open decisions
 
@@ -2439,9 +2503,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
 3. `config.yaml` (10 / 2000) and `config.yaml.example` (5 / 1500) still
    differ on `max_injected_memories` / `max_memory_tokens`; both set
    `relevance_threshold` 0.0 since Subtask 5.
-4. `get_memory`, `update_memory` and `remove_memory` on Zep always
-   answer "not found": Zep episodes carry no owner, so the rules fail
-   closed. The same goes for any row stored without an `owner_agent`.
+4. Closed in Subtask 16 (the Zep provider is removed): `get_memory`,
+   `update_memory` and `remove_memory` on Zep always answered "not
+   found", Zep episodes carrying no owner. Any row stored without an
+   `owner_agent` still fails closed.
 5. Fixed in Subtask 5: `update_memory` is stamped against the barrier.
 6. `test_write_barrier_stress.py::Scenario2DisjointUsersTests` is flaky:
    it compares sub-millisecond medians. It failed 5 of 8 runs at
@@ -2459,8 +2524,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
 10. The harness's post-ProfileAgent diagnostic (`pipeline.py`) searches
     without a `user_id`, so it looks in the agent's own scope and warns
     "0 results" on every trial (also in all of Subtask 3). Noise only.
-11. Zep does not conform to the provider contract (no metadata, no
-    `list` / `update`); see `docs/PROVIDER_CONTRACT.md`.
+11. Closed in Subtask 16 (the Zep provider is removed): Zep did not
+    conform to the provider contract (no metadata, no `list` /
+    `update`); Graphiti does (`docs/GRAPHITI_BACKEND.md`).
 12. Mem0's collections use Chroma's default squared-L2 space; the cosine
     conversion assumes unit vectors, which the pinned model returns. A
     model that does not would need its collections created in cosine

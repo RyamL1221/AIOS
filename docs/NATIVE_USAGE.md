@@ -865,3 +865,59 @@ cosine): "User's weekly team sync has been relocated to the Larch room."
 | 25 | 1.000 | 0.328 | cut | Michael Peterson prefers using Elvish as his shell. |
 | 26 | 0.999 | 0.501 | cut | User attends running club gatherings in Larkfield Park. |
 | 27 | 0.933 | 0.534 | cut | User is scheduled for a pairing session with Greta Sandvik during the week of November 9, 2026. |
+
+## Evidence: native Graphiti's search as returned
+
+Added in Subtask 16, from the pilot_v1 smoke on Graphiti (`pg16e`,
+Cerebrum `results/pilot_v1_graphiti`, H = 0 and 2, 60 native trials)
+and the benchmark v2 smoke on Graphiti (`s16`,
+`results/bench_v2_smoke_graphiti`, H = 0, 30 users, 6 probes each). It
+shows that the consumer uses Graphiti's facts as `search()` returns
+them: in its order, with no score and no score filtering, cut at k
+after the sharing convention, invalidated facts included. The line
+numbers are Cerebrum `cerebrum/example/agents/native/agents.py` at
+`c3f5ade`, the code both smokes ran (the pilot_v1 smoke at `abfd503`,
+whose file is the same).
+
+**Order.** The trials record the injected rows in block order and the
+count after each selection stage, not `search()`'s own list, so the
+order is the code's, pinned by two tests:
+`test_search_gives_each_fact_an_episode_the_agent_may_see` (Cerebrum
+`tests/agents/test_native_graphiti.py`, on the local Neo4j) asserts
+that `NativeMemory.search` returns the facts in `graphiti.search()`'s
+order with no score, and
+`test_the_reference_consumer_keeps_the_backends_order`
+(`test_native_conditions.py`) that `_select` keeps the order it is
+given, cut at k by position. The call is
+`graphiti.search(query, group_ids=[group], num_results=k)` (line 212).
+
+**No score, no score filtering**, in every native trial of both smokes
+(60 pilot_v1 trials, 180 v2 probes):
+- `scores_present` is false and every injected row's `match_score` is
+  None: `search()` returns no score.
+- `after_threshold` equals `after_visibility` in all, the three V4
+  consumers at H = 2 included (threshold 0.5, k 5): `_select` keeps an
+  unscored row under a threshold (line 665,
+  `r["score"] is None or ...`).
+- `own_fetched` is at most k in every trial (`num_results=k`), so the
+  cap never cut (`after_cap` equals `after_threshold`), and the token
+  budget dropped nothing (`after_budget` equals `after_cap`). In the
+  pilot_v1 smoke at H = 0, `search()` returned k facts in 12 of 30
+  trials and fewer in 18 (the user's group held fewer); in the v2
+  smoke, k in all 180 probes.
+- A hidden fact still takes one of `search()`'s k results, as with
+  native Mem0 (above): at pilot_v1's H = 2 the sharing convention hid
+  52 rows in 12 trials, and in the v2 smoke one row in each of 117 of
+  the 180 probes (another agent's private write), and each block was
+  short by as many.
+
+**Invalidated facts.** `search()` returns facts Graphiti has
+invalidated, and the block prints each fact's sentence ("Validity",
+above). In the v2 smoke Graphiti marked 56 of native's rows invalid
+after the history (53 earlier statements of a slot and 3 latest ones),
+and an invalidated fact reached 132 of the 180 probe blocks. Of the 36
+recency and contradiction failures, 32 held the stale value in a fact
+Graphiti had marked invalid. These invalidations are Graphiti's own,
+recorded per trial (`backend_invalidated_rows`) and per probe
+(`backend_invalidated_in_block`) and credited to no locus
+(`GRAPHITI_BACKEND.md`, "Supersession: two mechanisms, one measured").
