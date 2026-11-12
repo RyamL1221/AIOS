@@ -229,6 +229,26 @@ def test_own_rows_with_one_text_reach_the_block_once():
         assert diagnostics["after_dedupe"] == 2
 
 
+def test_texts_differing_in_case_or_spacing_are_not_duplicates():
+    """The dedupe is exact-content (docs/RETRIEVAL_PATH.md, step 6;
+    docs/GRAPHITI_BACKEND.md, "Rows"): rows whose texts differ only in
+    case or surrounding whitespace are different rows, and each reaches
+    the block, with or without a shared fetch."""
+    rows = [
+        row("Uses Linear.", owner="profile_agent", policy="shared"),
+        row("uses linear.", owner="task_agent", policy="shared"),
+        row("Uses Linear. "),
+    ]
+    for include_shared in (False, True):
+        manager = make_manager(rows)
+        results, diagnostics = manager.retrieve_for_agent(
+            AGENT, USER, "q", k=5, include_shared=include_shared
+        )
+        assert [r["memory_id"] for r in results] == [
+            "id-Uses Linear.", "id-uses linear.", "id-Uses Linear. "]
+        assert diagnostics["after_dedupe"] == 3
+
+
 def test_explicit_top_k_reaches_the_provider():
     manager = make_manager([])
     _, diagnostics = manager.retrieve_for_agent(
