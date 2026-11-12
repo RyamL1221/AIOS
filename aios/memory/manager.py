@@ -3,7 +3,7 @@ Memory Manager for the AIOS system.
 
 This module provides the MemoryManager class that serves as the high-level
 interface to the memory management system. It uses pluggable memory providers
-to enable different storage backends (in-house, Mem0, Zep).
+to enable different storage backends (in-house, Mem0, Graphiti).
 """
 import logging
 import os
@@ -67,7 +67,7 @@ class MemoryManager:
     
     This class serves as a high-level interface to the memory management system,
     delegating operations to a configured memory provider. It supports multiple
-    backend providers (in-house, Mem0, Zep) through the provider abstraction layer.
+    backend providers (in-house, Mem0, Graphiti) through the provider abstraction layer.
     
     The manager maintains backward compatibility with existing code by defaulting
     to the "in-house" provider when no provider is specified.
@@ -101,7 +101,8 @@ class MemoryManager:
             log_mode: Logging mode for memory operations. Defaults to "console".
             provider: Optional provider type to use. If not specified, uses the
                      provider from configuration or defaults to "in-house".
-                     Valid values: "in-house", "mem0", "zep"
+                     Valid values: "in-house", "in-memory", "mem0",
+                     "graphiti"
         """
         self.log_mode = log_mode
         

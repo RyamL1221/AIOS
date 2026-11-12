@@ -286,7 +286,7 @@ The `MemoryWriteBarrier` enforces write-before-read ordering per user_id:
 
 - **Bounded wait**: `timeout_ms` (default 5000ms) caps any retrieval's wait. On timeout, retrieval proceeds fail-open.
 - **Failed writes still release**: A provider error doesn't strand retrievals.
-- **No-op for non-Mem0 providers**: InHouseProvider and ZepProvider commit synchronously; the barrier bypasses them.
+- **No-op for synchronous providers**: the in-memory provider commits synchronously (`synchronous_commit`); the barrier bypasses it. Mem0, Graphiti and the Chroma in-house provider wait.
 - **Empty user_id bypasses**: Legacy agent-scoped retrievals never wait.
 
 ---
@@ -342,7 +342,7 @@ All settings live in `aios/config/config.yaml` under the `memory:` section:
 
 ```yaml
 memory:
-  provider: "mem0"              # Backend: "in-house", "mem0", or "zep"
+  provider: "mem0"              # "in-house", "in-memory", "mem0" or "graphiti"
   auto_extract: true            # Store conversations as memories
   auto_inject: true             # Inject memories before LLM calls
   relevance_threshold: 0.3      # Min similarity score for injection

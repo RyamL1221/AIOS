@@ -8,7 +8,8 @@ AIOS supports pluggable memory providers, allowing you to choose between differe
 |----------|---------|-------------|--------------|
 | `in-house` (default) | ChromaDB / Qdrant | Local disk | None (built-in) |
 | `mem0` | Mem0 + Ollama + ChromaDB | In-memory only* | `pip install mem0ai`, Ollama running |
-| `zep` | Zep Cloud graph API | Server-side | `pip install zep-cloud==2.0.0`, Zep API key |
+| `graphiti` | graphiti-core + Neo4j | Neo4j | `graphiti-core==0.31.2` (in `requirements.txt`), Neo4j 5.26, Azure gpt-4o, Ollama embedder |
+| `in-memory` | Python dict | None | None (tests only) |
 
 \* Mem0's ChromaDB adapter uses a deprecated API that doesn't persist across restarts.
 
@@ -20,7 +21,7 @@ Edit `aios/config/config.yaml`:
 
 ```yaml
 memory:
-  provider: "in-house"  # or "mem0" or "zep"
+  provider: "in-house"  # or "mem0" or "graphiti"
 ```
 
 ### 2. Install dependencies (if needed)
@@ -30,8 +31,8 @@ memory:
 pip install mem0ai
 ollama pull nomic-embed-text
 
-# For Zep Cloud
-pip install zep-cloud==2.0.0
+# For Graphiti (and a Neo4j 5.26 server; docs/GRAPHITI_BACKEND.md)
+pip install graphiti-core==0.31.2
 ```
 
 ### 3. Start AIOS
@@ -83,21 +84,21 @@ Prerequisites:
 - Ollama running at `localhost:11434`
 - Models pulled: `ollama pull qwen2.5:7b` and `ollama pull nomic-embed-text`
 
-### Zep
+### Graphiti
 
-Requires a Zep Cloud API key (free tier works):
+Zep's open-source temporal knowledge graph on Neo4j (NeurIPS Subtask
+16; it replaced the Zep Cloud provider). Neo4j comes from `NEO4J_URI`,
+`NEO4J_USER` and `NEO4J_PASSWORD` in the environment (`AIOS/.env`);
+the LLM is `memory.backend_llm` and the embedder `memory.embedding`:
 
 ```yaml
 memory:
-  provider: "zep"
-  zep:
-    api_key: "your-zep-api-key"
-    session_id: "default"
+  provider: "graphiti"
+  graphiti:
+    user_id: "default"
 ```
 
-Get an API key at [app.getzep.com](https://app.getzep.com).
-
-Note: The Zep provider uses the graph API (free tier). The sessions/memory API requires a paid plan.
+Setup, design and what it stores: `docs/GRAPHITI_BACKEND.md`.
 
 ## Switching Providers at Runtime
 
@@ -154,8 +155,8 @@ Each provider has a standalone test script in `tests/modules/memory/`:
 # Test Mem0 (requires Ollama + nomic-embed-text, config set to mem0)
 python tests/modules/memory/test_mem0_provider.py
 
-# Test Zep (requires Zep API key, config set to zep)
-python tests/modules/memory/test_zep_provider.py
+# Test Graphiti (requires the local Neo4j; the LLM is scripted)
+.venv/bin/python -m pytest tests/modules/memory/test_graphiti_provider.py
 ```
 
 Tests run directly against the provider layer without needing the full AIOS
@@ -171,13 +172,16 @@ ProviderFactory
      |
   +--+--+--+
   |  |  |  |
-InHouse Mem0 Zep  (your custom provider)
+InHouse Mem0 Graphiti  (your custom provider)
   |     |    |
-ChromaDB Ollama+ChromaDB  Zep Cloud Graph API
+ChromaDB Ollama+ChromaDB  Neo4j
 ```
 
 All providers implement the `MemoryProvider` abstract base class
-(`aios/memory/providers/base.py`) with six required methods:
+(`aios/memory/providers/base.py`). Since NeurIPS Subtask 5 the
+contract is `docs/PROVIDER_CONTRACT.md` (`add`, `search`, `list`,
+`get`, `update`, `delete`, `capabilities`); the six methods below are
+the earlier interface:
 
 - `add_memory(memory_note)` — store a memory
 - `get_memory(memory_id)` — retrieve by ID
@@ -203,18 +207,16 @@ implementation examples.
 - Semantic search via embeddings (nomic-embed-text)
 - In-memory only — data lost on restart (upstream ChromaDB adapter limitation)
 
-### Zep
-- Automatically extracts structured facts from stored text
-  (e.g., "The user prefers Python over JavaScript" becomes separate graph edges)
-- Graph extraction is async — allow 2-8 seconds after storing before searching
-- `remove_memory` is a soft no-op on the free tier (no delete endpoint)
-- Data persists server-side (Zep Cloud)
+### Graphiti
+- Extracts facts (graph edges) from each write with its LLM: one row
+  per fact and write, the write's metadata on every row
+- `search()` is unscored (`scored_search: false`)
+- About 4 to 6 LLM calls and 6 seconds a write
+  (`docs/GRAPHITI_BACKEND.md`, "Measured in the smokes")
 
 ## Known Issues
 
 | Issue | Provider | Status |
 |-------|----------|--------|
 | No persistence across restarts | Mem0 | Upstream — Mem0 uses deprecated `chromadb.Client()` |
-| No delete API on free tier | Zep | By design — `remove_memory` returns success as no-op |
-| SDK version pinned to 2.0.0 | Zep | Newer versions incompatible with free tier endpoints |
 | `protobuf` must be < 6.0 | Mem0 | `qdrant-client` dependency needs `protobuf 5.x` |

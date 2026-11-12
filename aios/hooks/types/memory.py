@@ -11,4 +11,5 @@ MemoryRequestQueueCheckEmpty: TypeAlias = Callable[[], bool]
 
 class MemoryManagerParams(BaseModel):
     log_mode: str
-    provider: Optional[str] = None  # Memory provider type: "in-house", "mem0", or "zep"
+    # "in-house", "in-memory", "mem0" or "graphiti"
+    provider: Optional[str] = None

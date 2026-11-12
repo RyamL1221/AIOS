@@ -53,7 +53,8 @@ def useMemoryManager(params):
     Args:
         params (MemoryManagerParams): Parameters required for Memory Manager initialization.
             - log_mode (str): Logging mode for memory operations
-            - provider (Optional[str]): Memory provider type ("in-house", "mem0", "zep").
+            - provider (Optional[str]): Memory provider type ("in-house", "in-memory",
+                                       "mem0", "graphiti").
                                        If not specified, uses configured default.
 
     Returns:
