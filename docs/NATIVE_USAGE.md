@@ -257,11 +257,13 @@ read on 2026-11-11. How Graphiti stores, merges and deletes is in
   with messages in the documented "{role/name}: {message}" form.
 - Partition: `group_id` per user, the documented way to keep tenants
   apart ([graph namespacing](https://help.getzep.com/graphiti/core-concepts/graph-namespacing)).
-- Searching: `search(query, group_ids=[<group>], num_results=k)`, which
-  returns facts (edges, with `fact`, `valid_at`, `invalid_at`), fused
-  from BM25 and cosine by reciprocal rank
+- Searching: `search(query, group_ids=[<group>], num_results=k,
+  search_filter=...)`, which returns facts (edges, with `fact`,
+  `valid_at`, `invalid_at`), fused from BM25 and cosine by reciprocal
+  rank
   ([searching](https://help.getzep.com/graphiti/working-with-data/searching)).
-  It returns no score.
+  It returns no score. The filter keeps the facts Graphiti holds true
+  now ("Validity", below).
 - Reading episodes: `graphiti.nodes.episode.get_by_uuids(...)` and
   `get_by_group_ids(...)`
   ([CRUD operations](https://help.getzep.com/graphiti/working-with-data/crud-operations)).
@@ -305,12 +307,30 @@ What the agents do:
   consumer must not change how the next writes are ingested. The call
   itself is the documented one. (Until the Subtask 16 review it was not
   put back, so a V4 consumer's 5 stayed for the next users' writes.)
-- **Validity.** `search()` returns facts Graphiti has invalidated as
-  well. The block prints each fact's sentence only, as the other native
-  conditions print theirs; the agents record each fact's `invalid_at`
-  and `expired_at` in their diagnostics, so Graphiti's own invalidations
-  are reported apart from the kernel's supersession and credited to no
-  locus.
+- **Validity.** Graphiti invalidates a fact it reads as no longer
+  true rather than deleting it: "old facts are invalidated — not
+  deleted", so that one can "query what's true now, or what was true
+  at any point in time" (the
+  [README](https://github.com/getzep/graphiti), "Why Graphiti?",
+  "Temporal Fact Management"); Zep's page on facts says "applications
+  can use these fields for history and point-in-time retrieval"
+  ([facts](https://help.getzep.com/v4/facts.md), "Overview"). A
+  consumer asking what is true now therefore uses the facts whose
+  `invalid_at` is unset. The agents do so with `search()`'s own
+  `search_filter` (`SearchFilters(invalid_at=[[DateFilter(
+  comparison_operator=ComparisonOperator.is_null)]])`,
+  `graphiti_core/search/search_filters.py` in 0.31.2), so the k facts
+  `search()` returns are current ones and none of the k is spent on a
+  stale fact. The documentation shows no search example with a filter:
+  the parameter is `search()`'s own (`graphiti.py:1919`). Decided by
+  the user in Subtask 17 (Decision 2), after the benchmark v2 smoke,
+  where the agents used every fact `search()` returned and 32 of
+  native's 36 recency and contradiction failures came through a fact
+  Graphiti had invalidated ("Evidence", below). The block prints each
+  fact's sentence only, as the other native conditions print theirs;
+  the agents record each fact's `invalid_at` and `expired_at` in their
+  diagnostics, and Graphiti's own invalidations stay reported apart
+  from the kernel's supersession and credited to no locus.
 - **Revoke.** The writer finds its own episodes of the slot
   (`get_by_group_ids` on the user's group, filtered by the `agent_id`
   in their metadata, as native Mem0 and in-house list a writer's rows;
@@ -874,7 +894,9 @@ and the benchmark v2 smoke on Graphiti (`s16`,
 `results/bench_v2_smoke_graphiti`, H = 0, 30 users, 6 probes each). It
 shows that the consumer uses Graphiti's facts as `search()` returns
 them: in its order, with no score and no score filtering, cut at k
-after the sharing convention, invalidated facts included. The line
+after the sharing convention, invalidated facts included (both runs
+predate Subtask 17's Decision 2, since which the agents filter those
+out: "Validity", above). The line
 numbers are Cerebrum `cerebrum/example/agents/native/agents.py` at
 `c3f5ade`, the code both smokes ran (the pilot_v1 smoke at `abfd503`,
 whose file is the same).
