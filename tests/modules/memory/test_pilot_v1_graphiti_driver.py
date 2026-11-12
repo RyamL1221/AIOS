@@ -46,3 +46,25 @@ def test_every_phase_sets_the_barrier_timeout(tmp_path):
     assert [c for c in calls if "--kernel-memory on" in c]
     assert [c for c in calls if "--kernel-memory off" in c]
     assert all("--barrier-timeout-ms 60000" in c for c in calls), calls
+
+
+def test_methods_runs_only_the_named_cells(tmp_path):
+    """``METHODS`` runs only the methods it names (Subtask 17's Decision
+    2 re-ran native Graphiti alone, at H = 0 and 2)."""
+    aios = v2.tree(tmp_path)
+    v2.executable(aios / ".venv" / "bin" / "python", RECORDING)
+    env = {**os.environ,
+           "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+           "MODELS": "qwen", "TRIALS": "1", "PHASES": "agent_gra",
+           "METHODS": "native_graphiti", "RUN_PREFIX": "t1",
+           "OUTROOT": "results/sim",
+           "MODE_LOG": str(tmp_path / "modes.log")}
+    result = subprocess.run(["bash", str(DRIVER)], cwd=aios, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == ["agent_gra/h0_native_graphiti",
+                     "agent_gra/h2_native_graphiti"]

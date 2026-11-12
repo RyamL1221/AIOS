@@ -16,7 +16,8 @@
 # stops. One fresh kernel per model per phase, on a port that must be
 # free first; config.yaml restored byte for byte at exit. Resumable.
 # RUN_PREFIX and OUTROOT are required, new for every run (known issue
-# 36). Run from the AIOS repo, detached:
+# 36). METHODS, when set, runs only those methods' cells (Subtask 17's
+# Decision 2 re-ran native_graphiti). Run from the AIOS repo, detached:
 #   RUN_PREFIX=pg16 OUTROOT=results/pilot_v1_graphiti nohup bash scripts/run_pilot_v1_graphiti.sh > ../repo-artifacts/Cerebrum/pilot_v1_graphiti.log 2>&1 &
 set -u
 AIOS="$(pwd)"
@@ -134,6 +135,14 @@ for model in $MODELS; do
                   methods="replicated_graphiti native_graphiti" ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
+        if [ -n "${METHODS:-}" ]; then  # only these methods' cells
+            kept=""
+            for method in $methods; do
+                case " $METHODS " in *" $method "*) kept="$kept $method" ;; esac
+            done
+            methods=$kept
+        fi
+        [ -n "$methods" ] || { echo "$(date) skip $model $phase: no method in METHODS"; continue; }
         phase_needed "$model" "$phase" $methods || { echo "$(date) skip $model $phase"; continue; }
         start_kernel "${model}_$phase"
         for level in $LEVELS; do
