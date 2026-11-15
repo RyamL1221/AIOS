@@ -44,3 +44,5 @@ mem0ai==2.0.2  # pinned in both repos (Subtask 9d)
 # is outside llama-index-core 0.10.19's declared range; see DEV_STATUS.
 graphiti-core==0.31.2
 neo4j==6.4.1
+agentic-memory @ git+https://github.com/WujiangXu/A-mem-sys@f303dfc71e07bdc787f4bc135d4cea328ae30e99  # A-MEM, pinned by commit in both repos (Subtask 17)
+rank_bm25==0.2.2  # A-MEM imports it

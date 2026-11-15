@@ -9,6 +9,7 @@ AIOS supports pluggable memory providers, allowing you to choose between differe
 | `in-house` (default) | ChromaDB / Qdrant | Local disk | None (built-in) |
 | `mem0` | Mem0 + Ollama + ChromaDB | In-memory only* | `pip install mem0ai`, Ollama running |
 | `graphiti` | graphiti-core + Neo4j | Neo4j | `graphiti-core==0.31.2` (in `requirements.txt`), Neo4j 5.26, Azure gpt-4o, Ollama embedder |
+| `amem` | A-MEM agentic notes (WujiangXu/A-mem-sys) | In the process (one store per user) | `agentic-memory` at the pinned commit (in `requirements.txt`), Azure gpt-4o, Ollama embedder |
 | `in-memory` | Python dict | None | None (tests only) |
 
 \* Mem0's ChromaDB adapter uses a deprecated API that doesn't persist across restarts.
@@ -21,7 +22,7 @@ Edit `aios/config/config.yaml`:
 
 ```yaml
 memory:
-  provider: "in-house"  # or "mem0" or "graphiti"
+  provider: "in-house"  # or "mem0", "graphiti" or "amem"
 ```
 
 ### 2. Install dependencies (if needed)
@@ -33,6 +34,11 @@ ollama pull nomic-embed-text
 
 # For Graphiti (and a Neo4j 5.26 server; docs/GRAPHITI_BACKEND.md)
 pip install graphiti-core==0.31.2
+
+# For A-MEM (docs/AMEM_BACKEND.md): the pinned commit, without its own
+# dependency resolution, and rank_bm25 (the AIOS venv has the rest)
+pip install --no-deps "agentic-memory @ git+https://github.com/WujiangXu/A-mem-sys@f303dfc71e07bdc787f4bc135d4cea328ae30e99"
+pip install rank_bm25==0.2.2
 ```
 
 ### 3. Start AIOS
@@ -100,6 +106,23 @@ memory:
 
 Setup, design and what it stores: `docs/GRAPHITI_BACKEND.md`.
 
+### A-MEM
+
+A-MEM's agentic notes (NeurIPS Subtask 17; WujiangXu/A-mem-sys, pinned
+by commit): each write is a note whose keywords, context and tags A-MEM's
+LLM generates, and whose neighbours it rewrites ("evolution"). One store
+per user in the process, nothing on disk across restarts; the LLM is
+`memory.backend_llm` and the embedder `memory.embedding`:
+
+```yaml
+memory:
+  provider: "amem"
+  amem:
+    user_id: "default"
+```
+
+Design, what it stores and what deleting leaves: `docs/AMEM_BACKEND.md`.
+
 ## Switching Providers at Runtime
 
 You can switch providers without restarting AIOS:
@@ -157,6 +180,9 @@ python tests/modules/memory/test_mem0_provider.py
 
 # Test Graphiti (requires the local Neo4j; the LLM is scripted)
 .venv/bin/python -m pytest tests/modules/memory/test_graphiti_provider.py
+
+# Test A-MEM (requires Ollama + nomic-embed-text; the LLM is scripted)
+.venv/bin/python -m pytest tests/modules/memory/test_amem_provider.py
 ```
 
 Tests run directly against the provider layer without needing the full AIOS
@@ -170,11 +196,11 @@ MemoryManager
      |
 ProviderFactory
      |
-  +--+--+--+
-  |  |  |  |
-InHouse Mem0 Graphiti  (your custom provider)
-  |     |    |
-ChromaDB Ollama+ChromaDB  Neo4j
+  +--+--+--+--+
+  |  |  |  |  |
+InHouse Mem0 Graphiti A-MEM  (your custom provider)
+  |     |    |        |
+ChromaDB Ollama+ChromaDB  Neo4j  notes in the process + Chroma
 ```
 
 All providers implement the `MemoryProvider` abstract base class
@@ -213,6 +239,14 @@ implementation examples.
 - `search()` is unscored (`scored_search: false`)
 - About 4 to 6 LLM calls and 6 seconds a write
   (`docs/GRAPHITI_BACKEND.md`, "Measured in the smokes")
+
+### A-MEM
+- Stores each write verbatim as a note; our metadata is the note's
+  `category`, which A-MEM never writes afterwards
+- Evolution rewrites other notes' tags and context with each write
+- `search()` is scored from its squared L2 distance (`scored_search: true`)
+- About 2 LLM calls and 3 to 5 seconds a write
+  (`docs/AMEM_BACKEND.md`, "Exploration")
 
 ## Known Issues
 

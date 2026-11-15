@@ -2514,8 +2514,9 @@ code.
 ### Subtask 17
 
 A-MEM (agentic notes) as the fourth backend, in all three loci, after
-three decisions on the Graphiti smoke's findings. The A-MEM design and
-results follow below once its code is in.
+three decisions on the Graphiti smoke's findings. Design:
+`AMEM_BACKEND.md`; the native condition: `NATIVE_USAGE.md`,
+"native_amem". Both were committed before any provider code.
 
 - **Decisions from the user** (2026-11-12):
   1. **The budget limits the v2 block.** Kernel and replicated run
@@ -2602,6 +2603,48 @@ results follow below once its code is in.
   `block_tokens` and `block_rows` (per locus in the contrast table;
   Cerebrum `f74b1b9`); the full grid adds a native k = 30 cell on
   Graphiti (Amendment 7).
+- **A-MEM: decisions from the user** (2026-11-12): pin WujiangXu/A-mem-sys
+  at `f303dfc`, not agiresearch/A-mem, whose `add_note` generates no
+  attributes and whose evolution's links never resolve (the
+  exploration, `AMEM_BACKEND.md`, "Which A-MEM"); A-MEM's `search()` in
+  every locus (the README's first search; first decided as
+  `search_agentic`, which returns the same notes, then changed the same
+  day).
+- **A-MEM: spec before code** (AIOS `2bd7b2e`): `AMEM_BACKEND.md`,
+  `NATIVE_USAGE.md` ("native_amem"), `BENCHMARK_V2.md` Amendment 8, the
+  A-MEM entry of `PROVIDER_CONTRACT.md`. Before its commit, a fact check
+  of its store sections against the pinned source found four errors (the
+  Chroma client, the native stores' collection names, the writes per
+  user, when a Chroma copy is rewritten), and a check of the exploration
+  two more (the repeat run's search differed from its third hit on;
+  "Slack" was absent from both runs' residue); all were corrected.
+- **A-MEM: install.** `agentic-memory` 0.0.1 at `f303dfc`, `--no-deps`,
+  in both venvs; beside it the packages a venv lacked, pip choosing
+  versions that change nothing installed: AIOS `rank-bm25` 0.2.2;
+  Cerebrum `rank-bm25` 0.2.2, `nltk` 3.9.4, `sentence-transformers`
+  6.3.0, `transformers` 5.17.0, `torch` 2.15.0 and their new
+  dependencies `mpmath` 1.3.0, `networkx` 3.6.1, `safetensors` 0.8.0,
+  `sympy` 1.14.0. Cerebrum pins them in `requirements-amem.txt`, not in
+  `requirements.txt`, the SDK package's dependency list: with the git
+  reference there, `pip install ../Cerebrum` failed (hatch refuses a
+  direct reference, and a published package could not carry one), and
+  a test now keeps it out. A-MEM's own sentence-transformers model is
+  never loaded.
+- **A-MEM: provider and agents.** `AMemProvider` (`provider: amem`) and
+  the native and replicated agents build their stores with
+  `cerebrum/utils/amem.py`: one `AgenticMemorySystem` per user in a
+  Chroma `PersistentClient` of the stores' own, A-MEM's default
+  retriever and controller bypassed during construction; a controller
+  calling the pinned `memory.backend_llm` through the synchronous
+  `litellm.completion` (temperature 0, seed), so each call is a
+  `backend_extraction` record of the trial; the pinned Ollama embedder.
+  Metadata in the note's `category`; `search()` scored `1 - d/2`; the
+  forget's scrub deletes carriers by derived text (reason `derived`,
+  `pipeline/deletion.py`); each write logs the notes its evolution
+  changed. The drivers' A-MEM phases (`kamem`, `agent_amem`, `_ns`) and
+  `scripts/run_pilot_v1_amem.sh`; the analysis's A-MEM cells and
+  `derived` column; `PERSONALIZATION_PROVIDERS` must name every factory
+  provider but `in-memory` (a test).
 
 ## Open decisions
 

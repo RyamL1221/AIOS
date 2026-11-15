@@ -18,6 +18,12 @@
 #                ops checked
 #   phases kgra_ns, agent_gra_ns: the no_supersession control
 #                (kernel_shared; replicated_graphiti)
+#   A-MEM (Subtask 17, docs/AMEM_BACKEND.md), chosen with PHASES:
+#   phase kamem: A-MEM, kernel injection on, extraction off: kernel_shared
+#   phase agent_amem: an A-MEM kernel with memory off: replicated_amem,
+#                native_amem; 0 kernel memory ops checked
+#   phases kamem_ns, agent_amem_ns: the no_supersession control
+#                (kernel_shared; replicated_amem)
 # Every phase runs with session ages on (memory.block_recency true, unit
 # session), the write barrier at 60 s, k 30 and a 300-token budget (since
 # Amendment 6 the budget, not the cap, limits a kernel or replicated
@@ -205,6 +211,9 @@ methods_of() {  # $1 = phase; with $METHODS set, only those methods
         kgra|kgra_ns) all="kernel_shared" ;;
         agent_gra) all="replicated_graphiti native_graphiti" ;;
         agent_gra_ns) all="replicated_graphiti" ;;
+        kamem|kamem_ns) all="kernel_shared" ;;
+        agent_amem) all="replicated_amem native_amem" ;;
+        agent_amem_ns) all="replicated_amem" ;;
     esac
     for method in $all; do
         case " ${METHODS:-$all} " in *" $method "*) echo "$method" ;; esac
@@ -219,7 +228,7 @@ check_phase() {  # $1 = model, $2 = phase: every kernel log of the phase
     set -- "$LOGS"/kernel_${model}_${phase}_2*.log
     [ -e "$1" ] || { echo "$(date) NO KERNEL LOG $model $phase"; exit 1; }
     case $phase in
-    agent|agent_ns|agent_gra|agent_gra_ns)
+    agent|agent_ns|agent_gra|agent_gra_ns|agent_amem|agent_amem_ns)
         ops=$(cat "$@" | grep -cE "$MEMORY_OPS")
         echo "$(date) $model $phase kernel_memory_ops=$ops"
         [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; } ;;
@@ -260,6 +269,10 @@ for model in $MODELS; do
                    provider=graphiti ;;
             agent_gra|agent_gra_ns)
                    mode --provider graphiti --kernel-memory off; provider="" ;;
+            kamem|kamem_ns) mode --provider amem --kernel-memory on --extract off
+                   provider=amem ;;
+            agent_amem|agent_amem_ns)
+                   mode --provider amem --kernel-memory off; provider="" ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
         phase_needed "$model" "$phase" || {

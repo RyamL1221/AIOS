@@ -37,6 +37,10 @@ REASON_ALIAS = "alias"
 # A row the provider's history scrub deleted with an entity a form names
 # (Graphiti: the facts still attached to it, which carried no form).
 REASON_ENTITY = "entity"
+# A row the provider's history scrub deleted because its derived text
+# carried a form (A-MEM: a note's context, keywords or tags, or its
+# Chroma copy). A detached row names its reason; ``entity`` by default.
+REASON_DERIVED = "derived"
 DETACHED = "detached"
 
 # The supersession marks: set only by the library, never by an agent.
@@ -164,7 +168,7 @@ def forget_fact(
     gone = {entry["memory_id"] for entry in deleted} | set(not_found)
     kept = [row.memory_id for row in rows if row.memory_id not in gone]
     scrubbed, detached = _scrub(provider, scope, forms, sorted(gone), kept)
-    deleted.extend(dict(entry, reason=REASON_ENTITY) for entry in detached)
+    deleted.extend(detached)
     logger.info(
         "forget: agent=%s user_id=%s fact_key=%s values=%d forms=%d "
         "deleted=%d scrubbed=%s",
@@ -193,13 +197,16 @@ def _scrub(
     kept: List[str],
 ) -> tuple:
     """The provider's history scrub: ``(counts, detached)``, the counts
-    it reports and the rows it deleted with an entity a form names
-    (``{memory_id, owner_agent}``; Graphiti only), which no listing
-    showed as carriers, so the forget and the sweep report them."""
+    it reports and the rows it deleted besides (``{memory_id,
+    owner_agent, reason}``; Graphiti: with an entity a form names,
+    reason ``entity``; A-MEM: whose derived text carried a form, reason
+    ``derived``), which no listing showed as carriers, so the forget and
+    the sweep report them."""
     counts = dict(provider.scrub_history(scope, forms, gone, kept) or {})
     detached = [
         {"memory_id": str(entry["memory_id"]),
-         "owner_agent": entry.get("owner_agent", "")}
+         "owner_agent": entry.get("owner_agent", ""),
+         "reason": entry.get("reason") or REASON_ENTITY}
         for entry in counts.pop(DETACHED, None) or []
     ]
     return counts, detached
@@ -315,7 +322,9 @@ def after_write(
         outcome["scrubbed"], detached = _scrub(
             provider, scope, forms, sorted(gone), kept,
         )
-        swept.extend(detached)
+        swept.extend({"memory_id": entry["memory_id"],
+                      "owner_agent": entry["owner_agent"]}
+                     for entry in detached)
         gone |= {entry["memory_id"] for entry in detached}
         outcome["suppressed"] = bool(own) and own <= gone
         rows = [row for row in rows if row.memory_id not in gone]

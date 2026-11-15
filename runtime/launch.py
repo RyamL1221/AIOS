@@ -31,7 +31,7 @@ from aios.utils.redact import (
 )
 
 # Providers that get the context injector and conversation extractor.
-PERSONALIZATION_PROVIDERS = ("mem0", "in-house", "graphiti")
+PERSONALIZATION_PROVIDERS = ("mem0", "in-house", "graphiti", "amem")
 
 from cerebrum.llm.apis import LLMQuery, LLMResponse
 

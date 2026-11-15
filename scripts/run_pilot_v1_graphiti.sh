@@ -1,10 +1,13 @@
 #!/bin/bash
 # Subtask 16: the pilot_v1 smoke on Graphiti (docs/GRAPHITI_BACKEND.md),
 # the locus pattern of the Subtask 11 pilot (docs/PILOT.md) on a third
-# backend. For each model:
+# backend; BACKEND=amem (Subtask 17, docs/AMEM_BACKEND.md;
+# scripts/run_pilot_v1_amem.sh) runs it on A-MEM. For each model:
 #   phase kgra:      Graphiti, kernel memory on: kernel_shared
 #   phase agent_gra: a Graphiti kernel with memory off: replicated_graphiti,
 #                    native_graphiti; 0 kernel memory ops checked
+#   (A-MEM: phases kamem and agent_amem, methods replicated_amem and
+#   native_amem.)
 # at H = 0 and 2 (LEVELS) on pilot_v1's 30 users, variants from the
 # committed schedule (benchmarks/shared_memory/data/pilot_v1_schedule.json),
 # the greedy judge, fixed decoding.
@@ -44,6 +47,12 @@ TRIALS="${TRIALS:-30}"
 JUDGE="gpt-5.4:azure"
 MODELS="${MODELS:-qwen}"
 LEVELS="${LEVELS:-0 2}"
+BACKEND="${BACKEND:-graphiti}"
+case "$BACKEND" in  # the kernel phase and the agent phase
+    graphiti) KPHASE=kgra; APHASE=agent_gra ;;
+    amem) KPHASE=kamem; APHASE=agent_amem ;;
+    *) echo "BACKEND must be graphiti or amem" >&2; exit 1 ;;
+esac
 MEMORY_OPS='add_memory: agent=|retrieve_memory result|Injection pipeline|Stored conversation memory|Injected [0-9]+ memories|MEMORY QUERY RECEIVED|forget_memory: agent=|list_memory: agent='
 KERNEL=""
 
@@ -137,12 +146,13 @@ phase_needed() {  # model phase methods...: true if a cell is unfinished
 }
 
 for model in $MODELS; do
-    for phase in ${PHASES:-kgra agent_gra}; do
+    for phase in ${PHASES:-$KPHASE $APHASE}; do
         case $phase in
-            kgra) mode --provider graphiti --kernel-memory on; provider=graphiti
-                  methods="kernel_shared" ;;
-            agent_gra) mode --provider graphiti --kernel-memory off; provider=""
-                  methods="replicated_graphiti native_graphiti" ;;
+            "$KPHASE") mode --provider "$BACKEND" --kernel-memory on
+                  provider=$BACKEND; methods="kernel_shared" ;;
+            "$APHASE") mode --provider "$BACKEND" --kernel-memory off
+                  provider=""
+                  methods="replicated_$BACKEND native_$BACKEND" ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
         if [ -n "${METHODS:-}" ]; then  # only these methods' cells
@@ -160,8 +170,8 @@ for model in $MODELS; do
                 run_cell "$model" "$phase" "$method" "$level" "$provider"
             done
         done
-        if [ "$phase" = agent_gra ]; then
-            ops=$(cat "$LOGS"/kernel_${model}_agent_gra_2*.log | grep -cE "$MEMORY_OPS")
+        if [ "$phase" = "$APHASE" ]; then
+            ops=$(cat "$LOGS"/kernel_${model}_${APHASE}_2*.log | grep -cE "$MEMORY_OPS")
             echo "$(date) $model $phase kernel_memory_ops=$ops"
             [ "$ops" -eq 0 ] || { echo "$(date) MEMORY OPS IN KERNEL LOG"; exit 1; }
         fi

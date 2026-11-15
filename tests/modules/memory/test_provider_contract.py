@@ -7,8 +7,10 @@ one. ``graphiti`` (NeurIPS Subtask 16) runs Graphiti on the local Neo4j
 and the pinned embedder, in a namespace of its own, with a scripted LLM
 that makes each write one fact worded as the write
 (``_graphiti_script.py``; docs/GRAPHITI_BACKEND.md, "Tests"); it is
-skipped without Ollama or Neo4j. ``in_house`` is the in-memory dict
-provider.
+skipped without Ollama or Neo4j. ``amem`` (Subtask 17) runs A-MEM's own
+code with a scripted LLM (``_amem_script.py``; docs/AMEM_BACKEND.md,
+"Tests") on the pinned embedder; it is skipped without Ollama or A-MEM.
+``in_house`` is the in-memory dict provider.
 """
 import requests
 import pytest
@@ -25,6 +27,7 @@ from aios.memory.providers.mem0 import Mem0Provider
 from aios.memory.write_barrier import MemoryWriteBarrier
 from aios.syscall.memory import MemorySyscall
 
+from tests.modules.memory._amem_script import amem_provider, needs_amem
 from tests.modules.memory._graphiti_script import (
     drop, graphiti_provider, needs_neo4j,
 )
@@ -66,6 +69,8 @@ def build(name, tmp_path):
         provider.initialize({})
     elif name == "graphiti":
         provider = graphiti_provider()
+    elif name == "amem":
+        provider = amem_provider()
     elif name == "chroma_inhouse":
         provider = ChromaInHouseProvider()
         provider.initialize({
@@ -93,6 +98,7 @@ def build(name, tmp_path):
     pytest.param("chroma_inhouse", marks=needs_ollama),
     pytest.param("mem0", marks=needs_ollama),
     pytest.param("graphiti", marks=[needs_ollama, needs_neo4j]),
+    pytest.param("amem", marks=[needs_ollama, needs_amem]),
     "in_house",
 ])
 def provider(request, tmp_path):
@@ -241,10 +247,10 @@ def test_no_provider_module_has_a_visibility_filter():
     import inspect
     from aios.memory import providers
     from aios.memory.providers import (
-        base, chroma_inhouse, graphiti, in_house, mem0,
+        amem, base, chroma_inhouse, graphiti, in_house, mem0,
     )
 
-    for module in (base, chroma_inhouse, graphiti, in_house, mem0,
+    for module in (amem, base, chroma_inhouse, graphiti, in_house, mem0,
                    providers):
         source = inspect.getsource(module)
         assert "sharing_filter" not in source, module.__name__

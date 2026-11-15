@@ -56,12 +56,15 @@ building agents.
   lacked are installed beside it, pip choosing versions that change
   nothing installed: in the AIOS venv `rank_bm25`; in Cerebrum's also
   `sentence-transformers`, `transformers`, `torch` and `nltk`, with
-  their own new dependencies (the versions are in `DEV_STATUS.md`,
-  Subtask 17). A-MEM's sentence-transformers model is never loaded (the
-  provider gives the system the pinned embedder, "Store, partition and
-  isolation"), so the two venvs' different versions of it reach no row.
-  The commit is pinned in both requirements files and checked by a test,
-  as `graphiti-core` is.
+  their own new dependencies. A-MEM's sentence-transformers model is
+  never loaded (the provider gives the system the pinned embedder,
+  "Store, partition and isolation"), so the two venvs' different
+  versions of it reach no row. The commit is pinned in AIOS
+  `requirements.txt` and in Cerebrum `requirements-amem.txt` (with the
+  packages Cerebrum's venv lacked, at the versions installed; installed
+  with `--no-deps`), not in Cerebrum's `requirements.txt`, the SDK
+  package's dependency list, which cannot carry a git reference; a test
+  checks both pins and the installed commit, as for `graphiti-core`.
 - No server: A-MEM is a library. Its notes live in the process
   (`AgenticMemorySystem.memories`, a dict), and its vectors in a Chroma
   collection (`retrievers.py:18-28`).

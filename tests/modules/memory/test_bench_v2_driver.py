@@ -252,6 +252,47 @@ def test_methods_runs_only_the_named_cells(tmp_path):
                      "kgra/h0_kernel_shared"]
 
 
+def test_the_amem_phases_run_the_amem_cells(tmp_path):
+    """The A-MEM phases (Subtask 17) run kernel_shared in ``kamem`` and
+    the replicated and native A-MEM methods in ``agent_amem``, on an
+    A-MEM kernel, with the controls that apply."""
+    aios = tree(tmp_path)
+    log = tmp_path / "mode.log"
+    result = launch(aios, "kamem agent_amem",
+                    "h0 no_memory no_visibility writer_scoped",
+                    extra={"SIM_MODE_LOG": str(log)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == [
+        "agent_amem/h0_native_amem",
+        "agent_amem/h0_replicated_amem",
+        "agent_amem/no_visibility_native_amem",
+        "agent_amem/writer_scoped_replicated_amem",
+        "kamem/h0_kernel_shared",
+        "kamem/writer_scoped_kernel_shared",
+    ]
+    calls = log.read_text().splitlines()
+    assert ["--provider amem --kernel-memory on --extract off" in c
+            for c in calls] == [True, False]
+    assert "--provider amem --kernel-memory off" in calls[1]
+    assert "kernel_memory_ops=0" in result.stdout
+
+
+def test_the_amem_no_supersession_phases_run_their_control(tmp_path):
+    aios = tree(tmp_path)
+    result = launch(aios, "kamem_ns agent_amem_ns", "no_supersession")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == ["agent_amem_ns/no_supersession_replicated_amem",
+                     "kamem_ns/no_supersession_kernel_shared"]
+
+
 # -- ARCHIVE (Subtask 17) -----------------------------------------------------
 
 ARCHIVE_SCRIPT = DRIVER.parents[1] / "scripts" / "archive_artifacts.py"

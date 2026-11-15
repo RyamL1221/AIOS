@@ -2,7 +2,7 @@
 Memory Provider Module
 
 This module provides a pluggable memory provider architecture for AIOS,
-enabling users to choose between different memory backends (in-house Chroma, Mem0, Graphiti; in-memory for tests).
+enabling users to choose between different memory backends (in-house Chroma, Mem0, Graphiti, A-MEM; in-memory for tests).
 """
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "InHouseProvider",
     "Mem0Provider",
     "GraphitiProvider",
+    "AMemProvider",
     "ProviderFactory",
     "ProviderInitializationError",
     "ProviderNotFoundError",
@@ -45,4 +46,5 @@ from .chroma_inhouse import ChromaInHouseProvider
 from .in_house import InHouseProvider
 from .mem0 import Mem0Provider
 from .graphiti import GraphitiProvider
+from .amem import AMemProvider
 from .factory import ProviderFactory

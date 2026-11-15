@@ -74,6 +74,33 @@ def test_methods_runs_only_the_named_cells(tmp_path):
                      "agent_gra/h2_native_graphiti"]
 
 
+def test_backend_amem_runs_the_amem_cells(tmp_path):
+    """``BACKEND=amem`` (scripts/run_pilot_v1_amem.sh; Subtask 17) runs
+    the pilot on an A-MEM kernel: kernel_shared in ``kamem``, the
+    replicated and native A-MEM methods in ``agent_amem``."""
+    aios = v2.tree(tmp_path)
+    v2.executable(aios / ".venv" / "bin" / "python", RECORDING)
+    modes = tmp_path / "modes.log"
+    env = {**os.environ,
+           "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+           "MODELS": "qwen", "TRIALS": "1", "LEVELS": "0",
+           "BACKEND": "amem", "RUN_PREFIX": "t1",
+           "OUTROOT": "results/sim", "MODE_LOG": str(modes)}
+    result = subprocess.run(["bash", str(DRIVER)], cwd=aios, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == ["agent_amem/h0_native_amem",
+                     "agent_amem/h0_replicated_amem",
+                     "kamem/h0_kernel_shared"]
+    calls = modes.read_text().splitlines()
+    assert all("--provider amem" in c for c in calls), calls
+    assert "kernel_memory_ops=0" in result.stdout
+
+
 def test_archive_refuses_a_log_holding_a_key(tmp_path):
     """``ARCHIVE`` (Subtask 17): a cell's log holds a configured key, so
     the driver fails and copies nothing."""

@@ -990,6 +990,7 @@ class Detaching(Scrubbing):
     attached to an entity a form names (docs/GRAPHITI_BACKEND.md)."""
 
     detach = None
+    reason = None  # A-MEM's scrub names its reason, ``derived``
 
     def scrub_history(self, user_id, forms, deleted_ids=(), kept_ids=()):
         counts = super().scrub_history(user_id, forms, deleted_ids,
@@ -998,9 +999,11 @@ class Detaching(Scrubbing):
         if row is None:
             return counts
         self.delete(self.detach, user_id)
-        return {**counts, "detached": [
-            {"memory_id": self.detach,
-             "owner_agent": row.metadata["owner_agent"]}]}
+        entry = {"memory_id": self.detach,
+                 "owner_agent": row.metadata["owner_agent"]}
+        if self.reason:
+            entry["reason"] = self.reason
+        return {**counts, "detached": [entry]}
 
 
 def test_the_rows_a_scrub_detaches_are_deleted_and_swept_rows():
@@ -1028,6 +1031,29 @@ def test_the_rows_a_scrub_detaches_are_deleted_and_swept_rows():
     assert outcome["scrubbed"] == {"messages": 2, "history": 3}
     assert outcome["suppressed"] is False
     assert city not in stored(provider)
+
+
+def test_a_detached_row_keeps_the_reason_its_provider_names():
+    """A-MEM's scrub deletes a note whose derived text carries a form and
+    names the reason, ``derived`` (docs/AMEM_BACKEND.md, "The forget on
+    A-MEM"): the forget reports it so; a sweep reports the row as swept
+    without one, as every swept row."""
+    provider = Detaching()
+    provider.reason = "derived"
+    pipeline = MemoryPipeline(provider)
+    statement = write(pipeline, WRITER, "My lawyer is Greta Sandvik.",
+                      **stated(VALUE, "e1"))
+    review = write(pipeline, TASK, "Contract review on Friday.",
+                   memory_type="task_context", fact_key="meeting")
+    city = write(pipeline, WRITER, "I live in Tallinn.", fact_key=HOME)
+    provider.detach = review
+    report = pipeline.forget(WRITER, USER, SLOT)
+    assert deleted(report) == {statement: (WRITER, "fact_key"),
+                               review: (TASK, "derived")}
+    provider.detach = city
+    _, outcome = written(pipeline, CALENDAR, "Standup at nine.",
+                         memory_type="calendar", fact_key="standup")
+    assert outcome["swept"] == [{"memory_id": city, "owner_agent": WRITER}]
 
 
 # --- after a forget: the user's restatement ----------------------------

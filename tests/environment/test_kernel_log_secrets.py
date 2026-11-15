@@ -454,3 +454,19 @@ def test_the_suites_load_the_report_hooks():
     assert {("aios.utils.pytest_redact", "pytest_runtest_makereport"),
             ("aios.utils.pytest_redact", "pytest_make_collect_report")
             } <= imported
+
+
+def test_every_store_provider_gets_the_injector_and_the_extractor():
+    """The kernel wires its injector and extractor for every provider
+    the factory offers but the in-memory test double (Graphiti, Subtask
+    16; A-MEM, Subtask 17): a provider left out would inject nothing,
+    and its kernel cells would run with no memory."""
+    from aios.memory.providers.factory import ProviderFactory
+
+    tree = ast.parse(LAUNCH.read_text())
+    (node,) = [n for n in tree.body if isinstance(n, ast.Assign)
+               and getattr(n.targets[0], "id", "") ==
+               "PERSONALIZATION_PROVIDERS"]
+    wired = set(ast.literal_eval(node.value))
+    offered = set(ProviderFactory.get_available_providers()) - {"in-memory"}
+    assert wired == offered

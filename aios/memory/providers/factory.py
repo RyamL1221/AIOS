@@ -13,6 +13,7 @@ from aios.memory.embedding import EmbeddingConfig
 from .base import MemoryProvider
 from .chroma_inhouse import ChromaInHouseProvider
 from .in_house import InHouseProvider
+from .amem import AMemProvider
 from .graphiti import GraphitiProvider
 from .mem0 import Mem0Provider
 
@@ -29,7 +30,8 @@ def provider_config(
     providers with this, so they configure them the same way.
 
     Args:
-        provider_type: "in-house", "in-memory", "mem0" or "graphiti".
+        provider_type: "in-house", "in-memory", "mem0", "graphiti" or
+            "amem".
         memory_config: The ``memory:`` block, or a part of it holding
             the provider's section and ``embedding``.
     """
@@ -63,11 +65,12 @@ def provider_config(
             # each client it builds (Subtask 10).
             mem0_config["llm_seed"] = backend_llm.get("seed")
         return mem0_config
-    elif provider_type == "graphiti":
-        # Graphiti extracts with the pinned internal LLM and embeds with
-        # the pinned model, in every locus (docs/GRAPHITI_BACKEND.md).
+    elif provider_type in ("graphiti", "amem"):
+        # Graphiti and A-MEM run their LLM on the pinned backend LLM and
+        # embed with the pinned model, in every locus
+        # (docs/GRAPHITI_BACKEND.md, docs/AMEM_BACKEND.md).
         return {
-            **(memory_config.get("graphiti") or {}),
+            **(memory_config.get(provider_type) or {}),
             "embedding": embedding.as_dict(),
             "backend_llm": dict(memory_config.get("backend_llm") or {}),
         }
@@ -82,7 +85,7 @@ class ProviderFactory:
     
     The factory supports:
     - Creating providers by type name ("in-house", "in-memory", "mem0",
-      "graphiti")
+      "graphiti", "amem")
     - Passing provider-specific configuration to the created provider
     - Runtime registration of new provider types for extensibility
     
@@ -95,6 +98,7 @@ class ProviderFactory:
         "in-memory": InHouseProvider,
         "mem0": Mem0Provider,
         "graphiti": GraphitiProvider,
+        "amem": AMemProvider,
     }
     
     @classmethod
@@ -164,6 +168,6 @@ class ProviderFactory:
         
         Example:
             >>> ProviderFactory.get_available_providers()
-            ['in-house', 'in-memory', 'mem0', 'graphiti']
+            ['in-house', 'in-memory', 'mem0', 'graphiti', 'amem']
         """
         return list(cls.PROVIDERS.keys())

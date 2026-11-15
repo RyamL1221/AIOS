@@ -161,6 +161,13 @@ memory:
   # memory.backend_llm and the embedder memory.embedding.
   graphiti:
     user_id: "default"
+
+  # A-MEM provider (used when provider: "amem"; Subtask 17,
+  # docs/AMEM_BACKEND.md): A-MEM's notes, one store per user in the
+  # process (WujiangXu/A-mem-sys, pinned by commit in requirements.txt);
+  # the LLM is memory.backend_llm and the embedder memory.embedding.
+  amem:
+    user_id: "default"
 storage:
   root_dir: "root"
   use_vector_db: true
