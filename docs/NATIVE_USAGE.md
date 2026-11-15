@@ -1,7 +1,8 @@
 # Native Usage: agent-managed memory conditions
 
-The conditions `native_mem0`, `native_inhouse` and (since Subtask 16)
-`native_graphiti` are the first locus condition of the design: the
+The conditions `native_mem0`, `native_inhouse`, `native_graphiti`
+(since Subtask 16) and `native_amem` (since Subtask 17) are the first
+locus condition of the design: the
 agents manage memory themselves, using each backend the way its
 documentation says to, and the kernel takes no part in memory. This is
 how people deploy these backends today. This document fixes, before any
@@ -9,7 +10,8 @@ code, exactly what each agent does, so a reviewer can check the agent
 code against it.
 
 Code: Cerebrum `cerebrum/example/agents/native/`. Harness:
-`run_evaluation.py --method native_mem0|native_inhouse|native_graphiti`.
+`run_evaluation.py --method
+native_mem0|native_inhouse|native_graphiti|native_amem`.
 
 ## What "agent-managed" rules out
 
@@ -349,6 +351,68 @@ What the agents do:
   agents.
 - **Conversation.** `add_episode` with `"user: <query>\nassistant:
   <response>"` as a message episode, private.
+
+## native_amem
+
+Added in Subtask 17. Follows A-MEM's README at WujiangXu/A-mem-sys
+`f303dfc` (the commit the backend pins; `AMEM_BACKEND.md`, "Which
+A-MEM"), "Usage Examples", read on 2026-11-12. How A-MEM stores,
+evolves and deletes is in `AMEM_BACKEND.md`; this section fixes only
+what the agents call.
+
+- Configuration: `AgenticMemorySystem(model_name=..., llm_backend=...,
+  llm_model=...)` (README, "Initialize the memory system"). Its
+  backends are OpenAI, Ollama, SGLang and OpenRouter; the agents give
+  the system a controller that calls the pinned `memory.backend_llm`
+  (Azure gpt-4o, temperature 0, seed) through LiteLLM, and the pinned
+  embedder as its Chroma embedding function, so that the backend's calls
+  are counted per trial and its vectors are the other backends'. As for
+  Graphiti, the agents and the kernel's provider build the system with
+  the same function (Cerebrum `cerebrum/utils/amem.py`), which also
+  gives each user a store of its own (`AMEM_BACKEND.md`, "Store,
+  partition and isolation").
+- Writing: `add_note(content)` (README: "Simple addition - LLM
+  automatically generates keywords, context, and tags"), with
+  `category=` and `time=`, which `add_note` passes to the note
+  (`memory_system.py:237-243`; the README shows the note's other fields
+  passed the same way).
+- Searching: `search(query, k)` (README, "Enhanced Retrieval with
+  Metadata", its first search example), which returns the nearest notes
+  in Chroma's order, each with its distance as `score`. Decided by the
+  user on 2026-11-12. `search_agentic(query, k)`, listed under
+  "Alternative search methods", returns the same notes
+  (`AMEM_BACKEND.md`, "Search").
+- Deleting: `delete(memory_id)` (README, "Delete Memories").
+
+What the agents do:
+
+- **Store.** One `AgenticMemorySystem` per user, shared by the agents of
+  the process (A-MEM is a library: agents share a store by sharing the
+  object), as the agents of the other native conditions share a Mem0
+  user scope or a Graphiti group.
+- **Writers.** `add_note(content=<memory text>, category=<metadata
+  JSON>, time=<now, YYYYMMDDHHMM>)`. A-MEM's notes have no metadata
+  mapping, and evolution rewrites `tags` and `context`; `category` is a
+  free string nothing in A-MEM writes afterwards, so the agents keep
+  their metadata there (the same keys as the other conditions plus the
+  v2 statement fields, and `agent_id`). The note's keywords, context and
+  tags are A-MEM's. Writers do not search before writing.
+- **Sharing.** The AssistantAgent searches its user's store and applies
+  the sharing convention to each note by its `category`: visible when
+  it is the agent's own or `shared`, for this user. A hidden note still
+  takes one of the k results.
+- **Order and scores.** Notes are used in the order `search` returns
+  them, with no score filtering, cut at `k` after the sharing
+  convention, as for the other conditions (`k` 10; 5 for a V4 consumer
+  at H = 2). The block prints each note's content, as the other native
+  conditions print their rows' text; the diagnostics record each row's
+  score (`match_score`: A-MEM's distance).
+- **Revoke.** The writer lists its own notes (the store's notes whose
+  `category` names it as `agent_id`) of the slot and deletes each with
+  `delete(memory_id)`. It deletes nothing of other agents, and nothing
+  of what evolution wrote into other notes.
+- **Conversation.** `add_note("User: <query>\nAssistant: <response>")`,
+  private, as the in-house native store keeps a turn.
 
 ## Mem0 extraction check
 

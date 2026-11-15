@@ -26,7 +26,7 @@ provider's default scope (`default_user_id`, usually `"default"`).
 | `delete(memory_id, user_id)` | `bool` | `False` if missing. |
 | `capabilities()` | `dict` | See below. |
 | `update_metadata(memory_id, user_id, metadata)` | `bool` | Optional (Subtask 15). Merge `metadata` over the stored metadata and keep the content and its embedding: a supersession mark. The default goes through `update` with the content unchanged; in-house and Mem0 write the metadata alone, with no embedding call (Mem0: the full stored payload with the marks, through its vector store). `False` if missing. |
-| `scrub_history(user_id, forms, deleted_ids, kept_ids)` | `dict` | Optional (Subtask 15). Remove forgotten forms from what the backend keeps besides its rows; returns `{messages, history}` counts, and `detached`, the rows it deleted besides its counts (`{memory_id, owner_agent}`; Graphiti: the facts attached to an entity a form names), which the library reports as deleted (reason `entity`) or swept. The default keeps nothing and returns zeros. Mem0 deletes the user's stored messages that carry a form, in every agent's scope, and clears the text of the history records of `deleted_ids` and of `kept_ids`' records that carry one (`docs/DELETION_AND_SUPERSESSION.md`, Decision 3). |
+| `scrub_history(user_id, forms, deleted_ids, kept_ids)` | `dict` | Optional (Subtask 15). Remove forgotten forms from what the backend keeps besides its rows; returns `{messages, history}` counts, and `detached`, the rows it deleted besides its counts (`{memory_id, owner_agent}`; Graphiti: the facts attached to an entity a form names), which the library reports as deleted (reason `entity`, or the reason the row names: A-MEM's are `derived`, the notes whose derived text carries a form) or swept. The default keeps nothing and returns zeros. Mem0 deletes the user's stored messages that carry a form, in every agent's scope, and clears the text of the history records of `deleted_ids` and of `kept_ids`' records that carry one (`docs/DELETION_AND_SUPERSESSION.md`, Decision 3). |
 
 `Candidate` is `(memory_id, content, metadata, score)`. `score` is a
 similarity, higher is closer, or `None`. The kernel turns candidates into
@@ -52,8 +52,8 @@ The contract tests check honesty: `scored_search` true means every
 `synchronous_commit` (class attribute, default `False`): `True` when a
 write is durable once `add` returns. The write barrier is skipped for
 such providers, since a wait would only add latency. The in-memory
-provider sets it; Mem0, the Chroma in-house provider and Graphiti do
-not.
+provider sets it; Mem0, the Chroma in-house provider, Graphiti and
+A-MEM do not.
 
 ## Required metadata
 
@@ -106,6 +106,7 @@ row was scored).
 | `Mem0Provider` | `mem0` | yes | yes | yes | yes | yes |
 | `InHouseProvider` (dict, tests only) | `in-memory` | yes | yes | no | no | no |
 | `GraphitiProvider` | `graphiti` | yes | no | yes | yes | yes |
+| `AMemProvider` | `amem` | yes | yes | yes | yes | yes |
 
 ### In-house (Chroma)
 
@@ -183,11 +184,30 @@ in `GRAPHITI_BACKEND.md`. The contract tests run it on the local Neo4j
 with a scripted LLM that makes each write one fact worded as the write,
 as Mem0's run with extraction off.
 
+### A-MEM
+
+Since Subtask 17. A-MEM (WujiangXu/A-mem-sys, pinned by commit) keeps
+each write as a note in the user's store, an `AgenticMemorySystem` of
+the process with its own Chroma collection; its LLM
+(`memory.backend_llm`) generates the note's keywords, context and tags
+and rewrites its neighbours' tags and context ("evolution"). The content
+is stored verbatim, a row is a note, and our metadata is the note's
+`category` (as JSON), which nothing in A-MEM writes after the write.
+`search` is A-MEM's `search()` (the README's first search, and the
+native condition's), in its order, each hit with a similarity from its
+squared L2 distance (`1 - d/2`); `scored_search` is true.
+`scrub_history` deletes the notes whose derived text carries a form and
+reports them as `detached` with the reason `derived`. The design is in
+`AMEM_BACKEND.md`. The contract tests run A-MEM's own code with a
+scripted LLM on the pinned embedder.
+
 ## Adding a provider
 
 Subclass `MemoryProvider`, implement every abstract method, register it
 in `ProviderFactory.PROVIDERS`, add its config block to `config.yaml`
 and `config.yaml.example`, and add it to the `provider` fixture of
-`test_provider_contract.py`. If the backend needs the kernel's
-personalization (context injector and conversation extractor), add its
-name to `PERSONALIZATION_PROVIDERS` in `runtime/launch.py`.
+`test_provider_contract.py`. Add its name to `PERSONALIZATION_PROVIDERS`
+in `runtime/launch.py`, so the kernel gives it the context injector and
+the conversation extractor: since Subtask 17 a test
+(`tests/environment/test_kernel_log_secrets.py`) requires every provider
+the factory offers but `in-memory` there.

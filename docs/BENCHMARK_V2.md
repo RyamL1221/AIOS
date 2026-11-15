@@ -1492,3 +1492,33 @@ cells 184.5, 186.8 and 179.4 s against 190.7, 185.9 and 182.3 (kernel,
 replicated, native; 52, 51 and 49 against 56, 50 and 49). Time per user
 is reported with the cell's milliseconds per completion token from now
 on.
+
+## Amendment 8 (2026-11-15, Subtask 17, before the A-MEM functional check)
+
+**A-MEM's cells.** A-MEM (`AMEM_BACKEND.md`) is the fourth backend. Its
+kernel phase is `kamem`, its agent phase `agent_amem` (methods
+`replicated_amem` and `native_amem`), and the no_supersession control's
+phases `kamem_ns` and `agent_amem_ns`, with the controls as for
+Graphiti. The settings are Amendment 6's: kernel and replicated k 30
+with the 300-token budget, native consumers k 10.
+
+**Amendment 5 covers A-MEM.** As on Graphiti (`EMPTY_WRITE_IS_LOSS`), a
+writer's error fails the trial, a write that returned with no row of its
+own is a lost memory, recorded in `writes_without_fact`, and the trial
+is scored; a trial whose backend made no LLM call still fails. On A-MEM
+such a write is not expected: A-MEM stores the note even when its LLM
+fails (it catches the errors of its analysis and of its evolution,
+`AMEM_BACKEND.md`, "One note per write"), so a failed call leaves a note
+without generated attributes. Mem0's rule is unchanged.
+
+**The forget on A-MEM.** A note whose derived text (A-MEM's context,
+keywords and tags, or its Chroma copy) carries a form is a carrier and
+is deleted by the forget's scrub, reported with the reason `derived`
+(`AMEM_BACKEND.md`, "The forget on A-MEM"); the forget reading has a
+`derived` column. A-MEM keeps no messages and no history, so the
+criterion "every Graphiti forget at H = 0 scrubbed an episode" has no
+A-MEM counterpart.
+
+**Reported.** Per A-MEM cell, the notes changed per write: the existing
+notes whose tags, context or links a write's evolution changed (the
+provider's and the agents' log line `A-MEM evolved <n> note(s)`).
