@@ -470,3 +470,66 @@ def test_every_store_provider_gets_the_injector_and_the_extractor():
     wired = set(ast.literal_eval(node.value))
     offered = set(ProviderFactory.get_available_providers()) - {"in-memory"}
     assert wired == offered
+
+# -- Review fixes (Subtask 17) ------------------------------------------------
+
+def test_the_configs_provider_keys_are_secrets():
+    """``api_keys.<provider>`` is where config.yaml keeps provider keys
+    (configuration.md): every string directly under it is a key, and a
+    mapping under it is walked by key name, so ``huggingface``'s
+    ``auth_token`` is one and its ``cache_dir`` path is not."""
+    config = {"api_keys": {
+        "openai": "sk-synthetic-0123456789abcdef", "gemini": "",
+        "huggingface": {"auth_token": "hf-synthetic-0123456789",
+                        "cache_dir": "/Users/someone/.cache/huggingface"}}}
+    assert set(redact.secret_values(config, environ={})) == {
+        "sk-synthetic-0123456789abcdef", "hf-synthetic-0123456789"}
+
+
+def test_the_printed_config_hides_the_provider_keys():
+    config = {"api_keys": {"openai": "sk-synthetic-0123456789abcdef",
+                           "gemini": "",
+                           "huggingface": {"auth_token": "hf-synth-0123",
+                                           "cache_dir": "/cache"}}}
+    assert redact.redact_secrets(config) == {"api_keys": {
+        "openai": redact.REDACTED, "gemini": "",
+        "huggingface": {"auth_token": redact.REDACTED,
+                        "cache_dir": "/cache"}}}
+
+
+def test_a_write_from_inside_a_write_neither_deadlocks_nor_leaks():
+    """A handler that writes to the stream while the stream writes (a
+    signal handler, a finalizer) re-enters its lock in the same thread:
+    the lock must let it through."""
+    import threading
+
+    out = io.StringIO()
+
+    class Reentering:
+        fired = False
+
+        def write(self, text):
+            if not Reentering.fired:
+                Reentering.fired = True
+                wrapper.write(f"inner {KEY}\n")
+            return out.write(text)
+
+        def flush(self):
+            pass
+
+    values = redact._REDACTION["values"]
+    redact._REDACTION["values"] = (KEY,)
+    try:
+        wrapper = redact._RedactingStream(Reentering())
+        thread = threading.Thread(
+            target=lambda: wrapper.write(f"outer {KEY}\n"), daemon=True)
+        thread.start()
+        thread.join(5)
+        assert not thread.is_alive(), "the stream deadlocked"
+        wrapper.writelines([f"first {KEY}\n", "second\n"])
+        wrapper.flush()
+    finally:
+        redact._REDACTION["values"] = values
+    text = out.getvalue()
+    assert "inner" in text and "outer" in text and "second" in text
+    assert KEY not in text

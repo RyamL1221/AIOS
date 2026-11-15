@@ -142,9 +142,12 @@ def run(namespace, memory, evolved):
         found["embedding"] = usage.summarize(records, usage.EMBEDDING)
         rows = provider.list(user, 1000)
         searched = provider.search(statements[0][3], user, 20)
+        # A-MEM's own fields from its notes: rows carry none of its
+        # derived text (the provider's ``_candidate``).
+        store = provider.stores.store(user)
         found["notes"] = {r.metadata.get("provenance_event"): {
-            "tags": r.metadata.get("amem_tags"),
-            "context": r.metadata.get("amem_context")} for r in rows}
+            "tags": store.memories[r.memory_id].tags,
+            "context": store.memories[r.memory_id].context} for r in rows}
         found["search_order"] = [r.metadata.get("provenance_event")
                                  for r in searched]
         missing = [

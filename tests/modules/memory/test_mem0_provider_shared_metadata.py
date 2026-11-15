@@ -98,6 +98,12 @@ _project_root = os.path.dirname(
     )
 )
 
+# The modules ``sys.modules`` held before this file's own copies; put
+# back below (Subtask 17).
+_DIRECT = ("aios.memory.providers.base", "aios.memory.providers.mem0",
+           "aios.memory.visibility")
+_previous = {name: sys.modules.get(name) for name in _DIRECT}
+
 _base_mod = _import_module_directly(
     "aios.memory.providers.base",
     os.path.join(
@@ -121,6 +127,23 @@ _visibility_mod = _import_module_directly(
 
 _apply_sharing_filter = _visibility_mod.apply_sharing_filter
 _extract_filter_metadata = _mem0_mod.Mem0Provider._extract_filter_metadata
+
+# Left in ``sys.modules``, the copies gave every later test a second
+# ``ProviderError``: a test importing it at call time caught the copy's
+# class while the providers, imported before, raised the real one.
+for _name, _module in _previous.items():
+    if _module is None:
+        sys.modules.pop(_name, None)
+    else:
+        sys.modules[_name] = _module
+
+
+def test_the_copies_leave_sys_modules_as_they_found_it():
+    """This file's copies of base, mem0 and visibility are not left in
+    ``sys.modules`` (Subtask 17)."""
+    for name, module in zip(_DIRECT,
+                            (_base_mod, _mem0_mod, _visibility_mod)):
+        assert sys.modules.get(name) is not module, name
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -31,13 +31,19 @@ def is_secret_key(key: Any) -> bool:
 def redact_secrets(value: Any) -> Any:
     """A copy of ``value`` with the value of every key that names a
     secret replaced by ``REDACTED`` when it is set (not None or empty),
-    a list or mapping under such a key included. Mappings, lists and
-    tuples are walked; the input is not changed."""
+    a list or mapping under such a key included, and every set string
+    directly under a section of provider keys (``api_keys``). Mappings,
+    lists and tuples are walked; the input is not changed."""
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():
             if is_secret_key(key) and item not in (None, "", [], (), {}):
                 out[key] = REDACTED
+            elif is_key_section(key) and isinstance(item, dict):
+                out[key] = {
+                    name: (REDACTED if isinstance(entry, str) and entry
+                           else redact_secrets(entry))
+                    for name, entry in item.items()}
             else:
                 out[key] = redact_secrets(item)
         return out
@@ -59,11 +65,29 @@ def redact_secrets(value: Any) -> Any:
 MIN_SECRET_LENGTH = 8
 
 
+# config.yaml's section of provider keys (``api_keys.openai`` and so on,
+# configuration.md): a string directly under it is a key, whatever its
+# name; a mapping under it (``huggingface``) is walked as any other, so
+# its ``auth_token`` is a secret and its ``cache_dir`` is not.
+KEY_SECTIONS = ("api_keys",)
+
+
+def is_key_section(key: Any) -> bool:
+    """Whether a mapping key names a section of provider keys."""
+    return isinstance(key, str) and key.lower() in KEY_SECTIONS
+
+
 def _walk_secrets(value: Any, out: set) -> None:
     if isinstance(value, dict):
         for key, item in value.items():
             if is_secret_key(key):
                 _collect(item, out)
+            elif is_key_section(key) and isinstance(item, dict):
+                for entry in item.values():
+                    if isinstance(entry, str):
+                        out.add(entry)
+                    else:
+                        _walk_secrets(entry, out)
             else:
                 _walk_secrets(item, out)
     elif isinstance(value, (list, tuple)):
@@ -247,19 +271,40 @@ def install_log_redaction(values) -> None:
 class _RedactingStream:
     """A text stream that writes with every redacted value replaced. A
     partial line waits for its newline (or a flush), so a value split
-    across two writes is still caught; a lock keeps the threads' writes
-    whole."""
+    across two writes is still caught. A re-entrant lock keeps the
+    threads' writes whole and lets a write made from inside a write (a
+    signal handler's, a finalizer's) go through; at interpreter exit,
+    when a frozen daemon thread may hold it, the lock is waited for
+    briefly and then skipped, so the final flush cannot hang."""
 
     def __init__(self, stream):
         import threading
 
         self._stream = stream
         self._pending = ""
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+
+    def _locked(self):
+        import contextlib
+        import sys
+
+        if not sys.is_finalizing():
+            return self._lock
+        held = self._lock.acquire(timeout=0.5)
+
+        @contextlib.contextmanager
+        def finalizing():
+            try:
+                yield
+            finally:
+                if held:
+                    self._lock.release()
+
+        return finalizing()
 
     def write(self, text) -> int:
         text = str(text)
-        with self._lock:
+        with self._locked():
             values = _REDACTION["values"]
             if not values:
                 self._drain()
@@ -273,13 +318,17 @@ class _RedactingStream:
                 self._drain()
         return len(text)
 
+    def writelines(self, lines) -> None:
+        for line in lines:
+            self.write(line)
+
     def _drain(self) -> None:
         if self._pending:
             pending, self._pending = self._pending, ""
             self._stream.write(redact_text(pending, _REDACTION["values"]))
 
     def flush(self) -> None:
-        with self._lock:
+        with self._locked():
             self._drain()
         self._stream.flush()
 

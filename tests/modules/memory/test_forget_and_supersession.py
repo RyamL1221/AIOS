@@ -1739,3 +1739,27 @@ def test_pipeline_version_covers_the_matcher(tmp_path, monkeypatch):
     matcher = copy / "matching.py"
     matcher.write_bytes(matcher.read_bytes() + b"# one more line\n")
     assert pipeline_package._source_hash() != before
+
+
+def test_pipeline_version_leaves_out_files_no_import_loads(
+        tmp_path, monkeypatch):
+    """A file in the package whose name is not a module name (iCloud's
+    copy ``deletion 2.py``, which appeared during the A-MEM functional
+    check and split its cells over two versions of the same code) leaves
+    the hash unchanged; a new module still changes it."""
+    package = Path(pipeline_package.__file__).parent
+    copy = tmp_path / "pipeline"
+    copy.mkdir()
+    for source in package.glob("*.py"):
+        if source.stem.isidentifier():
+            (copy / source.name).write_bytes(source.read_bytes())
+    monkeypatch.setattr(pipeline_package, "__file__",
+                        str(copy / "__init__.py"))
+    before = pipeline_package._source_hash()
+
+    (copy / "deletion 2.py").write_bytes(
+        (copy / "deletion.py").read_bytes() + b"# an older copy\n")
+    assert pipeline_package._source_hash() == before
+
+    (copy / "extra.py").write_bytes(b"VALUE = 1\n")
+    assert pipeline_package._source_hash() != before

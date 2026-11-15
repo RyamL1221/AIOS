@@ -67,7 +67,7 @@ llms:
 
 memory:
   log_mode: "console" # choose from [console, file]
-  provider: "in-house"  # Options: in-house (Chroma), mem0, graphiti, in-memory (tests)
+  provider: "in-house"  # Options: in-house (Chroma), mem0, graphiti, amem, in-memory (tests)
 
   # Personalization settings (all opt-in, disabled by default)
   # auto_extract: saves conversation turns as memories after each chat LLM call

@@ -119,8 +119,8 @@ def test_the_scrub_deletes_notes_whose_derived_text_carries_a_form(
         sorted(carriers)
     assert {d["reason"] for d in counts["detached"]} == {"derived"}
     remaining = provider.list(USER, 50)
-    assert all("bittern-06" not in (r.content + r.metadata["amem_context"])
-               for r in remaining)
+    assert all("bittern-06" not in r.content + store.memories[
+        r.memory_id].context for r in remaining)
 
 
 def test_the_scrub_reads_the_stale_chroma_copy_too(provider):
@@ -205,3 +205,63 @@ def test_search_agentic_returns_searchs_notes(provider, k):
     for query in ("Which chat app do I use?", "staging", "Monday"):
         assert [x["id"] for x in store.search_agentic(query, k)] == [
             x["id"] for x in store.search(query, k)]
+
+
+def test_rows_carry_no_derived_text(provider):
+    """Evolution writes a note's tags and context from the user's other
+    notes, private ones included, and the kernel's visibility rule keeps
+    or drops whole rows: a row carries A-MEM's note id and links, not its
+    keywords, context or tags (review finding)."""
+    ids = write_all(provider)
+    rows = (provider.list(USER, 50) + provider.search("chat", USER, 4)
+            + [provider.get(ids[0], USER)])
+    for row in rows:
+        assert {"amem_keywords", "amem_context", "amem_tags"}.isdisjoint(
+            row.metadata)
+        assert row.metadata["amem_note_id"] == row.memory_id
+        assert isinstance(row.metadata["amem_links"], list)
+
+
+@pytest.mark.parametrize("place", ["Utrecht", "Zürich"])
+def test_the_scrub_finds_a_form_in_a_neighbours_tags_alone(place):
+    """Evolution can carry a value into another note's tags only (in the
+    store; Chroma keeps the tags the note was written with): that note is
+    a carrier. A non-ASCII value is found too (``json.dumps`` would
+    escape it)."""
+    provider = amem_provider(evolve="tags")
+    try:
+        first = provider.add(note("I work on the Weather Data API."))
+        second = provider.add(note(f"My office is in {place}.",
+                                   owner="task_agent", event="e01"))
+        store = provider.stores.store(USER)
+        assert store.memories[first].tags == [place]
+        assert place not in store.memories[first].context
+        copy = store.retriever.collection.get(
+            ids=[first], include=["documents"])["documents"][0]
+        assert place not in copy
+        assert provider.delete(second, USER)
+        counts = provider.scrub_history(USER, [place], [second], [])
+        assert [d["memory_id"] for d in counts["detached"]] == [first]
+        assert counts["detached"][0]["reason"] == "derived"
+        assert first not in store.memories
+    finally:
+        provider.close()
+
+
+def test_a_failed_write_leaves_no_note(provider, monkeypatch):
+    """A-MEM puts a note in its dict before it embeds it: when the
+    Chroma write fails, the provider raises and leaves no note that
+    lists but never searches (review finding)."""
+    from aios.memory.providers.base import ProviderError
+
+    ids = write_all(provider)
+    store = provider.stores.store(USER)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("embedding failed")
+
+    monkeypatch.setattr(store.retriever, "add_document", fail)
+    with pytest.raises(ProviderError):
+        provider.add(note("My laptop is a ThinkPad.", event="e09"))
+    assert set(store.memories) == set(ids)
+    assert {r.memory_id for r in provider.list(USER, 50)} == set(ids)

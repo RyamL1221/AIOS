@@ -139,13 +139,15 @@ class AMemProvider(MemoryProvider):
 
     @staticmethod
     def _candidate(note: Any, score: Optional[float] = None) -> Candidate:
+        """A row: the note's content and the metadata it was written
+        with, and A-MEM's note id and links. Not A-MEM's keywords,
+        context or tags: evolution writes them from the user's other
+        notes, another agent's private ones included, so they would
+        carry a value past the visibility rule, which keeps or drops
+        whole rows (docs/AMEM_BACKEND.md, "Metadata: in `category`")."""
         metadata = _metadata(note.category)
         metadata.update({
             "amem_note_id": note.id,
-            "amem_keywords": list(note.keywords or []),
-            "amem_context": note.context,
-            "amem_tags": (list(note.tags) if isinstance(note.tags, list)
-                          else note.tags),
             "amem_links": list(note.links or []),
         })
         return Candidate(memory_id=note.id, content=note.content,
@@ -172,10 +174,23 @@ class AMemProvider(MemoryProvider):
     def _add(self, memory_note, metadata, scope) -> str:
         store = self._store(scope)
         with self._lock(scope):
-            note_id, changed = self._clients.add_note(
-                store, memory_note.content,
-                category=json.dumps(metadata, default=str),
-                time=_time(metadata.get("created_at")))
+            before = set(store.memories)
+            try:
+                note_id, changed = self._clients.add_note(
+                    store, memory_note.content,
+                    category=json.dumps(metadata, default=str),
+                    time=_time(metadata.get("created_at")))
+            except Exception:
+                # A-MEM puts the note in its dict before Chroma
+                # (memory_system.py:268, :284): a failed write must not
+                # leave a note that lists but never searches.
+                for orphan in set(store.memories) - before:
+                    store.memories.pop(orphan, None)
+                    try:
+                        store.retriever.collection.delete(ids=[orphan])
+                    except Exception:
+                        pass
+                raise
         logger.info("A-MEM write %s of %s evolved %d note(s)", note_id,
                     scope, len(changed))
         return note_id
@@ -323,13 +338,25 @@ class AMemProvider(MemoryProvider):
         def carries(text: Any) -> bool:
             return bool(text) and bool(match_forms(str(text), forms))
 
+        def as_text(value: Any) -> str:
+            """A list, or a JSON list as Chroma keeps one, as its items'
+            text: ``json.dumps`` escapes a non-ASCII form ("Zürich")."""
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    return value
+            if isinstance(value, (list, tuple)):
+                return " ".join(str(item) for item in value)
+            return "" if value is None else str(value)
+
         store = self._store(user_id)
         with self._lock(user_id):
             stored = store.retriever.collection.get(
                 include=["documents", "metadatas"])
             chroma = {
                 note_id: (document or "") + " " + " ".join(
-                    str((meta or {}).get(key) or "")
+                    as_text((meta or {}).get(key))
                     for key in ("context", "keywords", "tags"))
                 for note_id, document, meta in zip(
                     stored["ids"], stored["documents"],
@@ -337,10 +364,8 @@ class AMemProvider(MemoryProvider):
             carriers = []
             for note in list(store.memories.values()):
                 derived = " ".join([
-                    str(note.context or ""),
-                    json.dumps(note.keywords, default=str),
-                    json.dumps(note.tags, default=str),
-                    chroma.get(note.id, "")])
+                    str(note.context or ""), as_text(note.keywords),
+                    as_text(note.tags), chroma.get(note.id, "")])
                 if carries(derived):
                     carriers.append(note)
             detached = []

@@ -63,8 +63,10 @@ building agents.
   `requirements.txt` and in Cerebrum `requirements-amem.txt` (with the
   packages Cerebrum's venv lacked, at the versions installed; installed
   with `--no-deps`), not in Cerebrum's `requirements.txt`, the SDK
-  package's dependency list, which cannot carry a git reference; a test
-  checks both pins and the installed commit, as for `graphiti-core`.
+  package's dependency list, which cannot carry a git reference. Tests
+  check both pins and the installed commit in each venv (AIOS
+  `tests/environment/test_amem_pin.py`, Cerebrum
+  `tests/agents/test_amem_pin.py`), as for `graphiti-core`.
 - No server: A-MEM is a library. Its notes live in the process
   (`AgenticMemorySystem.memories`, a dict), and its vectors in a Chroma
   collection (`retrievers.py:18-28`).
@@ -115,15 +117,20 @@ write's time, YYYYMMDDHHMM>)`:
 So a write is about two LLM calls; the first write of a store is one.
 The content is stored verbatim: the row a write gives is the note, and
 its text is what the writer wrote (a statement; in v1 a JSON payload; a
-conversation turn as its "user:" and "assistant:" lines). A write that
+conversation turn as its "User:" and "Assistant:" lines). A write that
 returns has stored its note. A-MEM catches its LLM's errors in both
-steps (`:233-235`, `:746-753`): a failed analysis leaves the defaults
-and a failed evolution changes nothing, with a printed or logged line,
-and the note is still stored.
+steps (`:233-235`, `:746-753`): a failed analysis leaves the defaults, a
+failed evolution keeps what it applied before the error (a
+`strengthen`'s links and tags), each with a printed or logged line, and
+the note is still stored.
 
-The provider reports, for each write, the notes whose tags, context or
-links evolution changed, and logs `A-MEM evolved <n> notes`; the
-analysis reads it as "notes changed per write".
+Every locus writes through one helper (Cerebrum `cerebrum/utils/amem.py`,
+`add_note`), which logs, for each write, `A-MEM evolved <n> note(s) at
+note <id>`: the existing notes whose tags, context or links its
+evolution changed. The kernel's provider logs a line of its own for the
+same write (`A-MEM write <id> of <user> evolved <n> note(s)`), which is
+not counted. "Notes changed per write" is counted from the helper's
+lines in each cell's logs; the results files do not record it.
 
 ## Metadata: in `category`
 
@@ -142,9 +149,12 @@ own keys). In the exploration every note's `category` was intact after
 14 evolution decisions (two runs of eight writes).
 
 - A **row** is a note: `memory_id` is the note id, `content` its
-  content, `metadata` its `category` parsed, plus A-MEM's own fields as
-  `amem_note_id`, `amem_keywords`, `amem_context`, `amem_tags` and
-  `amem_links` (the process's note), which nothing selects on.
+  content, `metadata` its `category` parsed, plus A-MEM's note id and
+  links (`amem_note_id`, `amem_links`). A row does not carry A-MEM's
+  keywords, context or tags: evolution writes them from the user's other
+  notes, another agent's private ones included, and the kernel's
+  visibility rule keeps or drops whole rows, so a row's derived text
+  would carry a private value past it (found on review).
 - A supersession mark changes the note's `category` in the dict and in
   Chroma's metadata (`collection.update`, no re-embedding), not through
   A-MEM's `update`, which deletes and re-adds the document
@@ -185,6 +195,10 @@ a hit's Chroma metadata, written with the note).
 - `k` is the kernel's own fetch (own k, shared 4k; v2 k = 30 since
   Amendment 6, v1 k = 10); the native consumer's k is 10, and it uses
   A-MEM's order and A-MEM's distance as the score, filtering on none.
+  Only a V4 consumer at H = 2 (`HETEROGENEITY.md`) sets a threshold
+  (0.5), and it applies it to that score as returned, as native Mem0's
+  V4 consumer does to Mem0's: it keeps the notes at distance 0.5 or more
+  (cosine 0.75 or less) and drops nearer ones.
 
 ## Store, partition and isolation
 
@@ -258,9 +272,14 @@ LLM call:
   notes so deleted.
 
 A deleted note can therefore take another fact with it, as a Mem0 fold
-does; the forget reading reports it (`same_writer`, `other_agents`).
-After a forget nothing A-MEM keeps carries a form: no note's content,
-derived text, Chroma document or metadata.
+does; the forget reading counts these deletions in its `derived` column,
+and in `other_agents` when another agent wrote the note (`same_writer`
+counts value and alias deletions only). The scrub deletes every note
+whose derived text, in the store or in Chroma, carries a form, so after
+a forget no note A-MEM keeps carries one. The runs' audit reads rows'
+content only, so this is checked by the unit tests (a value in a
+neighbour's context, in its tags alone, in its stale Chroma copy) and by
+the live risk check, not measured in the runs.
 
 ## Supersession
 
@@ -342,8 +361,11 @@ the tags or context of 6 of the 7 notes and gave the same search order.
 - Risk 1: after evolution rewrites neighbours, every note `search` and
   `list` return carries the metadata it was written with.
 - Risk 2: `delete` removes the note from the dict and from Chroma; a
-  forget deletes a note whose evolved context or tags, or whose Chroma
-  copy, carries a form, and reports it (`derived`).
+  forget deletes a note whose evolved context, whose tags alone (ASCII
+  or not), or whose Chroma copy carries a form, and reports it
+  (`derived`).
+- A row carries no derived text; a failed write leaves no note (both
+  found on review).
 - The isolation: building a second user's store leaves the first's
   notes and vectors.
 - The pin test, as for `graphiti-core`.
@@ -364,10 +386,13 @@ the tags or context of 6 of the 7 notes and gave the same search order.
    replicated loci write the same inputs into different stores; their
    paired outcomes can differ (as Mem0's and Graphiti's).
 4. **Swallowed errors.** A-MEM catches its LLM's errors in analysis and
-   evolution: a failed call looks like a note with no attributes or an
-   evolution that changed nothing. The provider's controller raises, so
-   A-MEM's own handlers see every failure, and the extraction guard (a
-   trial with no backend LLM call fails) still applies. `search`
+   evolution: a failed call leaves a note without generated attributes,
+   or an evolution stopped part-way, and A-MEM says so only on stdout
+   ("Error analyzing content", a print) or in an ERROR record ("Error in
+   memory evolution", "Error in process_memory"). The extraction guard
+   (a trial whose backend made no LLM call fails) catches only an LLM
+   that never answered, so the runs count those lines in their logs and
+   report them. `search`
    (`:462-481`) catches nothing, so a failed search raises in every
    locus and the kernel reports it (`retrieval_error`);
    `search_agentic`, which returns `[]` on any error, is not used.

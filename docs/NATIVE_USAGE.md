@@ -404,9 +404,13 @@ What the agents do:
 - **Order and scores.** Notes are used in the order `search` returns
   them, with no score filtering, cut at `k` after the sharing
   convention, as for the other conditions (`k` 10; 5 for a V4 consumer
-  at H = 2). The block prints each note's content, as the other native
-  conditions print their rows' text; the diagnostics record each row's
-  score (`match_score`: A-MEM's distance).
+  at H = 2). A V4 consumer at H = 2 also applies its threshold (0.5)
+  to the score as returned, as native Mem0's does to Mem0's: on
+  A-MEM's distance it keeps the notes at distance 0.5 or more (cosine
+  0.75 or less) and drops nearer ones. The block prints each note's
+  content, as the other native conditions print their rows' text; the
+  diagnostics record each row's score (`match_score`: A-MEM's
+  distance).
 - **Revoke.** The writer lists its own notes (the store's notes whose
   `category` names it as `agent_id`) of the slot and deletes each with
   `delete(memory_id)`. It deletes nothing of other agents, and nothing

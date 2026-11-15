@@ -8,7 +8,10 @@ local Chroma and Ollama embedder with no LLM call.
 - Evolution (``process_memory``): with ``evolve`` on, the new note is
   linked to the first neighbour shown, tagged ``["linked"]``, and every
   neighbour's context gets " Related: <new content>": evolution copies
-  the new note's values into the neighbours, as A-MEM's LLM can.
+  the new note's values into the neighbours, as A-MEM's LLM can. With
+  ``evolve="tags"`` the neighbours' contexts are left as they are and
+  their tags become the new note's last word: a value reaches another
+  note through its tags alone.
 """
 import json
 import re
@@ -41,6 +44,14 @@ class ScriptedLLM:
                     "suggested_connections": [], "tags_to_update": [],
                     "new_context_neighborhood": [],
                     "new_tags_neighborhood": []})
+            if self.evolve == "tags":
+                word = content.rstrip(" .").split()[-1]
+                return json.dumps({
+                    "should_evolve": True, "actions": ["update_neighbor"],
+                    "suggested_connections": [], "tags_to_update": [],
+                    "new_context_neighborhood": [
+                        context for _, context in neighbors],
+                    "new_tags_neighborhood": [[word] for _ in neighbors]})
             return json.dumps({
                 "should_evolve": True,
                 "actions": ["strengthen", "update_neighbor"],

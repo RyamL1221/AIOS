@@ -640,8 +640,10 @@ calls one after another (Subtask 16).
   `memory.write_barrier.timeout_ms` to 60,000, and every probe records
   its barrier waits. Since Amendment 3 a probe writes nothing; the
   timeout still bounds a retrieval's wait for the writers' writes.
-- Any edit to `aios/memory/pipeline/` changes `PIPELINE_VERSION`. Every
-  kernel and replicated v2 trial records it. Native trials, which do
+- Any edit to a module of `aios/memory/pipeline/` changes
+  `PIPELINE_VERSION` (a file no import loads, such as an iCloud copy
+  `deletion 2.py`, does not, since Subtask 17). Every kernel and
+  replicated v2 trial records it. Native trials, which do
   not run the library, record None; their file records the kernel's
   version in `run_settings`.
 
@@ -1456,9 +1458,11 @@ remove there.
 
 **Block size in every table** (no behavior change). Every table of
 `bench_v2_analysis.py` ends with `block_tokens` and `block_rows`: the
-mean block of the row's probes (of its probe type, where the row has
-one), in estimated tokens and in injected rows; the
-kernel-against-replicated table gives them per locus. With k = 30 for
+mean block, in estimated tokens and in injected rows, of the row's probe
+type in its cell where the row names one, else of the cell's probes (its
+integration probes in the integration readings), so a row that splits a
+cell's probes further (a slot, a carrier, a count of base rows) shows its
+cell's mean; the kernel-against-replicated table gives them per locus. With k = 30 for
 kernel and replicated and k = 10 for native, a difference between loci
 is read against what each block held.
 
@@ -1520,5 +1524,8 @@ criterion "every Graphiti forget at H = 0 scrubbed an episode" has no
 A-MEM counterpart.
 
 **Reported.** Per A-MEM cell, the notes changed per write: the existing
-notes whose tags, context or links a write's evolution changed (the
-provider's and the agents' log line `A-MEM evolved <n> note(s)`).
+notes whose tags, context or links a write's evolution changed, counted
+from the logs (the line `A-MEM evolved <n> note(s) at note <id>` that
+every locus's writes log once, `AMEM_BACKEND.md`, "One note per
+write"); and the lines in which A-MEM reports an LLM failure it caught
+(`AMEM_BACKEND.md`, "Open risks", 4).

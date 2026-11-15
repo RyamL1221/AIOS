@@ -9,10 +9,12 @@ contract (``aios.memory.providers.base``) and its settings, never on
 thin client of it, and so is each replicated agent
 (docs/REPLICATED_LOGIC.md).
 
-``PIPELINE_VERSION`` is a hash of this package's source, the value
+``PIPELINE_VERSION`` is a hash of this package's modules, the value
 matcher it shares with the benchmark's scorer (``matching``) included,
 recorded on every trial, so two agents running different copies show as
-different versions. No module of the package imports a ``cerebrum``
+different versions. A file whose name is not a module name, such as an
+iCloud copy ``deletion 2.py``, is never imported and is left out. No
+module of the package imports a ``cerebrum``
 module (a test scans each file), and the caller passes the usage tag.
 Importing the package still loads ``cerebrum.utils.usage``: its import
 of the provider contract runs ``aios/memory/providers/__init__.py``,
@@ -63,8 +65,13 @@ from .visibility import Visibility, apply_sharing_filter
 
 
 def _source_hash() -> str:
+    """The package's modules' names and bytes, hashed. Only files an
+    import can load: an iCloud copy (``deletion 2.py``) appearing or
+    vanishing mid-run gave the same code two versions (Subtask 17)."""
     digest = hashlib.sha256()
     for path in sorted(Path(__file__).parent.glob("*.py")):
+        if not path.stem.isidentifier():
+            continue
         digest.update(path.name.encode())
         digest.update(b"\0")
         digest.update(path.read_bytes())
