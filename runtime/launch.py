@@ -25,7 +25,7 @@ from aios.memory.context_injector import ContextInjector
 from aios.memory.pipeline import PIPELINE_VERSION
 from aios.memory.conversation_extractor import ConversationExtractor
 from aios.utils.redact import (
-    install_log_redaction,
+    install_redaction,
     redact_secrets,
     secret_values,
 )
@@ -52,9 +52,10 @@ import copy
 
 load_dotenv()
 
-# No key value reaches a log record or its traceback (Subtask 17,
-# Decision 3): the environment's, .env's and config.yaml's.
-install_log_redaction(secret_values(config.config))
+# No key value reaches a log record, its traceback or the standard
+# streams (Subtask 17, Decision 3): the environment's, .env's and
+# config.yaml's.
+install_redaction(secret_values(config.config))
 
 app = FastAPI()
 

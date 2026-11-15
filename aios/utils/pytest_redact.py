@@ -13,31 +13,20 @@ from pathlib import Path
 
 import pytest
 
-from aios.utils.redact import redact_report, secret_values
+from aios.utils.redact import (
+    file_secret_configs,
+    redact_report,
+    secret_values,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 @lru_cache(maxsize=1)
 def _file_configs() -> tuple:
-    """``AIOS/.env`` and ``aios/config/config.yaml`` (each when it
-    exists), read once a session."""
-    configs = []
-    env_file = ROOT / ".env"
-    if env_file.is_file():
-        from dotenv import dotenv_values
-
-        configs.append({name.lower(): value for name, value
-                        in dotenv_values(env_file).items()})
-    config_file = ROOT / "aios" / "config" / "config.yaml"
-    if config_file.is_file():
-        import yaml
-
-        try:
-            configs.append(yaml.safe_load(config_file.read_text()) or {})
-        except yaml.YAMLError:
-            pass
-    return tuple(configs)
+    """``AIOS/.env`` and ``aios/config/config.yaml``, read once a
+    session."""
+    return file_secret_configs(ROOT)
 
 
 def report_secrets() -> tuple:
@@ -48,5 +37,12 @@ def report_secrets() -> tuple:
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
+    outcome = yield
+    redact_report(outcome.get_result(), report_secrets())
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector):
+    """A module that fails to import or raises while collected."""
     outcome = yield
     redact_report(outcome.get_result(), report_secrets())

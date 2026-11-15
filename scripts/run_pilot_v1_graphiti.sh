@@ -17,8 +17,16 @@
 # free first; config.yaml restored byte for byte at exit. Resumable.
 # RUN_PREFIX and OUTROOT are required, new for every run (known issue
 # 36). METHODS, when set, runs only those methods' cells (Subtask 17's
-# Decision 2 re-ran native_graphiti). Run from the AIOS repo, detached:
-#   RUN_PREFIX=pg16 OUTROOT=results/pilot_v1_graphiti nohup bash scripts/run_pilot_v1_graphiti.sh > ../repo-artifacts/Cerebrum/pilot_v1_graphiti.log 2>&1 &
+# Decision 2 re-ran native_graphiti).
+# ARCHIVE, when set, is a new directory the run's OUTROOT (results, logs,
+# and the driver's own log when written there) is copied into at the
+# end, with SHA256SUMS, through scripts/archive_artifacts.py, which
+# refuses the copy when a file holds a configured key value: then the
+# driver fails and nothing is copied (Subtask 17). The archived driver
+# log ends before the archive's own lines.
+# Run from the AIOS repo, detached, the driver's log in OUTROOT:
+#   OUT=results/pilot_v1_graphiti; mkdir -p ../Cerebrum/$OUT
+#   RUN_PREFIX=pg16 OUTROOT=$OUT ARCHIVE=../repo-artifacts/Cerebrum/pilot_v1_graphiti nohup bash scripts/run_pilot_v1_graphiti.sh > ../Cerebrum/$OUT/driver.log 2>&1 &
 set -u
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"
@@ -28,6 +36,8 @@ CONFIG="aios/config/config.yaml"
 [ -n "${OUTROOT:-}" ] || {
     echo "set OUTROOT, the run's own (a resume keeps it)" >&2; exit 1; }
 LOGS="$CEREBRUM/$OUTROOT/logs"
+[ -z "${ARCHIVE:-}" ] || [ ! -e "$ARCHIVE" ] || {
+    echo "$ARCHIVE exists: set a new ARCHIVE" >&2; exit 1; }
 DATASET="pilot_v1"
 SCHEDULE="benchmarks/shared_memory/data/pilot_v1_schedule.json"
 TRIALS="${TRIALS:-30}"
@@ -159,3 +169,9 @@ for model in $MODELS; do
     done
 done
 echo "$(date) PILOT V1 GRAPHITI DONE"
+if [ -n "${ARCHIVE:-}" ]; then
+    echo "$(date) archiving $OUTROOT to $ARCHIVE"
+    "$AIOS/.venv/bin/python" scripts/archive_artifacts.py --root "$AIOS" \
+        --sums --dest "$ARCHIVE" "$CEREBRUM/$OUTROOT"/* || {
+        echo "$(date) ARCHIVE REFUSED: nothing copied"; exit 1; }
+fi

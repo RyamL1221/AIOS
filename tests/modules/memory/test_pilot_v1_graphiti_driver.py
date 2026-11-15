@@ -20,8 +20,12 @@ DRIVER = (Path(__file__).resolve().parents[3] / "scripts"
           / "run_pilot_v1_graphiti.sh")
 
 # The AIOS venv's python: as the kernel, waits to be stopped; as
-# set_memory_mode.py, records its arguments.
+# set_memory_mode.py, records its arguments; as archive_artifacts.py,
+# runs the real script.
 RECORDING = """#!/bin/bash
+if [ "$1" = "scripts/archive_artifacts.py" ]; then
+    shift; exec "$SIM_PYTHON" "$SIM_ARCHIVE" "$@"
+fi
 if [ "$1" = "-m" ] && [ "$2" = "uvicorn" ]; then
     exec sleep 600
 fi
@@ -68,3 +72,22 @@ def test_methods_runs_only_the_named_cells(tmp_path):
                    for cell in phase.iterdir())
     assert cells == ["agent_gra/h0_native_graphiti",
                      "agent_gra/h2_native_graphiti"]
+
+
+def test_archive_refuses_a_log_holding_a_key(tmp_path):
+    """``ARCHIVE`` (Subtask 17): a cell's log holds a configured key, so
+    the driver fails and copies nothing."""
+    aios = v2.tree(tmp_path)
+    v2.executable(aios / ".venv" / "bin" / "python", RECORDING)
+    env = {**os.environ,
+           "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+           "MODELS": "qwen", "TRIALS": "1", "LEVELS": "0",
+           "PHASES": "agent_gra", "RUN_PREFIX": "t1",
+           "OUTROOT": "results/sim", "MODE_LOG": str(tmp_path / "m.log"),
+           **v2.archiving(tmp_path, SIM_HARNESS_LINE=f"api_key={v2.KEY}")}
+    result = subprocess.run(["bash", str(DRIVER)], cwd=aios, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "ARCHIVE REFUSED" in result.stdout
+    assert v2.KEY not in result.stdout + result.stderr
+    assert not (tmp_path / "artifacts" / "run1").exists()

@@ -13,14 +13,19 @@ curl, the kernel, the harness, set_memory_mode.py and the cell check.
 import os
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 DRIVER = Path(__file__).resolve().parents[3] / "scripts" / "run_bench_v2.sh"
 
 # The AIOS venv's python: as the kernel, prints $SIM_KERNEL_LINE once
-# and waits to be stopped; as set_memory_mode.py, does nothing.
+# and waits to be stopped; as set_memory_mode.py, does nothing; as
+# archive_artifacts.py, runs the real script ($SIM_ARCHIVE).
 KERNEL = """#!/bin/bash
+if [ "$1" = "scripts/archive_artifacts.py" ]; then
+    shift; exec "$SIM_PYTHON" "$SIM_ARCHIVE" "$@"
+fi
 if [ "$1" = "scripts/set_memory_mode.py" ]; then
     [ -n "${SIM_MODE_LOG:-}" ] && echo "$*" >> "$SIM_MODE_LOG"
     exit 0
@@ -33,7 +38,8 @@ exit 0
 """
 
 # The Cerebrum venv's python, as the harness: writes the cell's results
-# file, unless the cell's run id is $SIM_FAIL_RUN.
+# file, unless the cell's run id is $SIM_FAIL_RUN, and prints
+# $SIM_HARNESS_LINE to the cell's log.
 HARNESS = """#!/bin/bash
 while [ $# -gt 0 ]; do
     case $1 in
@@ -44,6 +50,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ "$run" = "${SIM_FAIL_RUN:-}" ] && exit 1
+[ -n "${SIM_HARNESS_LINE:-}" ] && echo "$SIM_HARNESS_LINE"
 mkdir -p "$out" && echo done > "$out/results_$method.json"
 """
 
@@ -243,3 +250,59 @@ def test_methods_runs_only_the_named_cells(tmp_path):
                    for cell in phase.iterdir())
     assert cells == ["agent_gra/h0_replicated_graphiti",
                      "kgra/h0_kernel_shared"]
+
+
+# -- ARCHIVE (Subtask 17) -----------------------------------------------------
+
+ARCHIVE_SCRIPT = DRIVER.parents[1] / "scripts" / "archive_artifacts.py"
+KEY = "azure-test-key-0123456789abcdef"
+
+
+def archiving(tmp_path: Path, **extra) -> dict:
+    """The additions to a launch's environment that make it archive its
+    logs with the real archive script, the synthetic key configured (the
+    stub tree's .env and config.yaml hold none)."""
+    return {"FAKE_SERVICE_API_KEY": KEY, "SIM_PYTHON": sys.executable,
+            "SIM_ARCHIVE": str(ARCHIVE_SCRIPT),
+            "ARCHIVE": str(tmp_path / "artifacts" / "run1"), **extra}
+
+
+def test_archive_copies_a_clean_runs_outroot(tmp_path):
+    """The run's OUTROOT, its results and logs, with SHA256SUMS."""
+    aios = tree(tmp_path)
+    result = launch(aios, "kmem0", "h0", extra=archiving(tmp_path))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "none holds a key value; copied to" in result.stdout
+    copied = tmp_path / "artifacts" / "run1"
+    assert [p.name for p in (copied / "logs").glob("kernel_qwen_kmem0_*")]
+    assert (copied / "logs" / "qwen_kmem0_kernel_shared_h0.log").is_file()
+    assert (copied / "qwen" / "kmem0" / "h0_kernel_shared"
+            / "results_kernel_shared.json").is_file()
+    sums = (copied / "SHA256SUMS").read_text()
+    assert "./qwen/kmem0/h0_kernel_shared/results_kernel_shared.json" in sums
+
+
+def test_archive_refuses_a_log_holding_a_key(tmp_path):
+    """A cell's log holds the key: the driver fails, names the file, and
+    copies nothing; the run's logs stay where they were."""
+    aios = tree(tmp_path)
+    env = archiving(tmp_path, SIM_HARNESS_LINE=f"api_key={KEY}")
+    result = launch(aios, "kmem0", "h0", extra=env)
+    assert result.returncode == 1
+    assert "ARCHIVE REFUSED" in result.stdout
+    assert "holds a configured key value" in result.stderr
+    assert KEY not in result.stdout + result.stderr
+    assert not (tmp_path / "artifacts" / "run1").exists()
+    logs = tmp_path / "Cerebrum" / "results" / "sim" / "logs"
+    assert any(KEY in p.read_text() for p in logs.glob("*.log"))
+
+
+def test_archive_must_be_new(tmp_path):
+    """An existing ARCHIVE stops the driver before any cell, not after
+    the run."""
+    aios = tree(tmp_path)
+    (tmp_path / "artifacts" / "run1").mkdir(parents=True)
+    result = launch(aios, "kmem0", "h0", extra=archiving(tmp_path))
+    assert result.returncode == 1
+    assert "set a new ARCHIVE" in result.stderr
+    assert "start" not in result.stdout

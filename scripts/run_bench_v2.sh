@@ -54,8 +54,15 @@
 # METHODS, when set, runs only those methods' cells (Amendment 6's
 # re-verification ran the kernel and replicated cells); a phase none
 # of whose methods it names must be left out of PHASES.
-# Run from the AIOS repo, detached:
-#   MODE=functional RUN_PREFIX=f16 OUTROOT=results/bench_v2_functional_f16 nohup bash scripts/run_bench_v2.sh > ../repo-artifacts/Cerebrum/bench_v2_functional_f16.log 2>&1 &
+# ARCHIVE, when set, is a new directory the run's OUTROOT (results, logs,
+# and the driver's own log when written there) is copied into at the
+# end, with SHA256SUMS, through scripts/archive_artifacts.py, which
+# refuses the copy when a file holds a configured key value: then the
+# driver fails and nothing is copied (Subtask 17). The archived driver
+# log ends before the archive's own lines.
+# Run from the AIOS repo, detached, the driver's log in OUTROOT:
+#   OUT=results/bench_v2_functional_f16; mkdir -p ../Cerebrum/$OUT
+#   MODE=functional RUN_PREFIX=f16 OUTROOT=$OUT ARCHIVE=../repo-artifacts/Cerebrum/bench_v2_functional_f16 nohup bash scripts/run_bench_v2.sh > ../Cerebrum/$OUT/driver.log 2>&1 &
 set -u
 AIOS="$(pwd)"
 CEREBRUM="$AIOS/../Cerebrum"
@@ -79,6 +86,8 @@ esac
 [ -n "${OUTROOT:-}" ] || {
     echo "set OUTROOT, the run's own (a resume keeps it)" >&2; exit 1; }
 LOGS="$CEREBRUM/$OUTROOT/logs"
+[ -z "${ARCHIVE:-}" ] || [ ! -e "$ARCHIVE" ] || {
+    echo "$ARCHIVE exists: set a new ARCHIVE" >&2; exit 1; }
 DATASET="pilot_v2"
 MODELS="${MODELS:-qwen}"
 # Any kernel memory request: none in an agent phase.
@@ -270,3 +279,9 @@ for model in $MODELS; do
     done
 done
 echo "$(date) BENCH V2 $MODE DONE"
+if [ -n "${ARCHIVE:-}" ]; then
+    echo "$(date) archiving $OUTROOT to $ARCHIVE"
+    "$AIOS/.venv/bin/python" scripts/archive_artifacts.py --root "$AIOS" \
+        --sums --dest "$ARCHIVE" "$CEREBRUM/$OUTROOT"/* || {
+        echo "$(date) ARCHIVE REFUSED: nothing copied"; exit 1; }
+fi
