@@ -2645,6 +2645,105 @@ three decisions on the Graphiti smoke's findings. Design:
   `scripts/run_pilot_v1_amem.sh`; the analysis's A-MEM cells and
   `derived` column; `PERSONALIZATION_PROVIDERS` must name every factory
   provider but `in-memory` (a test).
+- **A-MEM: functional check** (`f17`, Cerebrum
+  `results/bench_v2_functional_amem`, 14 cells, users 0 to 4, 70
+  user-trials, 0 failed; Cerebrum `56f0573`, AIOS `13708ee`). Every
+  criterion that applies to the A-MEM cells holds: deletion and privacy
+  pass and fail in real conditions and fail under `no_delete` (15 of 15)
+  and `no_visibility` (5 of 5); no kernel privacy probe leaks (25); the
+  budget binds in every kernel and replicated cell, the cap in none;
+  kernel and replicated delete completely at H = 0 (10 forgets, no
+  carrier left); `writer_scoped` fails 4 of 4 echo users; no block
+  holds a retired row at H = 0 and `no_supersession` puts one in 59
+  probes; the guard was armed and dropped nothing. The others need the
+  in-house, Mem0 or `no_memory` cells (Subtask 15's), and A-MEM keeps
+  no messages to scrub (Amendment 8).
+  - Kernel and replicated pass all 25 judge-free probes at H = 0 and
+    agree on every pair. At H = 2 each locus's judge-free results equal
+    in-house's and Graphiti's probe for probe (kernel recency and
+    contradiction 4 of 5; replicated recall 4, recency and
+    contradiction 3; native privacy and recall 4, recency 2,
+    contradiction 1): they come from the H = 2 agents, not the backend
+    (one native consumer fetches nothing at H = 2 on every backend).
+    Native at H = 0: deletion 3 of 5 (2 echoes), recency 4,
+    contradiction 2, as native A-MEM keeps every statement.
+  - Each kernel cell's 5 forgets deleted 8 rows, one of them a note
+    whose derived text alone carried the value (`derived`); the
+    replicated H = 0 cell's 7 held none.
+  - Every write logged one `A-MEM evolved` line (1,260 of 1,260, all
+    three loci); a write's evolution changed 1.12 to 1.70 existing
+    notes on average per cell, at most 5 (A-MEM's neighbours); no
+    A-MEM failure line. 1.94 backend calls per write (a store's first
+    note has no evolution call), about 670 prompt tokens a call, $0.10
+    a user; 112 to 132 s a user at 49 to 57 ms per token.
+- **iCloud's copies split the functional check's library version**
+  (fixed in AIOS `34833e7`). Its `kamem` cells record
+  `PIPELINE_VERSION` `565e7d5b…`, the later cells `138e9bd8…`, for the
+  same code: the second hash includes iCloud's untracked conflict copy
+  `aios/memory/pipeline/deletion 2.py`, which no import loads; the
+  `kamem` kernel (15:59) hashed the package without it, every process
+  from 16:40 on with it. iCloud writes such copies (`<name> 2.<ext>`)
+  beside files changed in two places, 13 in AIOS and 11 in Cerebrum
+  now. The hash now leaves out every `.py` whose name is not a module
+  name. pytest collected the test files' copies the same way: in the
+  first suite run on the review's fixes, a stale copy of
+  `test_bench_v2_analysis.py` (53 tests) failed as a new failure. Both
+  `tests/conftest.py` now leave them out (`test_icloud_copies.py`;
+  Cerebrum `1d7d99f`). Of the earlier totals, AIOS's 743 + 7 is exactly
+  `13708ee`'s 750 tests; Cerebrum's 1,190 held 7 tests beyond
+  `56f0573`'s 1,183, from untracked files. The copies are kept (nothing
+  that discards files).
+- **A test left its copies of three modules in `sys.modules`** (fixed
+  in AIOS `34833e7`). `test_mem0_provider_shared_metadata.py` loads its
+  own `aios.memory.providers.base`, `mem0` and `visibility` at
+  collection and left them registered, so a later test importing
+  `ProviderError` at call time got the copy's class while `amem.py`
+  raised the real one: the review's failed-write test failed in the
+  full suite only. The file now puts back what `sys.modules` held.
+- **Review** (one pass over AIOS `612c989..13708ee` and Cerebrum
+  `2b9a776..56f0573`, 11 findings; fixed in AIOS `34833e7` and Cerebrum
+  `1d7d99f`, each fix with a test that fails without it). No number the
+  functional check reports changes; `bench_v2_smoke_s17`'s analysis was
+  regenerated for finding 8's label (Cerebrum `f6d2646`; no number
+  changed).
+  1. config.yaml keeps provider keys under `api_keys.<provider>`, which
+     the key rule did not match (all empty today, so no key was
+     missed): both `redact.py` take every string directly under
+     `api_keys` as a secret, and the printed config hides them.
+  2. A V4 consumer at H = 2 applies its 0.5 threshold to native A-MEM's
+     distance, keeping farther notes: documented (`NATIVE_USAGE.md`,
+     "native_amem"; `AMEM_BACKEND.md`, "Search"), as on native Mem0. It
+     can lower native A-MEM's H = 2 scores.
+  3. A-MEM catches its LLM failures and stores the note without
+     attributes: claim weakened; the runs count A-MEM's failure lines
+     (none in `f17`).
+  4. Kernel rows carried A-MEM's derived text (keywords, context,
+     tags), which evolution writes from the user's other notes, another
+     agent's private ones included: a path past the visibility rule.
+     Rows now carry only `amem_note_id` and `amem_links`.
+  5. The scrub's tags branch was untested, and `json.dumps` escaped
+     non-ASCII forms, so a tag "Zürich" was missed: fixed (tested with
+     "Utrecht" and "Zürich").
+  6. No A-MEM run measures the store's completeness after a forget
+     (the audit reads content): claim weakened.
+  7. "Notes changed per write" had no code and two log lines per
+     write: the docs name the store helper's line, counted from the
+     logs (one per write in every locus).
+  8. The block columns of split readings were cell means labelled as
+     the row's probes: relabelled.
+  9. `_RedactingStream` deadlocked on a write from inside a write and
+     could hang at exit: a re-entrant lock, a bounded wait while the
+     interpreter finalizes, `writelines` (both repos).
+  10. A failed write left a note A-MEM listed but Chroma did not hold:
+      removed on failure, under the user's lock.
+  11. Citations (Amendment 8), a Cerebrum-side pin test, doc wording.
+- **Suites** at AIOS `34833e7` and Cerebrum `1d7d99f`: AIOS 754 passed
+  and the 7 known errors (761 collected; 750 at `13708ee`, so the 11
+  new tests); Cerebrum 1,162 passed, 4 skipped, the 19 known failures
+  and 2 errors by name, and `test_summary_props.py`'s
+  `test_delta_equals_arithmetic_difference` on Hypothesis's deadline
+  (273.65 ms against 200; alone it passed 3 of 3; known issue 35);
+  1,188 collected, 1,183 at `56f0573` (the 5 new tests).
 
 ## Open decisions
 
@@ -2685,6 +2784,17 @@ three decisions on the Graphiti smoke's findings. Design:
    agent until the user states it again (a new statement of the slot,
    as its writer labels it: `DELETION_AND_SUPERSESSION.md`, "A
    restatement lifts it"), and no read path returns a tombstoned row.
+6. **Three choices of Subtask 17 to confirm or change** (taken
+   2026-11-12 to 15, not asked):
+   (a) known issue 49's 39 local logs are left as they are (gitignored,
+   never archived or committed); masking the 118 key heads in place is
+   the alternative;
+   (b) the full grid's native k = 30 sensitivity cell (Amendment 7) is
+   on Graphiti, whose cap of 10 bound in every probe of Subtask 16's
+   smoke (about 23 facts per user);
+   (c) the review's finding 2, a V4 consumer's 0.5 threshold applied to
+   native A-MEM's distance at H = 2, is documented, not changed, as on
+   native Mem0 (`NATIVE_USAGE.md`, "native_amem").
 
 ## Test baselines
 
@@ -2731,7 +2841,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
   635 passed, the 14 errors) and the end of Subtask 16 (AIOS
   `789eb67`, the same set: 677 passed, the 7 errors; Cerebrum
   `6a29089`: 1133 passed, 4 skipped, the same 19 failures and 2
-  errors, by name; known issues 6 and 47 are flaky under load). The names
+  errors, by name; known issues 6 and 47 are flaky under load) and
+  Subtask 17's review fixes (AIOS `34833e7`, Cerebrum `1d7d99f`; iCloud's
+  copies no longer collected: AIOS 754 passed, the 7 errors; Cerebrum
+  1162 passed, 4 skipped, the same 19 failures and 2 errors, by name,
+  and one of known issue 35's two deadline tests). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -2892,9 +3006,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
     V4 consumer. A scored heterogeneity run needs more users, or a
     schedule that guarantees those pairings.
 
-35. `test_summary_props.py::test_kernel_shared_delta_is_zero` sometimes
-    hits Hypothesis's deadline (timing, not logic); it is the flaky test
-    that makes the Cerebrum failure count 19 or 20.
+35. `test_summary_props.py`'s two Hypothesis tests,
+    `test_kernel_shared_delta_is_zero` and
+    `test_delta_equals_arithmetic_difference`, sometimes hit
+    Hypothesis's deadline (timing, not logic, 200 ms; more often under
+    load); they make the Cerebrum failure count 19, 20 or 21.
 36. Nothing resets the memory stores between runs. The kernel keeps
     one set for every run and prefix: its Chroma stores
     (`.mem0/chroma`, `.aios_state/chroma_inhouse`), its tombstones
