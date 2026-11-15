@@ -308,25 +308,29 @@ What the agents do:
   itself is the documented one. (Until the Subtask 16 review it was not
   put back, so a V4 consumer's 5 stayed for the next users' writes.)
 - **Validity.** Graphiti invalidates a fact it reads as no longer
-  true rather than deleting it: "old facts are invalidated — not
-  deleted", so that one can "query what's true now, or what was true
-  at any point in time" (the
-  [README](https://github.com/getzep/graphiti), "Why Graphiti?",
-  "Temporal Fact Management"); Zep's page on facts says "applications
-  can use these fields for history and point-in-time retrieval"
-  ([facts](https://help.getzep.com/v4/facts.md), "Overview"). A
-  consumer asking what is true now therefore uses the facts whose
-  `invalid_at` is unset. The agents do so with `search()`'s own
-  `search_filter` (`SearchFilters(invalid_at=[[DateFilter(
-  comparison_operator=ComparisonOperator.is_null)]])`,
+  true rather than deleting it. Its README (the
+  [repository's](https://github.com/getzep/graphiti), as packaged with
+  `graphiti-core` 0.31.2: `graphiti_core-0.31.2.dist-info/METADATA`,
+  lines 190 and 191, under "Why Graphiti?") says: "**Temporal Fact
+  Management:** Facts have validity windows. When information changes,
+  old facts are invalidated — not deleted. Query what's true now, or
+  what was true at any point in time." Zep's page on facts says
+  "applications can use these fields for history and point-in-time
+  retrieval" ([facts](https://help.getzep.com/v4/facts.md),
+  "Overview"). That a consumer asking what is true now should use only
+  the facts whose `invalid_at` is unset is our reading of this
+  documented intent, not a documented call: the documentation states
+  the intent, but none of its search examples passes a filter, and the
+  `search_filter` parameter is `search()`'s own (`graphiti.py:1919`).
+  The agents apply it with that parameter (`SearchFilters(invalid_at=
+  [[DateFilter(comparison_operator=ComparisonOperator.is_null)]])`,
   `graphiti_core/search/search_filters.py` in 0.31.2), so the k facts
   `search()` returns are current ones and none of the k is spent on a
-  stale fact. The documentation shows no search example with a filter:
-  the parameter is `search()`'s own (`graphiti.py:1919`). Decided by
-  the user in Subtask 17 (Decision 2), after the benchmark v2 smoke,
-  where the agents used every fact `search()` returned and 32 of
-  native's 36 recency and contradiction failures came through a fact
-  Graphiti had invalidated ("Evidence", below). The block prints each
+  stale fact. Decided by the user in Subtask 17 (Decision 2), after the
+  benchmark v2 smoke, where the agents used every fact `search()`
+  returned and 32 of native's 36 recency and contradiction failures
+  came through a fact Graphiti had invalidated ("Evidence", below,
+  keeps those unfiltered numbers). The block prints each
   fact's sentence only, as the other native conditions print theirs;
   the agents record each fact's `invalid_at` and `expired_at` in their
   diagnostics, and Graphiti's own invalidations stay reported apart
@@ -943,3 +947,30 @@ Graphiti had marked invalid. These invalidations are Graphiti's own,
 recorded per trial (`backend_invalidated_rows`) and per probe
 (`backend_invalidated_in_block`) and credited to no locus
 (`GRAPHITI_BACKEND.md`, "Supersession: two mechanisms, one measured").
+These are the numbers without the filter, the reason for it, and they
+stand as measured: the agents now leave invalidated facts out
+("Validity", above), and the runs with the filter are below
+("With the filter").
+
+### With the filter
+
+From Subtask 17's re-runs at Cerebrum `2b9a776`: the benchmark v2
+smoke's native Graphiti cell (`s17`, `results/bench_v2_smoke_s17`,
+H = 0, the same 30 users and inputs as `s16`) and the pilot_v1 smoke's
+native cells (`pg17n`, `results/pilot_v1_graphiti_native_filter`,
+H = 0 and 2).
+
+- **v2.** Recency passed 30 of 30 and contradiction 26 of 30 (11 and 13
+  without the filter). Graphiti marked about as many rows invalid (54,
+  against 56), but no probe's block held one (132 of 180 did): the
+  filter keeps them out of `search()`'s k. None of the 4 contradiction
+  failures held its stale value in an invalidated fact. A block held 9.3
+  rows (9.4 without the filter); integration 2.07 (2.00).
+- **pilot_v1.** Graphiti invalidated no fact in any of the 60 trials,
+  with the filter or without (a pilot_v1 user's three writes hold no
+  contradiction), so the filter removed nothing. The re-run's native
+  scores differ from Subtask 16's by −0.17 to −0.03, paired over users
+  (every interval holds 0): the cell's run-to-run variation. The
+  kernel − native readings hold: at H = 0 the intervals hold 0, at
+  H = 2 the gaps have the pilot's direction
+  (`results/pilot_v1_graphiti_native_filter/analysis.md`).

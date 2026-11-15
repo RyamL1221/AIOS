@@ -1407,3 +1407,88 @@ up to the budget, so more of a user's store reaches the assistant and
 more stale or forgotten rows could, were they not retired or removed;
 a probe's `cap_bound` and `budget_bound` swap roles. The v1 runs keep
 k = 10 and a 2,000-token budget.
+
+## Amendment 7 (2026-11-15, Subtask 17, after Amendment 6's re-verification)
+
+**The re-verification** (`s17`, Cerebrum `results/bench_v2_smoke_s17`;
+pilot_v2, all 30 users, Qwen, H = 0, judge v2 on the integration probe;
+Cerebrum `2b9a776`, AIOS `612c989`): the six kernel and replicated
+cells under Amendment 6, and native Graphiti with the agents' `invalid_at`
+filter (Subtask 17, Decision 2; `NATIVE_USAGE.md`, "Validity"). 210
+user-trials, 0 failed. Against the k = 10 cells of
+`bench_v2_smoke_a4` (in-house, Mem0) and `bench_v2_smoke_graphiti`
+(Graphiti), on the same users and inputs:
+- **The budget limits the block.** It bound in 156 of 180 probes of
+  each in-house cell, in all 180 of each Mem0 cell, and in 108 (kernel)
+  and 96 (replicated) on Graphiti; the cap bound in 6 probes, all
+  replicated Graphiti. A block held 11.6 rows in-house, 11.6 to 11.8 on
+  Mem0 and 17.3 to 17.5 on Graphiti, against 10 at k = 10 (Amendment 6
+  expected about 15, 12 and 17: in-house rows are longer than its
+  estimate). The functional check's limit criterion holds in every
+  kernel and replicated cell.
+- **Judge-free probes** pass as at k = 10 but for recency on Mem0
+  (kernel 22 to 23 of 30: 3 users gained and 2 lost; replicated 23 to
+  21: 4 gained and 6 lost; exact McNemar p 1.00 and 0.75) and one
+  recency probe of kernel Graphiti (30 to 29).
+- **Integration**, paired over users, k = 30 minus k = 10, mean [95%
+  CI]: in-house −0.30 [−0.66, +0.06] (kernel) and −0.27 [−0.62, +0.09]
+  (replicated); Mem0 −0.17 [−0.46, +0.13] and −0.03 [−0.30, +0.23];
+  Graphiti +0.30 [−0.04, +0.64] and +0.20 [−0.12, +0.52]. No interval
+  excludes 0. On Graphiti the base profile reached the integration
+  block in 29 of 30 probes in both cells (23 and 22 at k = 10). The
+  base rows' presence did not change in-house (both in all 30 blocks at
+  both k) or on Mem0 (30 kernel, 29 replicated, at both k).
+- **Kernel against replicated**: in-house, the blocks are identical in
+  all 180 paired probes and no judge-free outcome differs; on Mem0 6
+  paired outcomes differ (1 at k = 10), on Graphiti 1 (0).
+
+**Native Graphiti with the filter** (same run): recency passed 30 of 30
+and contradiction 26 of 30, against 11 and 13 without it (paired, 19
+users gained and none lost; 14 gained and 1 lost; exact McNemar
+p < 0.001 for both). No block held a fact Graphiti had invalidated (132
+of 180 probes did before); none of the 4 failures held its stale value
+in such a fact (32 of 36 failures did before). Deletion 23 of 30, as
+before (one user gained, one lost); integration 2.07 against 2.00
+(paired +0.07 [−0.21, +0.34]). In the pilot_v1 re-run (`pg17n`,
+`results/pilot_v1_graphiti_native_filter`) Graphiti invalidated no fact
+in any trial, with the filter or without, so the filter had nothing to
+remove there.
+
+**Block size in every table** (no behavior change). Every table of
+`bench_v2_analysis.py` ends with `block_tokens` and `block_rows`: the
+mean block of the row's probes (of its probe type, where the row has
+one), in estimated tokens and in injected rows; the
+kernel-against-replicated table gives them per locus. With k = 30 for
+kernel and replicated and k = 10 for native, a difference between loci
+is read against what each block held.
+
+**The full grid's sensitivity cell** (recorded now, run with the grid).
+The 150-user grid adds one cell: native at k = 30 on Graphiti, beside
+its k = 10 cell, to measure how much of a native gap is the k native
+kept (Amendment 6). Graphiti, because the cap binds hardest there (its
+rows are short: at k = 10 the cap bound in all 540 probes of the
+Graphiti smoke). The harness switch for the native k is the grid's to
+add.
+
+**Cost at k = 30**, from the kernel logs' own timestamps. A probe's
+injection (fetch, selection and block) took 0.13 to 0.14 s against 0.10
+s, and on Graphiti 0.22 s against 0.24; its prompt grew by about 40
+tokens in-house and on Mem0 (kernel 376 to 415, 390 to 433) and by
+116 to 118 on Graphiti (kernel 311 to 429), whose blocks hold the most
+rows;
+the answers are as long (161 to 196 completion tokens, against 164 to
+199). The backend's cost per user did not change ($0.36 on Mem0, $0.41
+to $0.42 on Graphiti). A cell's time per user does not measure k: the in-house
+kernel cell took 98.9 s a user against 77.0 s, and the Mem0 kernel cell
+132.8 s against 94.6 s, because Qwen generated at 89 and 81 ms per
+completion token instead of 67 and 51 (the laptop's speed moved between
+48 and 131 ms per token over the run, in 10-minute windows, with its
+heat and power state). So did
+the in-house replicated cell (99.7 s against 72.8; 92 against 63 ms
+per token, run while the laptop charged from 19%). The cells that ran
+at about their reference's speed took about as long: Mem0 replicated
+99.3 s against 96.4 (55 against 51 ms per token), and the Graphiti
+cells 184.5, 186.8 and 179.4 s against 190.7, 185.9 and 182.3 (kernel,
+replicated, native; 52, 51 and 49 against 56, 50 and 49). Time per user
+is reported with the cell's milliseconds per completion token from now
+on.

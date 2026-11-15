@@ -24,6 +24,10 @@ do not describe this branch.
    code, not per reviewer. This file states what the tests pin and no
    more: where a claim outruns the tests, weaken the claim rather than
    add tests, unless the untested rule affects a reported number.
+7. From Subtask 17 on, nothing goes into `../repo-artifacts/` but
+   through `scripts/archive_artifacts.py` (a driver's `ARCHIVE`, or by
+   hand for a mutation run's outputs), which refuses a copy when any
+   file holds a configured key value or a fragment of one.
 
 ## Subtasks
 
@@ -46,6 +50,7 @@ do not describe this branch.
 | 14 | Accumulating multi-session benchmark (v2) | Done |
 | 15 | Complete deletion and supersession | Done |
 | 16 | Graphiti backend and native condition | Done |
+| 17 | A-MEM backend and native condition | In progress |
 
 ### Subtask 1
 
@@ -2506,6 +2511,98 @@ code.
     network guard had blocked the call). One test is flaky under load
     (known issue 47).
 
+### Subtask 17
+
+A-MEM (agentic notes) as the fourth backend, in all three loci, after
+three decisions on the Graphiti smoke's findings. The A-MEM design and
+results follow below once its code is in.
+
+- **Decisions from the user** (2026-11-12):
+  1. **The budget limits the v2 block.** Kernel and replicated run
+     k 30 with the 300-token budget; native consumers keep k 10
+     (`BENCHMARK_V2.md`, Amendment 6; AIOS `1c575bd`, Cerebrum
+     `7f554d2`). The six kernel and replicated smoke cells were re-run.
+  2. **Native Graphiti uses only the facts it holds true now**, through
+     `search()`'s own `invalid_at` filter: our reading of Graphiti's
+     documented intent, quoted with its README line in
+     `NATIVE_USAGE.md` ("Validity"; Cerebrum `e2d4b1f`, AIOS `649b78d`,
+     `612c989`). Native Graphiti was re-run in v2 and in pilot_v1.
+  3. **No key value in logs or test reports** (AIOS `2c671bd`, Cerebrum
+     `2b9a776`): log records and pytest reports redacted. Extended
+     below.
+- **Re-verification** (`s17`, `results/bench_v2_smoke_s17`; `pg17n`,
+  `results/pilot_v1_graphiti_native_filter`; both at Cerebrum
+  `2b9a776`, AIOS `612c989`). Results in `BENCHMARK_V2.md`,
+  Amendment 7, and `NATIVE_USAGE.md` ("With the filter"):
+  - The budget bound in 96 to 180 of each kernel and replicated cell's
+    180 probes, the cap in 6 (all replicated Graphiti); blocks held
+    11.6 to 11.8 rows in-house and on Mem0 and 17.3 to 17.5 on Graphiti
+    (10 at k = 10). Judge-free pass rates as at k = 10 but for recency
+    on Mem0 (kernel 22 to 23, replicated 23 to 21 of 30) and one
+    kernel Graphiti recency probe. Integration, paired: in-house −0.30
+    and −0.27, Mem0 −0.17 and −0.03, Graphiti +0.30 and +0.20 (kernel
+    and replicated); no 95% interval excludes 0. In-house kernel and
+    replicated blocks are identical in all 180 paired probes.
+  - Native Graphiti with the filter: recency 30 and contradiction 26 of
+    30 (11 and 13 before), no invalidated fact in any block (132 of 180
+    before). In pilot_v1 Graphiti invalidated no fact in any trial, so
+    the filter removed nothing; the re-run moved the native scores by
+    −0.17 to −0.03 (intervals hold 0), and the kernel − native readings
+    hold (H = 0 tie, H = 2 gap in the pilot's direction).
+  - Stopped by the user on 2026-11-12 at 16:03 (the laptop was to shut)
+    in the Mem0 replicated cell, after the in-house and Mem0 kernel
+    cells; resumed at 21:12 as `s17b` (a new prefix, known issue 36),
+    which kept the two finished cells and re-ran the interrupted one
+    whole (its first log kept as
+    `logs/qwen_agent_replicated_mem0_h0.killed_s17.log`).
+  - Every recorded backend call matches the logs one for one (534 per
+    Mem0 cell; 2,195, 2,187 and 2,215 on Graphiti; 541 and 411 in
+    pilot_v1); no traceback, ERROR record or barrier TIMEOUT in any
+    log; no writer failure or retry.
+  - Time per user did not measure k: the in-house and Mem0 kernel cells
+    took 99 and 133 s against 77 and 95 because Qwen generated about
+    1.3 and 1.6 times slower that afternoon (known issue 48). k 30
+    itself costs about 0.03 s of injection and 40 prompt tokens a probe
+    (116 to 118 on Graphiti), and no backend cost.
+- **Key hygiene** (the user's follow-up, 2026-11-12; AIOS `ca8d307`,
+  Cerebrum `e8af5e8`):
+  - **History.** No commit of any branch or tag of either repo, and no
+    tracked file, holds the Azure key, the Neo4j password or the
+    retired Zep key, nor any 8 consecutive characters of the first two
+    (`git log --all -S`, and `git grep` over every revision).
+  - **Fragments.** Decision 3 matched whole values only, but key
+    material leaves in pieces: LiteLLM 1.83.0 logs the Azure key's
+    first 8 characters at DEBUG (`llms/azure/common_utils.py:617-623`),
+    and pytest shortens a long value (a local's repr at 240 characters,
+    an assertion's operands as "head...tail": 25 of a synthetic key's 31
+    characters reached the terminal and the JUnit XML through the
+    committed filter). `redact_text` (both repos' `redact.py`, one rule)
+    now also replaces any 8 consecutive characters of a secret of 20 or
+    more, and a head or tail of 4 to 7 beside a mask (`**`, `...`, `…`).
+    No ordinary text of the 2.4 GB of archives, results and local logs
+    matches it.
+  - **Every sink.** The kernel and the harness redact log records (and
+    their tracebacks) and the standard streams (`print`, uncaught
+    exceptions of every thread, tracebacks written to stderr); both
+    suites' `conftest.py` load the report hooks for tests and for
+    collection errors. Tests leak a synthetic key in a raised exception
+    through each sink (a process's log, a test's terminal report and
+    JUnit XML, an unmocked LiteLLM call, a collection error, LiteLLM's
+    own debug line) and fail with the redaction off.
+  - **Archive.** `scripts/archive_artifacts.py` copies into
+    `repo-artifacts` only when no file (compressed ones read through)
+    holds a configured key or a fragment of one, and copies nothing
+    otherwise (rule 7). The drivers' `ARCHIVE` runs it on the whole
+    OUTROOT at the end. A one-off `--check` of all of `repo-artifacts`
+    (1,256 files) found nothing.
+  - **Local logs** (known issue 49): the only matches anywhere are 118
+    of LiteLLM's 8-character heads in 39 gitignored logs of the other
+    branch's runs.
+- **Reporting** (no behavior change): every v2 analysis table ends with
+  `block_tokens` and `block_rows` (per locus in the contrast table;
+  Cerebrum `f74b1b9`); the full grid adds a native k = 30 cell on
+  Graphiti (Amendment 7).
+
 ## Open decisions
 
 1. **Native Mem0's install.** The agents run the pinned `mem0ai` 2.0.2
@@ -3055,6 +3152,21 @@ These fail on `workshop-postrun` too and are not caused by later work.
     the forget listed no row of the slot (`values=0, deleted=0`), once
     after a Neo4j `DeadlockDetected` retry during the seed writes. Not
     investigated; no benchmark run shares its Neo4j with a test run.
+48. Qwen's generation speed on this laptop moves more than twofold with
+    its heat and power state (48 to 131 ms per completion token in
+    10-minute windows of the `s17` run), so a cell's time per user is
+    not comparable across
+    runs: Subtask 17's in-house and Mem0 kernel cells took 99 and 133 s
+    a user against 77 and 95 with k adding about 0.03 s a probe.
+    Wall times are reported with the cell's milliseconds per
+    completion token (`BENCHMARK_V2.md`, Amendment 7); cost notes use
+    tokens and calls.
+49. 39 gitignored logs in the AIOS checkout (`kernel.log` and files
+    under `logs/`, from the other branch's runs, the newest of
+    2026-10-21) hold 118 of LiteLLM's DEBUG lines "Api Key:" with the
+    Azure key's first 8 characters and asterisks (litellm 1.83.0,
+    `llms/azure/common_utils.py:617-623`). No full value; none of them
+    was archived or committed. The redaction now masks the line.
 
 ## Fixed
 

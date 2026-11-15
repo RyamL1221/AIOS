@@ -367,7 +367,13 @@ cells of pilot_v1, which are lower bounds (`v2_trials`; Cerebrum
 - **Latency.** `add_episode` took a median of 6.3 to 6.5 s a write in
   the v2 smoke (p90 7.1 to 7.6 s, longest 18.3 s), about 116 s per
   user. A v2 user took 182 to 191 s in the Graphiti cells, against 95 to
-  102 s on Mem0 and 73 to 77 s in-house.
+  102 s on Mem0 and 73 to 77 s in-house. These are wall times on one
+  laptop, whose Qwen speed varies with its heat and power state: at
+  k = 30 (`BENCHMARK_V2.md`, Amendment 7) the Graphiti cells took 179 to
+  187 s a user, and the in-house and Mem0 kernel cells 99 and 133 s,
+  with Qwen about 1.3 and 1.6 times slower than in their reference
+  cells. Amendment 7 gives each cell's milliseconds per completion
+  token.
 - **Granularity.** Graphiti stores a statement as about one fact, but
   the base profile as 3 to 5 facts and the base task context as 1 to
   11: about 23 facts per v2 user, of which a block holds k = 10. The v2
