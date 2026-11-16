@@ -98,6 +98,27 @@ def test_a_file_holding_a_key_refuses_the_copy(archive, tmp_path, capsys,
     assert str(source) in named
 
 
+@pytest.mark.parametrize("where, text", [
+    (".env", "AZURE_API_KEY={}\n"),
+    ("aios/config/config.yaml", "api_keys:\n  openai: {}\n"),
+], ids=["env_file", "config_yaml"])
+def test_a_key_kept_only_in_the_checkout_is_looked_for(
+        archive, tmp_path, capsys, where, text):
+    """The checkout's ``.env`` and ``config.yaml`` are read as well as
+    the environment: the drivers source ``.env`` only into the harness's
+    subshell, so at the archive step the Azure key and the Neo4j
+    password are in the file alone unless the shell exports them
+    (Subtask 17)."""
+    other = "file-only-key-9876543210zyxwvu"
+    (tmp_path / "checkout" / where).write_text(text.format(other))
+    source = logs(tmp_path, lambda d: (d / "cells" / "h2.log").write_text(
+        f"api_key={other}\n"))
+    dest = tmp_path / "artifacts" / "run1"
+    assert archive("--dest", dest, source) == 2
+    assert not dest.exists()
+    assert "holds a configured key value" in capsys.readouterr().err
+
+
 def test_sums_list_every_archived_file(archive, tmp_path):
     """``--sums``: SHA256SUMS in the destination, as sha256sum prints
     it, over everything there, an earlier archive's files included."""

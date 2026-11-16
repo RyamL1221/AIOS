@@ -14,10 +14,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tests.modules.memory import test_bench_v2_driver as v2
 
 DRIVER = (Path(__file__).resolve().parents[3] / "scripts"
           / "run_pilot_v1_graphiti.sh")
+# The A-MEM pilot's driver (Subtask 17): this one with BACKEND=amem.
+AMEM_DRIVER = DRIVER.parent / "run_pilot_v1_amem.sh"
 
 # The AIOS venv's python: as the kernel, waits to be stopped; as
 # set_memory_mode.py, records its arguments; as archive_artifacts.py,
@@ -74,19 +78,24 @@ def test_methods_runs_only_the_named_cells(tmp_path):
                      "agent_gra/h2_native_graphiti"]
 
 
-def test_backend_amem_runs_the_amem_cells(tmp_path):
+@pytest.mark.parametrize("driver, backend", [
+    (DRIVER, {"BACKEND": "amem"}),
+    # The A-MEM pilot ran through the wrapper, which sets BACKEND itself.
+    (AMEM_DRIVER, {}),
+], ids=["backend_amem", "amem_driver"])
+def test_backend_amem_runs_the_amem_cells(tmp_path, driver, backend):
     """``BACKEND=amem`` (scripts/run_pilot_v1_amem.sh; Subtask 17) runs
     the pilot on an A-MEM kernel: kernel_shared in ``kamem``, the
     replicated and native A-MEM methods in ``agent_amem``."""
     aios = v2.tree(tmp_path)
     v2.executable(aios / ".venv" / "bin" / "python", RECORDING)
     modes = tmp_path / "modes.log"
-    env = {**os.environ,
+    env = {**{k: v for k, v in os.environ.items() if k != "BACKEND"},
            "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
            "MODELS": "qwen", "TRIALS": "1", "LEVELS": "0",
-           "BACKEND": "amem", "RUN_PREFIX": "t1",
-           "OUTROOT": "results/sim", "MODE_LOG": str(modes)}
-    result = subprocess.run(["bash", str(DRIVER)], cwd=aios, env=env,
+           "RUN_PREFIX": "t1", "OUTROOT": "results/sim",
+           "MODE_LOG": str(modes), **backend}
+    result = subprocess.run(["bash", str(driver)], cwd=aios, env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
@@ -99,6 +108,31 @@ def test_backend_amem_runs_the_amem_cells(tmp_path):
     calls = modes.read_text().splitlines()
     assert all("--provider amem" in c for c in calls), calls
     assert "kernel_memory_ops=0" in result.stdout
+
+
+def test_archive_copies_a_clean_runs_outroot(tmp_path):
+    """``ARCHIVE`` (Subtask 17) on a clean run: the run's OUTROOT, its
+    results as well as its logs, with SHA256SUMS."""
+    aios = v2.tree(tmp_path)
+    v2.executable(aios / ".venv" / "bin" / "python", RECORDING)
+    env = {**os.environ,
+           "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+           "MODELS": "qwen", "TRIALS": "1", "LEVELS": "0",
+           "PHASES": "agent_gra", "RUN_PREFIX": "t1",
+           "OUTROOT": "results/sim", "MODE_LOG": str(tmp_path / "m.log"),
+           **v2.archiving(tmp_path)}
+    result = subprocess.run(["bash", str(DRIVER)], cwd=aios, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "none holds a key value; copied to" in result.stdout
+    copied = tmp_path / "artifacts" / "run1"
+    assert [p.name for p in (copied / "logs").glob("kernel_qwen_agent_gra_*")]
+    cell = (copied / "qwen" / "agent_gra" / "h0_replicated_graphiti"
+            / "results_replicated_graphiti.json")
+    assert cell.is_file()
+    sums = (copied / "SHA256SUMS").read_text()
+    assert ("./qwen/agent_gra/h0_replicated_graphiti/"
+            "results_replicated_graphiti.json") in sums
 
 
 def test_archive_refuses_a_log_holding_a_key(tmp_path):

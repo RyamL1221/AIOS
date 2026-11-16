@@ -250,6 +250,9 @@ FRAGMENT_CASES = {
     "seven": (f"value {LONG[:7]} here", f"value {LONG[:7]} here"),
     "four": (f"the {LONG[:4]} and {LONG[-4:]} words",
              f"the {LONG[:4]} and {LONG[-4:]} words"),
+    # Under 4 characters beside a mask: not matched.
+    "three_masked": (f"api-key: {LONG[:3]}****{LONG[-3:]}",
+                     f"api-key: {LONG[:3]}****{LONG[-3:]}"),
     # A short secret is matched whole only.
     "short_fragment": ("we use shortsec here", "we use shortsec here"),
     "short_whole": ("token=shortsecret1", f"token={redact.REDACTED}"),

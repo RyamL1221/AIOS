@@ -77,11 +77,21 @@ def test_search_is_amems_search_in_its_order_with_similarities(provider):
 
 
 def test_a_write_reports_the_notes_its_evolution_changed(provider, caplog):
-    caplog.set_level("INFO", logger="aios.memory.providers.amem")
+    """Each write logs the notes its evolution changed in the store
+    helper's line, ``A-MEM evolved <n> note(s) at note <id>``, which the
+    readings count once per write, and in the provider's own line,
+    worded apart so that the count sees each kernel write once."""
+    caplog.set_level("INFO")
     write_all(provider)
-    counts = [int(r.getMessage().split(" evolved ")[1].split()[0])
-              for r in caplog.records if " evolved " in r.getMessage()]
+    helper = [r.getMessage() for r in caplog.records
+              if r.getMessage().startswith("A-MEM evolved ")]
+    assert len(helper) == len(WRITES)
+    counts = [int(m.split(" evolved ")[1].split()[0]) for m in helper]
     assert counts[0] == 0 and sum(counts[1:]) > 0
+    own = [r for r in caplog.records
+           if r.name == "aios.memory.providers.amem"
+           and " evolved " in r.getMessage()]
+    assert len(own) == len(WRITES)
 
 
 def test_delete_removes_the_note_from_the_store_and_chroma(provider):
@@ -118,6 +128,11 @@ def test_the_scrub_deletes_notes_whose_derived_text_carries_a_form(
     assert sorted(d["memory_id"] for d in counts["detached"]) == \
         sorted(carriers)
     assert {d["reason"] for d in counts["detached"]} == {"derived"}
+    # Each names its note's owner, so the forget reading counts it in
+    # other_agents only when another agent wrote the note.
+    owners = {i: owner for i, (_, owner, _) in zip(ids, WRITES)}
+    assert {d["memory_id"]: d["owner_agent"]
+            for d in counts["detached"]} == {i: owners[i] for i in carriers}
     remaining = provider.list(USER, 50)
     assert all("bittern-06" not in r.content + store.memories[
         r.memory_id].context for r in remaining)
@@ -129,12 +144,96 @@ def test_the_scrub_reads_the_stale_chroma_copy_too(provider):
     ids = write_all(provider)
     store = provider.stores.store(USER)
     first = store.memories[ids[0]]
-    first.context = "Cleared."  # the note changed; Chroma kept the old
+    # The note changed (its keywords held "Slack" too); Chroma kept the
+    # old copy.
+    first.context, first.keywords, first.tags = "Cleared.", [], []
     copy = store.retriever.collection.get(
         ids=[ids[0]], include=["documents"])["documents"][0]
     assert "Slack" in copy
     counts = provider.scrub_history(USER, ["Slack"], [], [])
     assert ids[0] in {d["memory_id"] for d in counts.get("detached", [])}
+
+
+def test_a_value_split_over_two_tags_is_carried(provider):
+    """Tags and keywords are read as one text, the items joined by
+    spaces: a value split over two adjacent tags is carried
+    (docs/AMEM_BACKEND.md, "The forget on A-MEM")."""
+    first = provider.add(note("I work on the Weather Data API."))
+    stored = provider.stores.store(USER).memories[first]
+    stored.context, stored.keywords = "", []
+    stored.tags = ["Larkspur", "migration"]
+    counts = provider.scrub_history(USER, ["Larkspur migration"], [], [])
+    assert [d["memory_id"] for d in counts.get("detached", [])] == [first]
+
+
+def test_a_failed_search_raises(provider, monkeypatch):
+    """A failed A-MEM search raises, so the kernel reports a
+    ``retrieval_error``, not an empty store; and the provider calls
+    ``search``, not ``search_agentic``, which returns [] on any error
+    (docs/AMEM_BACKEND.md)."""
+    from aios.memory.providers.base import ProviderError
+
+    write_all(provider)
+    store = provider.stores.store(USER)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("Chroma query failed")
+
+    monkeypatch.setattr(store, "search", fail)
+    with pytest.raises(ProviderError):
+        provider.search("Which chat app do I use?", USER, 3)
+
+
+def test_the_provider_reports_what_amem_does(provider):
+    """The write barrier waits for an A-MEM write (two LLM calls);
+    A-MEM's LLM annotates every write, which arms Amendment 8's checks;
+    its search is scored; /memory/config reports the installed commit
+    (docs/AMEM_BACKEND.md)."""
+    from cerebrum.utils import amem as clients
+
+    assert provider.synchronous_commit is False
+    assert provider.backend_extraction is True
+    assert provider.capabilities() == {
+        "scored_search": True, "semantic_search": True,
+        "internal_llm": True, "native_sdk": True}
+    assert provider.versions == clients.versions()
+    assert provider.versions["agentic_memory"]
+
+
+def test_a_write_time_is_amems_own_format():
+    """A-MEM's ``YYYYMMDDHHMM`` (memory_system.py:56), which its
+    evolution prompt shows the LLM as each neighbour's "talk start
+    time"."""
+    from aios.memory.providers.amem import _time
+
+    assert _time("2026-11-12T10:05:00+00:00") == "202611121005"
+
+
+def test_providers_of_one_configuration_share_the_stores():
+    """A replicated cell's agents each build a provider from one
+    configuration (Cerebrum ``ReplicatedMemory``), and the assistant
+    reads what the writers wrote: the providers share the stores.
+    Building them makes no call."""
+    import uuid
+
+    from aios.memory.providers.factory import (ProviderFactory,
+                                               provider_config)
+
+    config = provider_config("amem", {
+        "amem": {"namespace": uuid.uuid4().hex[:8]},
+        "backend_llm": {"provider": "azure_openai", "model": "gpt-4o",
+                        "temperature": 0.0, "seed": 20261105},
+        "embedding": {"provider": "ollama", "model": "nomic-embed-text",
+                      "dimension": 768}})
+    first = ProviderFactory.create("amem", config)
+    second = ProviderFactory.create("amem", config)
+    try:
+        assert first.stores is second.stores
+        first.stores.store(USER)
+        assert second.stores.has(USER)
+    finally:
+        first.close()
+        second.close()
 
 
 def test_a_mark_changes_the_category_alone(provider):

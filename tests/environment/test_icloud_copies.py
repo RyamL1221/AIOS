@@ -24,6 +24,8 @@ def test_a_copy_no_import_loads_is_left_out(tmp_path):
     hook = _ignore_hook()
     assert hook(collection_path=tmp_path / "test_x 2.py",
                 config=None) is True
+    assert hook(collection_path=tmp_path / "test_x 3.py",
+                config=None) is True
     assert hook(collection_path=tmp_path / "test_x.py", config=None) is None
     assert hook(collection_path=tmp_path / "data 2", config=None) is None
 

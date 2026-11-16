@@ -284,7 +284,8 @@ LLM call:
 The scrub reads tags and keywords as one text, the items joined by
 spaces (the JSON list Chroma keeps is read the same way), so a value
 split over two adjacent items ("Larkspur", "migration") counts as
-carried; the tests cover a value in one tag, not one split over two.
+carried; the tests cover a value in one tag and one split over two
+tags of the note in the store.
 
 A deleted note can therefore take another fact with it, as a Mem0 fold
 does; the forget reading counts these deletions in its `derived` column,
