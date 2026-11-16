@@ -209,16 +209,21 @@ def test_a_write_time_is_amems_own_format():
     assert _time("2026-11-12T10:05:00+00:00") == "202611121005"
 
 
-def test_providers_of_one_configuration_share_the_stores():
+def test_providers_of_one_configuration_share_the_stores(monkeypatch):
     """A replicated cell's agents each build a provider from one
     configuration (Cerebrum ``ReplicatedMemory``), and the assistant
     reads what the writers wrote: the providers share the stores.
-    Building them makes no call."""
+    Building them makes no call. (The process's usage logger is not
+    installed: LiteLLM would then call it, not a later test's own.)"""
     import uuid
+
+    from cerebrum.utils import usage
 
     from aios.memory.providers.factory import (ProviderFactory,
                                                provider_config)
 
+    monkeypatch.setattr(usage, "install_litellm_logger",
+                        lambda *args, **kwargs: None)
     config = provider_config("amem", {
         "amem": {"namespace": uuid.uuid4().hex[:8]},
         "backend_llm": {"provider": "azure_openai", "model": "gpt-4o",
