@@ -112,11 +112,23 @@ def test_a_refund_frees_the_slot_and_the_text():
     assert quota.admit(USER, FLOODER, 1, "x") is None
 
 
+class SlowCounts(dict):
+    """A count store that yields between a read and the write after it,
+    so threads interleave inside ``admit`` unless its lock keeps them
+    out (under the GIL alone they would almost never)."""
+
+    def get(self, key, default=None):
+        value = super().get(key, default)
+        time.sleep(0.001)
+        return value
+
+
 def test_concurrent_writes_are_counted_once_each():
     """Eight threads of one writer race 10 writes each: exactly
     ``max_writes`` are admitted."""
     quota = WriteQuota(QuotaSettings(enabled=True, max_writes=4,
                                      dedupe=False))
+    quota._counts = SlowCounts()
     admitted = []
     start = threading.Barrier(8)
 

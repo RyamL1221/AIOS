@@ -89,9 +89,9 @@ writers by topic:
 | calendar | `travel_agent` | conference, offsite city; echoes: home-city flight, pet sitter; contradicts: home city |
 | calendar | `expenses_agent` | lawyer (private); book club, evening course, lunch talk, food bank |
 
-The generator asserts that the map covers every slot, echo and
-contradiction a user of `users_v2` has, and that no writer of the map
-straddles two v2 writers.
+Deriving a user fails when the map lacks one of its slots, echoes or
+contradictions; a test checks that no writer of the map straddles two
+v2 writers.
 
 **N = 6** (5 writers) merges the N = 12 writers within each v2 writer:
 `profile_agent` = all of v2 profile; `task_agent` = task, code review
@@ -224,10 +224,14 @@ ones, so the session's writers, and each writer's writes, run at the
 same time. No event of a v2 session depends on another event of the
 same session (an update, a revoke, a contradiction and an echo always
 come in a later session than the statement they act on), so issuing
-them together changes no fact's history. After the last session's
-writes have all been issued, and before any has completed, the
-consumer's six probes are issued at once, each its own turn (probes
-write nothing since Amendment 3, so their order does not matter). The
+them together changes no fact's history. Once every write task of the
+last session has begun (its request may not have reached the store
+yet), the consumer's six probes are issued at once, each its own turn
+(probes write nothing since Amendment 3, so their order does not
+matter), and each probe's latency and completion are taken in its own
+thread. A writer of the last session that fails after the probes were
+issued fails the user; the probes still finish, and their kernel
+session is closed, before the next trial. The
 tasks are threads, each running in a copy of the issuing context (the
 usage tag and the kernel session are context variables): the agents,
 the SDK and the library are synchronous. The listing after the last
@@ -285,19 +289,23 @@ Per probe:
   the probe's fetch began. The fetch time is the library's (kernel and
   replicated) or the native consumer's own wall clock
   (`fetch_started_at`); the commit time is the write's own
-  (`committed_at`, kernel and replicated) or the harness's completion
-  time (native, an upper bound). `late_rows` are their rows the
-  consumer may see;
-- `timing_miss`: the probe's target statement was a late write;
+  (`committed_at`, kernel and replicated, a forget's included) or the
+  harness's completion time (native, an upper bound);
+- `late_covered`: the late writes that are not uncovered (below), the
+  ones a miss counts: every late write outside the kernel. `late_rows`
+  are their rows the consumer may see;
+- `timing_miss`: the probe's target statement was a covered late
+  write;
 - `stale_read`: a recency or contradiction probe whose newest
-  statement was late and whose block held the stale value;
-- `late_forget`: a deletion probe whose revoke was late and whose block
-  held the revoked value;
+  statement was a covered late write and whose block held the stale
+  value;
+- `late_forget`: a deletion probe whose revoke was a covered late
+  write and whose block held the revoked value;
 - `barrier_wait_ms`, the barrier's outcomes (`DRAINED`, `TIMEOUT`) and,
   in the kernel, `uncovered_writes`: writes whose barrier sequence is
   above the probe's snapshot (accepted after it).
 
-Per trial, `memories_missing_timing`: writers with a late write none of
+Per trial, `memories_missing_timing`: writers with a covered late write none of
 whose rows reached the block. And the probes' judge-free outcomes,
 paired against the sequential trial.
 
@@ -310,7 +318,11 @@ trials overlap. Measured: throughput (users per minute), each probe's
 latency (p50 and p95), and the kernel's share of it, split as the
 diagnostics split it (`barrier_wait_ms`, `search_ms`, `select_ms`,
 `format_ms`, `schedule_wait_ms`, `llm_ms`), with barrier timeouts and
-the cell's milliseconds per completion token.
+the cell's milliseconds per completion token. The server awaits each
+request it serves off its event loop on a pool of its own (64 workers,
+`aios/utils/request_pool.py`), so no request waits for a worker under
+the load mode; the loop's default pool (12 workers here) would have
+held a request for a time no diagnostic covers.
 
 Prediction: the local model bounds throughput (Ollama serves one
 completion at a time here), so users per minute grows little with M and
@@ -364,8 +376,8 @@ every request, and the agent's own code never handles it. For a request
 with a token, the kernel's resolver takes the user from the session,
 rewrites the request's user ids to it, and records when the agent's
 claim (canonicalized) disagreed: `identity_overridden` (the claimed and
-bound ids) in the reply's metadata for a memory request and in the
-injection diagnostics for a chat request, with a WARNING. An unknown or
+bound ids) beside the response in the reply to a memory request and in
+the injection diagnostics for a chat request, with a WARNING. An unknown or
 closed token is refused. A request without one is served as today. The
 harness opens one session per v2 session of a user and one for the
 probes, and closes each after it.
@@ -391,7 +403,11 @@ last user's victim (user 0) shows its misfiled rows only in the store.
 **Measured.** `misfiled_rows`: rows whose `provenance_user` is user i
 stored under the victim's id, from a listing of the victim's partition
 at the end of user i's trial. The victim's id is not added to user i's
-own listings, whose audits would otherwise read the victim's rows.
+own listings, whose audits would otherwise read the victim's rows; each
+session's listing lists user i's rows in the victim's partition apart
+(`misfiled`), and they are credited to the writes that stored them, so
+a backend that extracts (Mem0) does not read the faulty writer's
+writes as writes that stored nothing.
 Also `cross_user_rows` in each probe's block, `identity_overridden`
 counts, and the judge-free outcomes of users i and i + 1 against their
 no-fault trials.
@@ -459,9 +475,11 @@ replicated agents copy it like every pipeline setting.
 
 **Predictions.**
 - **Kernel:** the quota sits in the one write path every writer uses. The
-  flooder stores its own events (at most 4 a session, all accepted) and
-  at most `4 − (its events)` flood rows a session; duplicates that
-  normalize to a stored text are rejected. The block changes little
+  flooder's own write events (at most 4 a turn) are all accepted, and
+  at most `4 − (its write events)` of its flood writes a turn: a revoke
+  is no write, and the quota bounds writes, not rows (a Mem0 write can
+  leave none or several). Duplicates that normalize to a stored text
+  are rejected. The block changes little
   from the no-fault trial, and no reference writer's write is ever
   rejected (`quota_rejected` only on the flooder's).
 - **Replicated:** the same library, but the quota runs in the writer's
@@ -534,9 +552,9 @@ a detector.
    waiting, and runs them as one batch, in arrival order; there is no
    fixed interval. Requests that arrive while a batch runs form the
    next batch, as before. The memory, storage and tool threads already
-   block on their queues. `stop()` wakes every thread at once. Tests:
-   arrival order, a request queued while a batch runs, no idle wait,
-   prompt stop. The equivalence test runs unchanged. And a 10-user
+   block on their queues. After `stop()` an idle thread ends within its
+   queue's 0.1 s get timeout. Tests: arrival order, a request queued
+   while a batch runs, no idle wait, prompt stop. The equivalence test runs unchanged. And a 10-user
    before/after on `pilot_v1` (kernel in-house, Qwen, judged): the
    blocks and answers must be identical; the scores are compared, and a
    score that differs on an identical answer is the judge's noise
@@ -547,8 +565,8 @@ a detector.
    Tests: two memory requests in flight at once both complete, and a
    chat request accepted while a write is in flight waits for it.
 5. **Diagnostics.** The library's retrieval diagnostics gain
-   `fetch_started_at` and `barrier_snapshot`; a write's outcome gains
-   `committed_at` (and, in the kernel, the reply its `barrier_seq`);
+   `fetch_started_at` and `barrier_snapshot`; a write's outcome and a
+   forget's report gain `committed_at` and `barrier_seq`;
    `quota_rejected` and `identity_overridden` as above.
 
 Any change to a module of `aios/memory/pipeline/` changes
@@ -594,12 +612,13 @@ guarantees them:
   and 12 in every locus, and the kernel and replicated blocks are
   byte-equal across N;
 - under `concurrent`, no kernel probe has a late write that the kernel
-  accepted before it;
+  accepted before it (`late_covered` is empty);
 - under `wrong_user`, no kernel row is misfiled and every faulty
   kernel request records `identity_overridden`;
-- under the floods, the kernel stores at most `4 − (its events)` flood
-  rows per flooder session, and no reference writer's write is
-  rejected.
+- under the floods, the kernel accepts at most `4 − (its write events)`
+  flood writes per flooding writer turn (`flood_sessions_over_bound`
+  is 0; the bound is `max_writes`, 4, less the turn's accepted write
+  events), and no reference writer's write is rejected.
 
 **Smoke** (judge-free, Qwen, all 30 users at N = 6, in-house only, H =
 0): the sequential no-fault reference, `concurrent`, `flood10` and

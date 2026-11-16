@@ -24,6 +24,7 @@ from fastapi import HTTPException
 from aios.memory.note import MemoryNote
 from aios.memory.pipeline import LIST_TOP_K
 from aios.memory.providers.base import Candidate
+from aios.utils.request_pool import off_loop
 from tests.modules.memory.test_list_and_delete import (
     USER,
     WRITER,
@@ -69,7 +70,8 @@ def audit_handler(active_components):
                 if getattr(n, "name", None) == "get_memory_audit")
     node.decorator_list = []  # @app.get("/memory/audit")
     namespace = {"asyncio": asyncio, "HTTPException": HTTPException,
-                 "active_components": active_components}
+                 "active_components": active_components,
+                 "off_loop": off_loop}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(LAUNCH),
                  "exec"), namespace)
     return namespace["get_memory_audit"]

@@ -24,6 +24,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 import typing
 from contextlib import closing, contextmanager
 from unittest.mock import MagicMock, patch
@@ -334,7 +335,10 @@ def test_forget_memory_through_the_kernel(entry):
         result = answered(entry, executor, ASSISTANT, forget_query())
     response = result["response"]
     assert isinstance(response, MemoryResponse) and response.success
-    assert response.metadata == expected_report(seeded, store.COUNTS)
+    report = dict(response.metadata)
+    assert isinstance(report.pop("committed_at"), float)  # Subtask 18
+    assert isinstance(report.pop("barrier_seq"), int)
+    assert report == expected_report(seeded, store.COUNTS)
     assert store.scrubs == [(USER, [VALUE, ALIAS])]
     assert stored(manager) == [CITY]
     assert stored(manager, "bob") == [STATEMENT]
@@ -704,6 +708,20 @@ def test_a_write_reply_reports_its_outcome():
     assert outcome == {
         "swept": [], "retired": [], "lifted": [], "suppressed": False,
     }
+
+
+def test_a_forget_reply_reports_its_commit():
+    """Since Subtask 18 a forget's report names, as a write's outcome
+    does, the barrier sequence the forget held (the one acceptance
+    stamped) and when its deletes were done."""
+    manager = kernel()
+    seed(manager)
+    before = time.time()
+    response = forget_through(manager)
+    assert response.success
+    report = response.metadata
+    assert isinstance(report["barrier_seq"], int) and report["barrier_seq"]
+    assert before <= report["committed_at"] <= time.time()
 
 
 @FORGOTTEN

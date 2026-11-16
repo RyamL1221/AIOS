@@ -23,6 +23,7 @@ from aios.syscall.syscall import useSysCall
 from aios.config.config_manager import config
 from aios.memory.context_injector import ContextInjector
 from aios.memory.pipeline import PIPELINE_VERSION, UnknownSession
+from aios.utils.request_pool import off_loop
 from aios.memory.conversation_extractor import ConversationExtractor
 from aios.utils.redact import (
     install_redaction,
@@ -659,7 +660,7 @@ async def get_memory_audit(user_id: str):
             status_code=400, detail="Memory manager not initialized"
         )
     try:
-        return await asyncio.to_thread(manager.audit_rows, user_id)
+        return await off_loop(manager.audit_rows, user_id)
     except Exception as e:  # an audit that fails must say so
         raise HTTPException(
             status_code=500, detail=f"{type(e).__name__}: {e}"
@@ -684,9 +685,9 @@ async def get_memory_cost(user_id: str, wait: float = 5.0):
     if manager is not None:  # usage is tagged with canonical ids
         user_id = manager.canonical_user_id(user_id)
         barrier_wait = (
-            await asyncio.to_thread(manager.await_writes, user_id)
+            await off_loop(manager.await_writes, user_id)
         ).name
-    records = await asyncio.to_thread(
+    records = await off_loop(
         backend_usage.ACCUMULATOR.take, user_id, wait
     )
     return {
@@ -982,7 +983,7 @@ async def handle_query(request: QueryRequest):
             query._request_provenance_event = getattr(
                 request.query_data, "provenance_event", None
             )
-            result_dict = await asyncio.to_thread(
+            result_dict = await off_loop(
                 execute_request, # The method to call
                 request.agent_name,               # First arg to execute_request
                 query                # Second arg to execute_request
@@ -1032,7 +1033,7 @@ async def handle_query(request: QueryRequest):
             wait = accept_memory_request(
                 request.agent_name, query, request.session_token
             )
-            result = await asyncio.to_thread(wait)
+            result = await off_loop(wait)
             if overridden:
                 result["identity_overridden"] = overridden
             return result

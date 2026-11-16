@@ -15,6 +15,7 @@ from pathlib import Path
 from cerebrum.utils import usage
 
 from aios.memory.conversation_extractor import ConversationExtractor
+from aios.utils.request_pool import off_loop
 from tests.modules.memory.test_list_and_delete import (
     ASSISTANT,
     USER,
@@ -35,7 +36,8 @@ def cost_handler(active_components):
                 if getattr(n, "name", None) == "get_memory_cost")
     node.decorator_list = []  # @app.get("/memory/cost")
     namespace = {"asyncio": asyncio, "backend_usage": usage,
-                 "active_components": active_components}
+                 "active_components": active_components,
+                 "off_loop": off_loop}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(LAUNCH),
                  "exec"), namespace)
     return namespace["get_memory_cost"]

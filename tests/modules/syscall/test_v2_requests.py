@@ -176,6 +176,7 @@ def launch_handler(execute_request, llm_query=LLMQuery, manager=None,
     ``accept_memory_request`` for the executor's memory path.
     """
     from aios.memory.pipeline import UnknownSession
+    from aios.utils.request_pool import off_loop
 
     if accept_memory_request is None:
         def accept_memory_request(agent_name, query, session_token=None):
@@ -206,6 +207,7 @@ def launch_handler(execute_request, llm_query=LLMQuery, manager=None,
         "UnknownSession": UnknownSession,
         "MemoryResponse": MemoryResponse,
         "accept_memory_request": accept_memory_request,
+        "off_loop": off_loop,
     }
     module = ast.Module(body=nodes, type_ignores=[])
     exec(compile(module, str(LAUNCH), "exec"), namespace)

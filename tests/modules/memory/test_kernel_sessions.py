@@ -19,7 +19,14 @@ from cerebrum.memory.apis import MemoryQuery
 
 from aios.memory.context_injector import ContextInjector
 from aios.memory.manager import MemoryManager
-from aios.memory.pipeline import SessionRegistry, UnknownSession
+from aios.memory.pipeline import (
+    MemoryPipeline,
+    PipelineSettings,
+    SessionRegistry,
+    UnknownSession,
+    note_from_request,
+)
+from aios.memory.providers.in_house import InHouseProvider
 from aios.scheduler.fifo_scheduler import FIFOScheduler
 from aios.syscall.memory import MemorySyscall
 from aios.syscall.syscall import SyscallExecutor
@@ -266,6 +273,39 @@ def test_a_chat_request_reads_the_sessions_user_and_records_the_claim():
     }
 
 
+def test_a_chat_request_takes_its_barrier_snapshot_on_arrival():
+    """The handler takes a chat request's barrier snapshot when it
+    accepts the request (Subtask 18): it covers the user's writes
+    accepted before, and not one accepted while the request waited to
+    be served."""
+
+    class AsyncCommit(InHouseProvider):
+        synchronous_commit = False  # a store a read waits for
+
+    manager = kernel()
+    manager.provider = AsyncCommit()
+    before = manager.barrier.acquire(USER)  # a write still in flight
+    seen = []
+
+    def execute_request(agent_name, query):
+        # A write the kernel accepts after the chat arrived.
+        seen.append((query, manager.barrier.acquire(USER)))
+        return {"response": "ok"}
+
+    QueryRequest, handle_query = launch_handler(execute_request,
+                                                manager=manager)
+    body = {
+        "agent_name": "assistant_agent", "query_type": "llm",
+        "query_data": LLMQuery(
+            messages=[{"role": "user", "content": "which airline?"}],
+            action_type="chat",
+        ).model_dump() | {"user_id": USER},
+    }
+    asyncio.run(handle_query(QueryRequest(**body)))
+    ((query, after),) = seen
+    assert before <= query._barrier_snapshot < after
+
+
 def test_a_chat_request_with_an_unknown_session_is_refused():
     from fastapi import HTTPException
 
@@ -286,27 +326,65 @@ def test_a_chat_request_with_an_unknown_session_is_refused():
     assert raised.value.status_code == 400
 
 
-def test_a_bound_injection_equals_the_injection_for_the_sessions_user():
-    """The equivalence test's property under a session: the block the
-    kernel injects for a request bound to user u is the block for u."""
-    manager = kernel()
-    injector = ContextInjector(manager, MEMORY_CONFIG)
-    for user, content in ((USER, "I fly with Wizzair."),
-                          (VICTIM, "I fly with Norse.")):
-        syscall = MemorySyscall(WRITER, write_query(user, content))
-        manager.stamp_syscall(syscall)
-        assert manager.address_request(syscall).success
-    token = manager.open_session(USER)
-    bound, _ = manager.bind_chat_user(VICTIM, token)
+def test_bound_requests_equal_the_library_for_the_sessions_user():
+    """The equivalence test's property under a session (Subtask 18):
+    each user's writes and chat, every one claiming the next user's id
+    but sent in the user's kernel session, leave the kernel the stored
+    rows and the prompts a library builds from the same writes made
+    with the user's own id."""
+    from tests.modules.memory.test_pipeline_library import (
+        MEMORY_CONFIG as LIBRARY_CONFIG,
+        query_text,
+        seeded_requests,
+        stored_rows,
+        without_timings,
+    )
 
-    def block(user_id):
-        query = LLMQuery(
-            messages=[{"role": "user", "content": "which airline?"}],
-            action_type="chat",
-        )
-        _, diagnostics = injector.inject("assistant_agent", query,
-                                         user_id=user_id)
-        return diagnostics["block_text"]
+    with patch("aios.memory.manager.global_config") as config:
+        config.get_memory_config.return_value = LIBRARY_CONFIG
+        config.get_storage_config.return_value = {}
+        manager = MemoryManager()
+    injector = ContextInjector(manager, LIBRARY_CONFIG)
+    store = InHouseProvider()
+    store.initialize({})
+    library = MemoryPipeline(store, PipelineSettings.from_memory_config(
+        manager.pipeline_settings().as_dict()
+    ))
+    users = [f"user{seed:02d}" for seed in range(20)]
+    tokens = {user: manager.open_session(user) for user in users}
+    claimed = {user: users[(i + 1) % 20] for i, user in enumerate(users)}
+    overridden = 0
+    for seed, user in enumerate(users):
+        for agent, params in seeded_requests(seed):
+            right = dict(params, metadata=dict(params["metadata"],
+                                               user_id=user))
+            library.write(agent, None, note_from_request(right))
+            wrong = dict(params, metadata=dict(params["metadata"],
+                                               user_id=claimed[user]))
+            query = MemoryQuery(operation_type="add_memory", params=wrong)
+            overridden += bool(manager.bind_session(query, tokens[user]))
+            syscall = MemorySyscall(agent, query)
+            manager.stamp_syscall(syscall)
+            assert manager.address_request(syscall).success
+    assert overridden == sum(len(seeded_requests(s)) for s in range(20))
+    for seed, user in enumerate(users):
+        assert stored_rows(manager.provider, user) == stored_rows(store, user)
+        messages = [{"role": "user", "content": query_text(seed)}]
+        bound, override = manager.bind_chat_user(claimed[user], tokens[user])
+        assert (bound, override) == (
+            user, {"claimed": claimed[user], "bound": user})
+        query = LLMQuery(messages=list(messages), action_type="chat")
+        query, kernel_diag = injector.inject("assistant_agent", query,
+                                             user_id=bound)
+        library_messages, library_diag = library.inject(
+            "assistant_agent", list(messages), user_id=user)
+        assert query.messages == library_messages
 
-    assert block(bound) == block(USER)
-    assert "Wizzair" in block(bound) and "Norse" not in block(bound)
+        def same(diagnostics):  # two stores: their row ids differ
+            out = without_timings(diagnostics)
+            out["injected_memories"] = [
+                {k: v for k, v in m.items() if k != "memory_id"}
+                for m in out["injected_memories"]]
+            return out
+        assert same(kernel_diag) == same(library_diag)
+        assert kernel_diag["injected_count"]

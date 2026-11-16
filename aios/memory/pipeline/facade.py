@@ -534,7 +534,9 @@ class MemoryPipeline:
         accepted); without it the forget acquires its own. It first
         waits for the user's writes accepted before it: those through
         ``barrier_seq - 1``, never a fresh snapshot, which would hold
-        its own sequence and wait on itself until the timeout.
+        its own sequence and wait on itself until the timeout. The
+        report also names that sequence (``barrier_seq``) and when the
+        deletes were done (``committed_at``).
         """
         scope = self.resolver.canonical(user_id) if user_id else None
         if barrier_seq is None:
@@ -561,6 +563,10 @@ class MemoryPipeline:
                     self.provider, self.tombstones, scope, agent_name,
                     fact_key,
                 )
+            # As a write's outcome: the barrier sequence the forget held
+            # and when its deletes were done (Subtask 18).
+            report["barrier_seq"] = barrier_seq or 0
+            report["committed_at"] = time.time()
             success = True
             return report
         finally:
