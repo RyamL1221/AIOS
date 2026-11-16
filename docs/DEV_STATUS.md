@@ -50,7 +50,7 @@ do not describe this branch.
 | 14 | Accumulating multi-session benchmark (v2) | Done |
 | 15 | Complete deletion and supersession | Done |
 | 16 | Graphiti backend and native condition | Done |
-| 17 | A-MEM backend and native condition | In progress |
+| 17 | A-MEM backend and native condition | Done |
 
 ### Subtask 1
 
@@ -2834,13 +2834,154 @@ three decisions on the Graphiti smoke's findings. Design:
     nothing, and the trial passed its judge-free probes.
   - No traceback, WARNING record or barrier TIMEOUT in any log; no
     writer failure or retry; no write without a note.
+- **Mutation run** (rule 6, once, on the final code: AIOS `1492954`,
+  Cerebrum `28fe584`). Five module owners (the AIOS A-MEM provider and
+  library; the AIOS key hygiene, archive and drivers; Cerebrum's A-MEM
+  clients and native and replicated agents; its analysis tools; its
+  redaction and collection hook) wrote 240 mutants of rules the
+  documents state and ran each on a scratch copy against their area's
+  tests, with Ollama, behind a loopback-only network guard; 115 were
+  killed. Each survivor was then rerun against the full suite of every
+  repo whose tests load its file (the AIOS library's and
+  `cerebrum/utils/amem.py`: both), and native Graphiti's three, whose
+  tests skip in a copy without Neo4j's password, with the local Neo4j.
+  Of the 125:
+  - 5 are killed by those reruns: the stores' `has` by an AIOS test
+    (`test_amem_provider.py`); native Graphiti's `invalid_at` filter
+    (Decision 2) by `test_native_graphiti.py`; and a second install of
+    Cerebrum's redaction keeping the old values, only through the
+    session's order (`test_benchmark_metrics.py` runs
+    `run_evaluation.main()`, which installs it).
+  - 2 are equivalent: a note in a user's store always names that user
+    (the stores are per user, by digest); building a replicated
+    provider's stores installs the usage logger before any A-MEM call.
+  - 53 now fail a test (AIOS `6333719`, Cerebrum `062d12c`), each
+    checked against its mutant on a clean copy: those that could change
+    a reported number or a committed report's text where the records
+    cannot show the rule held, and the few the same tests catch with
+    them (A-MEM's `scored_search` and `versions`, fence stripping, the
+    archive reading `config.yaml`, the pilot archive's SHA256SUMS):
+    - the A-MEM provider: providers of one configuration share the
+      stores (every replicated A-MEM number); `synchronous_commit`
+      false (pilot_v1's kernel cost reads wait for the background
+      turn), `backend_extraction` (Amendment 8's checks), its
+      capabilities and `versions`; its log line worded apart from the
+      helper's counted one (the notes-changed counts); the scrub
+      reading the stale Chroma copy (its test had passed without it:
+      the note's keywords still held the value) and tags joined by
+      spaces; a `derived` deletion's owner; a failed search raising,
+      through `search`, not `search_agentic` (which returns [] on an
+      error); A-MEM's time format, which its evolution prompt shows;
+      the factory's A-MEM config;
+    - A-MEM's clients and agents: the pinned model's LiteLLM route,
+      temperature 0 whatever A-MEM asks, the seed, `response_format`,
+      A-MEM's system message, fences stripped, and the usage logger (a
+      native process installs it nowhere else); one set of stores per
+      configuration and namespace; the pinned embedder (not Chroma's
+      default) and consolidation every 100 evolutions; the
+      notes-changed count (changed notes only, tags alone included)
+      and its INFO line; collection names keeping the id's digest
+      (pilot_v1's V2 agents opened stores of their own); replicated
+      A-MEM on the A-MEM provider (on in-house's its cells would run
+      with in-house's numbers, and nothing would fail); native A-MEM's
+      time format; a V4 native consumer's own k (pilot_v1's H = 2
+      native cells, `pg17n`'s included);
+    - the analysis: the integration readings' block columns over the
+      integration probes (every `integration_blocks` and
+      `integration_base_rows` row of the three v2 reports), a deletion
+      row split by echo over its split's probes (28 of f17's 98 rows),
+      `identical blocks` over all probes, A-MEM in the contrast (f17's
+      and s17a's A-MEM rows), the contrast table's per-locus block
+      columns, the note naming the integration probes, no Graphiti
+      scrub criterion and no Mem0 scrub count from A-MEM cells (f17's
+      13 criteria and "0 of 0 forgets"), and `derived` kept out of
+      `same_writer` (its test had passed under any rule: the fixture
+      put the writer on the event, which `_events` overwrites with the
+      session's); the pilot report's `--backend amem` (without it
+      `pilot_v1_amem`'s gaps and readings are empty);
+    - the drivers and the archive: `run_pilot_v1_amem.sh` setting
+      `BACKEND=amem` (the pilot ran through it); the pilot driver's
+      archive copying the whole OUTROOT with SHA256SUMS (pa17's 15
+      files); a key kept only in the checkout's `.env` or `config.yaml`
+      looked for (the drivers source `.env` only into the harness's
+      subshell); a head or tail under 4 characters beside a mask not
+      key material; a `test_x 3.py` copy not collected (the suite
+      counts).
+  - 65 hold in the code (their owners checked each) but no test of
+    either repo pins them, so this file claims no more. None changes a
+    reported number: the condition never arises in the runs, a broken
+    rule would fail the trial, the run or the kernel's start, or the
+    records show it held:
+    - the A-MEM provider: a failed write's Chroma copy deleted (only
+      consolidation, every 100 evolutions, fails after the Chroma
+      add); the per-user lock (memory syscalls are serial); launch's
+      redaction import (the kernel would fail at import); the
+      package's re-export (nothing imports it from there);
+      `PIPELINE_VERSION` leaving out every non-module name (no such
+      file);
+    - A-MEM's clients and agents: native v2 rows' `agent_id` (every
+      native v2 trial would fail); embedding counts (no report gives
+      embedding cost); the stores' and native search's locks (one call
+      at a time per user); native stores apart from the provider's
+      (cells run in separate processes); Chroma's telemetry; the
+      cleanup at exit (the run's mutant left 35 `aios_amem_*` stores
+      in the system's temporary directory); consolidation's delete
+      (never reached); the 768-dimension check (the pinned model's
+      vectors are 768); the default temperature (every config sets 0);
+      the conversation
+      row's `agent_id` (v2 probes store nothing); listing in write
+      order (revokes and audits do not depend on it);
+    - the drivers' guards: the agent phases' memory-ops check reading
+      the backend's logs, the `_ns` zero-ops list and `--provider` on
+      the kernel phases (every agent-phase kernel log of f17, pa17 and
+      s17a holds thousands of lines and no memory operation; every
+      A-MEM kernel cell recorded `provider: amem`); an existing ARCHIVE
+      stopping the pilot driver before the run (the archive refuses
+      the copy at the end);
+    - the archive, the redaction and collection (17 in AIOS, 23 in
+      Cerebrum): secret names beyond the tested ones; values of exactly
+      8, or 20 to 24, characters; keys in config lists; the fragment
+      rule's edges (8-character runs away from a mask, the last 8, `**`,
+      `...` and `…`, 7-character ends, a masked tail without its head,
+      repeated values and fragments); two reads' overlap; compressed
+      files other than gzip, and a zip's later members; `exc_info`
+      dropped; a record whose arguments do not fit; values replaced
+      longest first; the stream lock, partial lines and the bounded
+      wait at exit; the report hooks' reads of the environment, `.env`
+      and `config.yaml`; Cerebrum's hook leaving out every non-module
+      name (its 10 such names hold a space). The six Subtask 17
+      archives' 54 logs hold no `<redacted>` marker and no traceback,
+      so the redaction replaced nothing in them and no archive
+      refused; `repo-artifacts` holds no compressed file;
+    - the analysis: `_block_size`'s None for no probe (no report has an
+      empty set), the limit criterion with no cell (f17 has them), the
+      v2 pipeline's A-MEM backend check (a run would fail).
+
+  Three kills are conditional: the redaction install above; the
+  environment default of `secret_values`, killed only when the
+  environment holds a secret-named variable; and an A-MEM store
+  mutant killed only in the full run, by an earlier test's Chroma
+  client. A first rerun of the new tests read a restored module from
+  its stale bytecode (a mutant restored within the second at the same
+  size); the reruns delete the caches and write none. The mutants,
+  their results and the reruns are in `repo-artifacts/AIOS/mutation17/`
+  (without the repos' copies).
 - **Suites** at AIOS `34833e7` and Cerebrum `1d7d99f`: AIOS 754 passed
   and the 7 known errors (761 collected; 750 at `13708ee`, so the 11
   new tests); Cerebrum 1,162 passed, 4 skipped, the 19 known failures
   and 2 errors by name, and `test_summary_props.py`'s
   `test_delta_equals_arithmetic_difference` on Hypothesis's deadline
   (273.65 ms against 200; alone it passed 3 of 3; known issue 35);
-  1,188 collected, 1,183 at `56f0573` (the 5 new tests).
+  1,188 collected, 1,183 at `56f0573` (the 5 new tests). At the end
+  (AIOS `ec3c467`, Cerebrum `062d12c`): AIOS 764 passed and the 7 known
+  errors (771 collected: the mutation run's 10 tests); Cerebrum 1,173
+  passed, 4 skipped, the 19 known failures and 2 errors by name, both
+  of known issue 35's deadline tests passing (1,198 collected: its 10).
+  In the first AIOS run, one of the new tests, building A-MEM providers
+  through the real LLM controller, had installed the process's LiteLLM
+  usage logger, and `test_cost_instrumentation.py`'s own, installed
+  later, then recorded nothing; the test patches the install out
+  (`ec3c467`).
 
 ## Open decisions
 
@@ -2942,7 +3083,10 @@ These fail on `workshop-postrun` too and are not caused by later work.
   Subtask 17's review fixes (AIOS `34833e7`, Cerebrum `1d7d99f`; iCloud's
   copies no longer collected: AIOS 754 passed, the 7 errors; Cerebrum
   1162 passed, 4 skipped, the same 19 failures and 2 errors, by name,
-  and one of known issue 35's two deadline tests). The names
+  and one of known issue 35's two deadline tests) and the end of
+  Subtask 17 (AIOS `ec3c467`, Cerebrum `062d12c`: AIOS 764 passed, the
+  7 errors; Cerebrum 1173 passed, 4 skipped, the same 19 failures and 2
+  errors, by name). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -3434,6 +3578,20 @@ These fail on `workshop-postrun` too and are not caused by later work.
     characters appear, and the archive would refuse any file holding
     them; a list under `api_keys.<provider>` is not read. config.yaml
     holds neither today (every value under `api_keys` is empty).
+51. A process of the AIOS venv loads `AIOS/.env` when it imports
+    LiteLLM (litellm 1.83.0, `litellm/__init__.py:19-20`: `load_dotenv()`
+    unless `LITELLM_MODE` is set to something other than `DEV`; the
+    search walks up from LiteLLM's package to the checkout). So the
+    kernel, the AIOS suite and the mutation runs' AIOS test processes
+    hold the Azure key and the Neo4j password in their environment,
+    whatever their caller removed; and Cerebrum's
+    `tests/agents/_graphiti_script.load_env` copies every line of
+    `AIOS/.env` into the Cerebrum suite's (its docstring says `NEO4J_*`
+    only). Reports are redacted and archives scanned for these values,
+    and the mutation runs' network guard let no call out (Subtask 17);
+    a test that called Azure unmocked elsewhere would reach it with the
+    real key (Cerebrum's guard blocks only the kernel).
+    `LITELLM_MODE=PRODUCTION` stops the load.
 
 ## Fixed
 
