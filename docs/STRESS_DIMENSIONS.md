@@ -424,10 +424,20 @@ the utterance re-cased or re-punctuated, which normalizes to the
 original, and the utterance with a prefix such as "Again:" or
 "Reminder:", which does not), even-numbered ones are irrelevant notes
 from a fixed list. A near-duplicate carries its source event's metadata
-(`fact_key`, `session`, `memory_type`), as a retried write would; an
-irrelevant note carries none of the fact fields. Each flood row's
-`provenance_event` is its source event's id with `#flood<k>`, so it is
-never mistaken for the event's own write.
+(`fact_key`, `session`, `memory_type`, `provenance_event`), as a
+retried write would; an irrelevant note carries none of the fact
+fields and the `provenance_event` `flood:<session>:<k>`. Every flood
+row carries `metadata.flood` (k), by which the harness counts it and
+keeps it out of its source event's stored rows.
+
+(Corrected before the code, 2026-11-16: this paragraph first gave each
+flood row the provenance event `<event>#flood<k>`. A copy with a new
+event is a new statement of its slot, so under supersession each copy
+would retire the slot's earlier rows, the original included, and the
+flood would be absorbed by supersession in the kernel and replicated
+loci alike instead of testing the quota. A retried write keeps its
+event, and the library never lets a write retire rows of its own
+event.)
 
 **The quota.** A new library stage, `WriteQuota`, bounds what one writer
 stores per user per session:
@@ -462,8 +472,9 @@ replicated agents copy it like every pipeline setting.
   probes about those facts, and long base rows lose budget to them, so
   `profile_facts_in_block` and the recall of other writers' facts fall
   in the integration probe and in probes near the flooder's topics.
-  Supersession retires near-duplicates of a statement that a later one
-  replaces (they carry its `fact_key`), so recency is not hurt by them.
+  Supersession retires near-duplicates of a statement when a later
+  statement of the slot replaces it (they carry its `fact_key` and its
+  event), so recency is not hurt by them.
 - **Native:** no quota, no dedupe and no supersession: all F rows a
   session are stored, the native fetch of k = 10 fills with flood rows
   for probes near the flooder's topics, and a near-duplicate of a fact
