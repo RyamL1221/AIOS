@@ -1457,14 +1457,18 @@ in any trial, with the filter or without, so the filter had nothing to
 remove there.
 
 **Block size in every table** (no behavior change). Every table of
-`bench_v2_analysis.py` ends with `block_tokens` and `block_rows`: the
-mean block, in estimated tokens and in injected rows, of the row's probe
-type in its cell where the row names one, else of the cell's probes (its
-integration probes in the integration readings), so a row that splits a
-cell's probes further (a slot, a carrier, a count of base rows) shows its
-cell's mean; the kernel-against-replicated table gives them per locus. With k = 30 for
-kernel and replicated and k = 10 for native, a difference between loci
-is read against what each block held.
+`bench_v2_analysis.py` but the criteria ends with `block_tokens` and
+`block_rows`: the mean block, in estimated tokens and in injected rows,
+of a set of the row's cell's probes. In the pass matrix, the row's own
+probes (a deletion row split by echo, its split's); in the
+kernel-against-replicated table, the row's probe type, per locus (all
+probes for `identical blocks`); in the integration table and the
+integration readings, the cell's integration probes; elsewhere, the
+row's probe type where the row names one, else all of the cell's
+probes. A reading's row that splits a cell's probes further (a slot, a
+carrier, a count of base rows) shows its set's mean, not its own. With
+k = 30 for kernel and replicated and k = 10 for native, a difference
+between loci is read against what each block held.
 
 **The full grid's sensitivity cell** (recorded now, run with the grid).
 The 150-user grid adds one cell: native at k = 30 on Graphiti, beside

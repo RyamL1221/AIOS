@@ -121,8 +121,15 @@ conversation turn as its "User:" and "Assistant:" lines). A write that
 returns has stored its note. A-MEM catches its LLM's errors in both
 steps (`:233-235`, `:746-753`): a failed analysis leaves the defaults, a
 failed evolution keeps what it applied before the error (a
-`strengthen`'s links and tags), each with a printed or logged line, and
-the note is still stored.
+`strengthen`'s links and tags, an `update_neighbor`'s rewrites of the
+neighbours shown), each with a printed or logged line, and the note is
+still stored. If the write itself raises (A-MEM puts the note in its
+dict before it embeds it), the provider removes the notes the call
+added, under the user's lock. That covers the provider's add only: an
+`update` that fails on its re-add (A-MEM deletes, then re-adds,
+`:423-424`) leaves the note listed and unsearchable, a failed write's
+evolution keeps its edits to neighbours, and native writes have no
+cleanup. No run recorded a failed write.
 
 Every locus writes through one helper (Cerebrum `cerebrum/utils/amem.py`,
 `add_note`), which logs, for each write, `A-MEM evolved <n> note(s) at
@@ -130,7 +137,10 @@ note <id>`: the existing notes whose tags, context or links its
 evolution changed. The kernel's provider logs a line of its own for the
 same write (`A-MEM write <id> of <user> evolved <n> note(s)`), which is
 not counted. "Notes changed per write" is counted from the helper's
-lines in each cell's logs; the results files do not record it.
+lines with a grep of the logs, which no harness code does: an agent
+cell's lines are in its own log; the kernel logs a whole phase, so a
+kernel cell's lines are those between its start and done lines in the
+driver's log. The results files do not record it.
 
 ## Metadata: in `category`
 
@@ -271,6 +281,11 @@ LLM call:
 - `messages` is 0 (A-MEM keeps no messages), and `history` counts the
   notes so deleted.
 
+The scrub reads tags and keywords as one text, the items joined by
+spaces (the JSON list Chroma keeps is read the same way), so a value
+split over two adjacent items ("Larkspur", "migration") counts as
+carried; the tests cover a value in one tag, not one split over two.
+
 A deleted note can therefore take another fact with it, as a Mem0 fold
 does; the forget reading counts these deletions in its `derived` column,
 and in `other_agents` when another agent wrote the note (`same_writer`
@@ -279,7 +294,9 @@ whose derived text, in the store or in Chroma, carries a form, so after
 a forget no note A-MEM keeps carries one. The runs' audit reads rows'
 content only, so this is checked by the unit tests (a value in a
 neighbour's context, in its tags alone, in its stale Chroma copy) and by
-the live risk check, not measured in the runs.
+the live risk check, not measured in the runs. The live check tests its
+two values, both ASCII, by substring in A-MEM's JSON, so a non-ASCII
+form would escape it.
 
 ## Supersession
 
@@ -364,7 +381,7 @@ the tags or context of 6 of the 7 notes and gave the same search order.
   forget deletes a note whose evolved context, whose tags alone (ASCII
   or not), or whose Chroma copy carries a form, and reports it
   (`derived`).
-- A row carries no derived text; a failed write leaves no note (both
+- A row carries no derived text; a failed add leaves no note (both
   found on review).
 - The isolation: building a second user's store leaves the first's
   notes and vectors.
@@ -378,8 +395,11 @@ the tags or context of 6 of the 7 notes and gave the same search order.
    Tested on every search.
 2. **Deletion completeness.** A value can live in other notes' evolved
    text and in stale Chroma copies; the forget deletes those notes,
-   which can delete other facts with them. Measured by the forget
-   reading.
+   which can delete other facts with them. The runs measure deletion on
+   content only (the forget reading and the audit read rows' content,
+   and the criterion "no carrier is left" means no stored row's content
+   holds the value); the derived text is checked by the unit tests and
+   the live risk check.
 3. **Nondeterminism.** Analysis and evolution are LLM output that varies
    between runs at temperature 0 with a seed, and it enters the
    embedding, so which notes a search returns varies too. The kernel and
@@ -389,10 +409,12 @@ the tags or context of 6 of the 7 notes and gave the same search order.
    evolution: a failed call leaves a note without generated attributes,
    or an evolution stopped part-way, and A-MEM says so only on stdout
    ("Error analyzing content", a print) or in an ERROR record ("Error in
-   memory evolution", "Error in process_memory"). The extraction guard
-   (a trial whose backend made no LLM call fails) catches only an LLM
-   that never answered, so the runs count those lines in their logs and
-   report them. `search`
+   memory evolution", "Error in process_memory", and "Error in
+   find_related_memories", an embedding failure after which evolution
+   is skipped, `:341-343`). The extraction guard (a trial whose backend
+   made no LLM call fails) catches only an LLM that never answered, so
+   each run's lines are counted with a grep of its logs (no harness code
+   counts them) and reported. `search`
    (`:462-481`) catches nothing, so a failed search raises in every
    locus and the kernel reports it (`retrieval_error`);
    `search_agentic`, which returns `[]` on any error, is not used.
