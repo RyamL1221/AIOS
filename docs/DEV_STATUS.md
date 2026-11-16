@@ -51,6 +51,7 @@ do not describe this branch.
 | 15 | Complete deletion and supersession | Done |
 | 16 | Graphiti backend and native condition | Done |
 | 17 | A-MEM backend and native condition | Done |
+| 18 | Agent count, concurrency and faulty-agent stress dimensions; event-driven scheduler | In progress |
 
 ### Subtask 1
 
@@ -2983,6 +2984,29 @@ three decisions on the Graphiti smoke's findings. Design:
   later, then recorded nothing; the test patches the install out
   (`ec3c467`).
 
+### Subtask 18
+
+**Housekeeping** (2026-11-16, before the subtask's spec):
+- Open decision 6 is resolved (below).
+- Known issue 49: the 118 key heads in the 39 local logs are masked in
+  place with the redaction's own rule (`Api Key:<redacted>` and the
+  asterisks); afterwards no file holds a value or a fragment of one.
+- Known issue 51 is fixed: the AIOS suite's conftest sets
+  `LITELLM_MODE` to `PRODUCTION` before anything imports LiteLLM, and
+  both repos' `_graphiti_script.load_env` copy the `NEO4J_*` lines of
+  `AIOS/.env` and no other. Tests:
+  `tests/environment/test_dotenv_isolation.py` (a pytest of the suite,
+  started without any name of `.env`, imports LiteLLM and gets none;
+  `load_env` copies `NEO4J_*` only) and Cerebrum
+  `tests/agents/test_graphiti_script_env.py`; each fails without its
+  fix. The kernel still loads `.env` itself (`runtime/launch.py`).
+- The system's temporary directory held 66 `aios_amem_*` stores, all
+  deleted (87 MB, no process held them): 58 written during Subtask
+  17's mutation run (35 when Subtask 17 counted them) and 8 during its
+  runs of 2026-11-15 (cause not looked into).
+- `docs/FULL_GRID.md`, a stub for Subtask 23, holds the judge-window
+  plan and the native k = 30 sensitivity cell.
+
 ## Open decisions
 
 1. **Native Mem0's install.** The agents run the pinned `mem0ai` 2.0.2
@@ -3022,8 +3046,13 @@ three decisions on the Graphiti smoke's findings. Design:
    agent until the user states it again (a new statement of the slot,
    as its writer labels it: `DELETION_AND_SUPERSESSION.md`, "A
    restatement lifts it"), and no read path returns a tombstoned row.
-6. **Three choices of Subtask 17 to confirm or change** (taken
-   2026-11-12 to 15, not asked):
+6. **Three choices of Subtask 17**, resolved 2026-11-16 (Subtask 18
+   housekeeping): (a) changed, the 118 key heads are masked in place
+   (known issue 49); (b) confirmed, and recorded in `FULL_GRID.md`;
+   (c) confirmed: a V4 consumer applies its own documented threshold
+   to whatever its backend scores, which is the variant's premise, and
+   native Mem0's consumer already does. The choices as taken
+   (2026-11-12 to 15, not asked):
    (a) known issue 49's 39 local logs are left as they are (gitignored,
    never archived or committed); masking the 118 key heads in place is
    the alternative;
@@ -3565,9 +3594,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
     Wall times are reported with the cell's milliseconds per
     completion token (`BENCHMARK_V2.md`, Amendment 7); cost notes use
     tokens and calls.
-49. 39 gitignored logs in the AIOS checkout (`kernel.log` and files
-    under `logs/`, from the other branch's runs, the newest of
-    2026-10-21) hold 118 of LiteLLM's DEBUG lines "Api Key:" with the
+49. Fixed in Subtask 18 (housekeeping): the key heads are masked in
+    place. Before: 39 gitignored logs in the AIOS checkout
+    (`kernel.log` and files under `logs/`, from the other branch's
+    runs, the newest of 2026-10-21) held 118 of LiteLLM's DEBUG lines
+    "Api Key:" with the
     Azure key's first 8 characters and asterisks (litellm 1.83.0,
     `llms/azure/common_utils.py:617-623`). No full value; none of them
     was archived or committed. The redaction now masks the line.
@@ -3578,8 +3609,12 @@ These fail on `workshop-postrun` too and are not caused by later work.
     characters appear, and the archive would refuse any file holding
     them; a list under `api_keys.<provider>` is not read. config.yaml
     holds neither today (every value under `api_keys` is empty).
-51. A process of the AIOS venv loads `AIOS/.env` when it imports
-    LiteLLM (litellm 1.83.0, `litellm/__init__.py:19-20`: `load_dotenv()`
+51. Fixed in Subtask 18 (housekeeping): the AIOS suite sets
+    `LITELLM_MODE` to `PRODUCTION` in its conftest and both
+    `load_env` copy `NEO4J_*` only (the kernel loads `.env` itself).
+    Before: a process of the AIOS venv loaded `AIOS/.env` when it
+    imported LiteLLM (litellm 1.83.0, `litellm/__init__.py:19-20`:
+    `load_dotenv()`
     unless `LITELLM_MODE` is set to something other than `DEV`; the
     search walks up from LiteLLM's package to the checkout). So the
     kernel, the AIOS suite and the mutation runs' AIOS test processes
