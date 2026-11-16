@@ -328,6 +328,65 @@ Nothing is recorded apart, as Graphiti's invalidations are.
   systems with the same function (Cerebrum `cerebrum/utils/amem.py`), as
   `cerebrum/utils/graphiti.py` serves Graphiti.
 
+## Measured in the smokes
+
+From the pilot_v1 smoke (Cerebrum `results/pilot_v1_amem`) and the
+benchmark v2 smoke (`results/bench_v2_smoke_amem`), against Graphiti's
+and Mem0's cells of the same users, inputs and settings (pilot_v1:
+`pilot_v1_graphiti` and `pilot_v1_hetero`; v2: `bench_v2_smoke_s17`,
+at k = 30). Per user, at H = 0 and 2 in pilot_v1; USD is the backend's
+(gpt-4o at the committed price table). Each A-MEM cell's recorded calls
+match the calls its logs show.
+
+| | A-MEM calls | per note | USD | Graphiti calls | USD | Mem0 calls | USD |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pilot_v1 (3 notes) | 4.6 to 5.0 | 1.53 to 1.67 | 0.012 to 0.014 | 15.7 to 19.3 | 0.085 to 0.10 | 3.0 | 0.064 to 0.065 |
+| v2 (17.8 notes) | 34.6 | 1.94 | 0.10 | 72.9 to 73.8 | 0.42 | 17.8 | 0.36 |
+
+Graphiti's pilot_v1 H = 2 agent cells are left out: their calls are
+lower bounds (`GRAPHITI_BACKEND.md`, "Measured in the smokes").
+
+- **Calls.** One analysis call a note, and one evolution call for each
+  note but a store's first: 2 x 534 - 30 = 1,038 per v2 cell. In
+  pilot_v1's H = 2 agent cells a V2 (identity) agent's note opens a
+  second store for the user (4 calls, not 5). About 640 to 720 prompt
+  tokens a call: about 23,200 prompt tokens a v2 user, against
+  Graphiti's 153,000 to 155,000 and Mem0's 140,000.
+- **Evolution.** An evolution call changed 0.73 to 0.88 existing notes
+  on average per pilot_v1 cell (at most 2, a user's earlier notes) and
+  1.47 to 1.54 per v2 cell (at most 5, A-MEM's neighbours). One line of
+  A-MEM's own caught failures in the two smokes, in the v2 native cell:
+  an evolution reply without `tags_to_update` ("Error in memory
+  evolution"). The note was stored, its evolution changed nothing, and
+  the trial passed its judge-free probes.
+- **Latency.** A kernel write took a median 3.05 s in pilot_v1 (1.03 s
+  for a store's first note, 3.0 to 3.7 s with evolution, longest
+  10.8 s) and 3.33 s in the v2 smoke (p90 3.94 s, longest 16.3 s),
+  about 60 s of a v2 user's time; Graphiti's `add_episode` took 6.3 to
+  6.5 s. A pilot_v1 user took 34 to 42 s at 43 to 48 ms per Qwen
+  completion token (Graphiti's pilot: 50 to 65 s at 44 to 63 ms), a v2
+  user 118 to 123 s at 52 to 54 ms (Graphiti at k = 30: 179 to 187 s
+  at 49 to 52 ms). Wall times on one laptop, whose Qwen speed varies
+  with its heat and power state.
+- **Verbatim, as in-house, ranked by its own embeddings.** With 3 notes
+  a user and k 10, every pilot_v1 note is in the block: at H = 0 the
+  kernel and replicated answers equal in-house's (Subtask 11) in all 60
+  trials, and every kernel and replicated cell mean is within 0.07 of
+  in-house's. At v2's 17.8 notes and k 30, where the 300-token budget
+  binds in 156 of 180 probes (in-house's too), which notes fill the
+  block depends on the ranking: A-MEM's blocks hold the same writes as
+  in-house's in 67 of 180 probes per locus, and the kernel's and the
+  replicated store's blocks the same writes in 106. Every judge-free
+  probe passes in both loci, as in-house, and integration scored 2.57
+  and 2.63, against in-house's 2.57 and 2.60.
+- **The forget's `derived` deletions.** One in the two smokes: in the
+  v2 kernel cell, user 2's forget of `conference` deleted the user's
+  base task context, whose derived text (from A-MEM's evolution)
+  carried the revoked value, so that user's integration block held no
+  base task row (the replicated and native blocks did; the probe scored
+  2 in all three cells). The replicated store's evolution had not
+  carried the value there.
+
 ## Capabilities
 
 `scored_search` true (above), `semantic_search` true, `internal_llm`

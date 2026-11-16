@@ -2652,8 +2652,9 @@ three decisions on the Graphiti smoke's findings. Design:
   pass and fail in real conditions and fail under `no_delete` (15 of 15)
   and `no_visibility` (5 of 5); no kernel privacy probe leaks (25); the
   budget binds in every kernel and replicated cell, the cap in none;
-  kernel and replicated delete completely at H = 0 (10 forgets, no
-  carrier left); `writer_scoped` fails 4 of 4 echo users; no block
+  kernel and replicated delete completely at H = 0 (10 forgets; no
+  stored row's content holds a revoked value: the runs do not read
+  A-MEM's derived text); `writer_scoped` fails 4 of 4 echo users; no block
   holds a retired row at H = 0 and `no_supersession` puts one in 59
   probes; the guard was armed and dropped nothing. The others need the
   in-house, Mem0 or `no_memory` cells (Subtask 15's), and A-MEM keeps
@@ -2733,10 +2734,106 @@ three decisions on the Graphiti smoke's findings. Design:
      the row's probes: relabelled.
   9. `_RedactingStream` deadlocked on a write from inside a write and
      could hang at exit: a re-entrant lock, a bounded wait while the
-     interpreter finalizes, `writelines` (both repos).
+     interpreter finalizes (no test exercises it), `writelines` (both
+     repos).
   10. A failed write left a note A-MEM listed but Chroma did not hold:
-      removed on failure, under the user's lock.
+      removed on failure, under the user's lock. The provider's add
+      only: a failed update's re-add, a failed write's evolution edits
+      and native writes are not cleaned up (`AMEM_BACKEND.md`, "One
+      note per write").
   11. Citations (Amendment 8), a Cerebrum-side pin test, doc wording.
+- **Verification** (one pass over AIOS `34833e7` and Cerebrum
+  `1d7d99f`, the 11 findings and the two fixes found with the
+  functional check): 9 fixed, 4 fixed with a gap, now narrowed in the
+  docs (6: the runs read content only; 9 and 10 above; 8 below). One
+  error, from finding 8's fix: the block columns' label was wrong for
+  the pass matrix's echo rows (their split's mean) and the integration
+  table (its integration probes). Relabelled per table (Cerebrum
+  `a83cf8e`, AIOS `f313180`) and checked mechanically instead of by
+  a third pass: all 607 rows of the two reports match the label,
+  recomputed from the trials, and the old label's rule misses 49; no
+  number changed. Documented, not changed: the scrub reads tags and
+  keywords as one text, so a value split over adjacent tags counts as
+  carried; the live risk check tests its two ASCII forget values by
+  substring; the docs now list "Error in find_related_memories" among
+  the A-MEM failure lines (the counts included it); any string directly
+  under `api_keys` counts as a secret (known issue 50).
+- **A-MEM: pilot_v1 smoke** (Cerebrum `results/pilot_v1_amem`, `pa17`,
+  qwen, H = 0 and 2, 180 user-trials, 0 failed; Cerebrum `f6d2646`,
+  AIOS `a145a26`). Kernel 3.07 / 5.00 / 3.07 (profile / task /
+  integration) at H = 0 and 3.10 / 4.10 / 2.67 at H = 2; replicated
+  3.07 / 5.00 / 3.07 and 2.43 / 2.97 / 1.97; native 3.13 / 4.93 / 3.20
+  and 2.60 / 3.27 / 2.17. Kernel minus replicated: H = 0 profile +0.00
+  [-0.26, +0.26], integration +0.00 [-0.24, +0.24]; H = 2 profile
+  +0.67 [+0.11, +1.22], integration +0.70 [+0.26, +1.14]. Kernel minus
+  native: H = 0 -0.07 [-0.49, +0.36] and -0.13 [-0.48, +0.22], H = 2
+  +0.50 [-0.08, +1.08] and +0.50 [+0.00, +1.00]. Both readings (the
+  H = 0 tie, an H = 2 gap in Subtask 11's direction) hold for both
+  contrasts; reported, not required.
+  - A-MEM stores each write verbatim, as in-house does, and with 3 notes
+    a user and k 10 every note is in the block. The answers equal
+    in-house's (Subtask 11, `pilot_v1_hetero`), trial for trial, in all
+    30 kernel and 30 replicated trials at H = 0 (30 and 28 at H = 2;
+    native 24 and 23); the kernel and replicated cell means are within
+    0.07 of in-house's, native's within 0.30.
+  - The judge on identical answers (known issue 24): over the 165
+    trials whose answer equals in-house's, judged a week apart with the
+    same prompt, seed and temperature, the same profile score in 75.8%,
+    task 98.8%, integration 83.6%; mean differences within 0.03.
+  - Calls: 5 a user (3 notes, each one analysis call, and an evolution
+    call for all but a store's first note), $0.012 to $0.014 a user
+    (Graphiti's pilot: 15.7 to 19.3 calls, $0.085 to $0.10, its
+    lower-bound H = 2 agent rows aside); every cell's records match its
+    logs. At H = 2 each agent cell's 12 V2 trials made 4: the V2 agent's
+    note opened a second store for the user. The harness counts those
+    calls since Cerebrum `a836d69`, so these rows are complete.
+  - Time: a kernel write took a median 3.05 s (1.03 s for a store's
+    first note, one call; 3.0 to 3.7 s with evolution; longest 10.8 s);
+    34 to 42 s a user per cell, at 43 to 48 ms per Qwen completion
+    token (Graphiti's pilot: 50 to 65 s at 44 to 63 ms).
+  - Notes changed: an evolution call changed 0.73 to 0.88 existing
+    notes per cell on average, at most 2 (a user has at most 2 earlier
+    notes); no A-MEM failure line.
+- **A-MEM: benchmark v2 smoke** (Cerebrum `results/bench_v2_smoke_amem`,
+  `s17a`, qwen, H = 0, 90 user-trials, 0 failed; Cerebrum `f6d2646`,
+  AIOS `a145a26`), beside `bench_v2_smoke_s17`'s k = 30 cells (same
+  users and inputs). Kernel and replicated pass all 150 judge-free
+  probes each and agree on every pair. Native: deletion 20 of 30 (each
+  failure an echo, and all 10 kept echoes reached the block), privacy
+  and recall 30, recency and contradiction 17 (an earlier statement's
+  row in 170 of 180 blocks; native Graphiti with its filter: 30 and 26,
+  27 blocks). Integration: kernel 2.57 [2.20, 2.93], replicated 2.63
+  [2.22, 3.04], native 2.73 [2.32, 3.15] (s17: in-house 2.57 and 2.60,
+  Mem0 3.40 and 3.57, Graphiti 2.50, 2.17 and 2.07). The budget bound in
+  156 of 180 kernel and replicated probes (in-house's 156), the cap in
+  none.
+  - The runs' first `derived` deletion: the kernel's forget of user 2's
+    `conference` also deleted the user's base task context, whose
+    derived text A-MEM's evolution had made carry the value, so that
+    user's integration block held no base task row (the replicated and
+    native blocks did; the probe scored 2 in all three cells). The
+    replicated store's evolution had not carried the value there.
+  - Ranked, not stored, differently from in-house: A-MEM keeps each
+    write verbatim, but its blocks hold the same writes as in-house's
+    in 67 of 180 probes per locus, and the kernel's and the replicated
+    store's blocks the same writes in 106 (A-MEM's LLM text enters each
+    note's embedding). The judge-free results and the integration means
+    are in-house's.
+  - Calls: 34.6 a user, 1.94 a write (1,038 per cell; each cell's logs
+    hold exactly twice its recorded count), about 23,200 prompt tokens,
+    $0.10 a user (s17: Graphiti 72.9 to 73.8 calls, $0.42; Mem0 17.8,
+    $0.36).
+  - Time: a kernel write took a median 3.33 s (p90 3.94 s, longest
+    16.3 s), about 60 s of each user's time; 118 to 123 s a user at 52
+    to 54 ms per Qwen completion token (Graphiti at k = 30: 179 to
+    187 s at 49 to 52 ms).
+  - Notes changed: 1.39 to 1.46 per write on average per cell, 1.47 to
+    1.54 per evolution call, at most 5. One A-MEM failure line, native:
+    "Error in memory evolution: 'tags_to_update'", an evolution reply
+    without that key; the note was stored, its evolution changed
+    nothing, and the trial passed its judge-free probes.
+  - No traceback, WARNING record or barrier TIMEOUT in any log; no
+    writer failure or retry; no write without a note.
 - **Suites** at AIOS `34833e7` and Cerebrum `1d7d99f`: AIOS 754 passed
   and the 7 known errors (761 collected; 750 at `13708ee`, so the 11
   new tests); Cerebrum 1,162 passed, 4 skipped, the 19 known failures
@@ -2934,9 +3031,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
     for extracted facts.
 24. Azure GPT-4o treats the seed as best effort. Under fixed decoding,
     GPT-4o answers differ between runs (5 of 5 users), as do the greedy
-    judge's scores (8% of profile scores differ on a test-retest). Qwen
-    and Llama on Ollama are deterministic. GPT-4o and judge noise
-    remain, so compare cells paired and with CIs.
+    judge's scores (8% of profile scores differ on a test-retest). In
+    Subtask 17's natural test-retest (165 pilot_v1 answers identical to
+    Subtask 11's, judged a week apart by the same prompt, seed and
+    temperature), 24% of profile, 1% of task and 16% of integration
+    scores differ, with mean differences within 0.03. Qwen and Llama on
+    Ollama are deterministic. GPT-4o and judge noise remain, so compare
+    cells paired and with CIs.
 25. Fixed in Subtask 10 (Cerebrum `8ed13d5`): the guard is ported;
     tests that need a kernel are marked `live_kernel`. Before: Cerebrum on this branch had no `tests/conftest.py` kernel guard (it
     exists only on `feature/self-improving-memory`), so `pytest
@@ -3326,6 +3427,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
     Azure key's first 8 characters and asterisks (litellm 1.83.0,
     `llms/azure/common_utils.py:617-623`). No full value; none of them
     was archived or committed. The redaction now masks the line.
+50. `redact.py`'s rule for `api_keys` (both repos, Subtask 17) goes by
+    position: every string directly under the section is a secret, and
+    a mapping under it is read by key name. A string there that is no
+    key (an endpoint URL) would be redacted wherever 8 of its
+    characters appear, and the archive would refuse any file holding
+    them; a list under `api_keys.<provider>` is not read. config.yaml
+    holds neither today (every value under `api_keys` is empty).
 
 ## Fixed
 
