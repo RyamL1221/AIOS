@@ -22,7 +22,7 @@ from aios.hooks.modules.scheduler import rr_scheduler_nonblock as rr_scheduler
 from aios.syscall.syscall import useSysCall
 from aios.config.config_manager import config
 from aios.memory.context_injector import ContextInjector
-from aios.memory.pipeline import PIPELINE_VERSION
+from aios.memory.pipeline import PIPELINE_VERSION, UnknownSession
 from aios.memory.conversation_extractor import ConversationExtractor
 from aios.utils.redact import (
     install_redaction,
@@ -139,6 +139,10 @@ class QueryRequest(BaseModel):
     # global latest_user_id, preventing cross-user contamination
     # in multi-user scenarios.
     user_id: Optional[str] = None
+    # A kernel session (``POST /session/open``), attached by the SDK:
+    # the request is bound to the session's user, whatever it claims
+    # (Subtask 18, docs/STRESS_DIMENSIONS.md, "wrong_user").
+    session_token: Optional[str] = None
 
     @model_validator(mode='before')
     def convert_query_data(cls, data: Any) -> Any:
@@ -564,6 +568,84 @@ async def get_memory_config():
     }
 
 
+class SessionOpen(BaseModel):
+    user_id: str
+
+
+class SessionClose(BaseModel):
+    session_token: str
+
+
+@app.post("/session/open")
+async def open_session(request: SessionOpen):
+    """Open a kernel session for a user (Subtask 18): every request
+    that carries the returned token is bound to that user. The
+    deployment (here, the benchmark harness) opens it and runs the
+    agents in it; the agents' own code never handles the token."""
+    manager = active_components.get("memory")
+    if manager is None:
+        raise HTTPException(status_code=400,
+                            detail="Memory manager not initialized")
+    try:
+        token = manager.open_session(request.user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"session_token": token,
+            "user_id": manager.sessions.user_of(token)}
+
+
+@app.post("/session/close")
+async def close_session(request: SessionClose):
+    """End a kernel session; a later request naming it is refused."""
+    manager = active_components.get("memory")
+    if manager is None:
+        raise HTTPException(status_code=400,
+                            detail="Memory manager not initialized")
+    return {"closed": manager.sessions.close(request.session_token)}
+
+
+def bind_memory_request(query, session_token):
+    """Bind a memory request to its kernel session's user (Subtask
+    18): ``{"claimed", "bound"}`` when the request claimed another user,
+    else None. Raises ``UnknownSession``."""
+    if not session_token:
+        return None
+    manager = active_components.get("memory")
+    if manager is None:
+        raise UnknownSession(session_token)
+    return manager.bind_session(query, session_token)
+
+
+def accept_memory_request(agent_name, query, session_token=None):
+    """Accept a memory request on the calling thread, the event loop,
+    so requests are accepted (stamped and queued) in arrival order;
+    returns the function that waits for its answer off the loop
+    (``SyscallExecutor.accept_memory``)."""
+    return syscall_executor.accept_memory(
+        agent_name, query, session_token=session_token
+    )
+
+
+def bind_chat_request(request, query):
+    """A chat request's user, from its kernel session when it names
+    one (recording the claim it overrode), and the write-barrier
+    snapshot taken now, when the kernel accepts it (Subtask 18). Raises
+    ``UnknownSession``."""
+    manager = active_components.get("memory")
+    user_id = request.user_id
+    if request.session_token:
+        if manager is None:
+            raise UnknownSession(request.session_token)
+        user_id, overridden = manager.bind_chat_user(
+            user_id, request.session_token
+        )
+        query._identity_overridden = overridden
+    if user_id:
+        query._request_user_id = user_id
+    if manager is not None:
+        query._barrier_snapshot = manager.arrival_snapshot(user_id)
+
+
 @app.get("/memory/audit")
 async def get_memory_audit(user_id: str):
     """Every row the kernel's store holds for one user, of every agent,
@@ -873,13 +955,17 @@ async def handle_query(request: QueryRequest):
                 message_return_type=request.query_data.message_return_type,
             )
             # Attach per-request user_id so context injection can
-            # scope memory retrieval to the correct end-user.
+            # scope memory retrieval to the correct end-user: the
+            # session's user when the request names a kernel session.
             # This private attr avoids modifying the Cerebrum SDK.
-            if request.user_id:
-                query._request_user_id = request.user_id
+            try:
+                bind_chat_request(request, query)
+            except UnknownSession as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            if getattr(query, "_request_user_id", None):
                 logger.debug(
                     "LLM query request_user_id=%s",
-                    request.user_id,
+                    query._request_user_id,
                 )
             # The caller's current session (LLMQuery.session, benchmark
             # v2), which the rebuilt query would drop: the memory block
@@ -931,7 +1017,27 @@ async def handle_query(request: QueryRequest):
                 params=request.query_data.params,
                 operation_type=request.query_data.operation_type
             )
-            return execute_request(request.agent_name, query)
+            # Bound to the kernel session's user, if it names one, then
+            # accepted here, on the event loop, in arrival order, and
+            # served off it: a request that waits for the memory thread
+            # no longer holds every other request (Subtask 18).
+            try:
+                overridden = bind_memory_request(
+                    query, request.session_token
+                )
+            except UnknownSession as e:
+                return {"response": MemoryResponse(
+                    success=False, error=str(e)
+                )}
+            wait = accept_memory_request(
+                request.agent_name, query, request.session_token
+            )
+            result = await asyncio.to_thread(wait)
+            if overridden:
+                result["identity_overridden"] = overridden
+            return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

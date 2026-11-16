@@ -138,3 +138,59 @@ class IdentityResolver:
                 agent_name,
             )
         return None
+
+
+class UnknownSession(KeyError):
+    """A request named a session the registry does not hold (never
+    opened, or closed)."""
+
+    def __str__(self) -> str:
+        return f"unknown session {self.args[0]!r}" if self.args else (
+            "unknown session")
+
+
+class SessionRegistry:
+    """The kernel's sessions (NeurIPS Subtask 18,
+    docs/STRESS_DIMENSIONS.md, "wrong_user").
+
+    The deployment opens a session for a user and runs its agents in
+    it; every request the agents make carries the session's token,
+    which their own code never handles. The kernel then takes the user
+    from the session, not from what a request claims. A token is random
+    (``secrets.token_hex``), so a request cannot name another user's
+    session by guessing. Thread-safe."""
+
+    def __init__(self):
+        import threading
+
+        self._lock = threading.Lock()
+        self._users: Dict[str, str] = {}
+
+    def open(self, user_id: Optional[str]) -> str:
+        """A new session for ``user_id`` (already canonical), and its
+        token. Raises ``ValueError`` without a user."""
+        import secrets
+
+        if not user_id or not str(user_id).strip():
+            raise ValueError("a session needs a user id")
+        token = secrets.token_hex(16)
+        with self._lock:
+            self._users[token] = str(user_id).strip()
+        return token
+
+    def close(self, token: Optional[str]) -> bool:
+        """End the session; False when it was not open."""
+        with self._lock:
+            return self._users.pop(str(token or ""), None) is not None
+
+    def user_of(self, token: Optional[str]) -> str:
+        """The session's user; raises ``UnknownSession``."""
+        with self._lock:
+            user = self._users.get(str(token or ""))
+        if user is None:
+            raise UnknownSession(token)
+        return user
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._users)

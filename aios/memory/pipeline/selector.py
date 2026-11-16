@@ -76,18 +76,29 @@ class Selector:
         Returns:
             The wait outcome; ``BYPASSED`` when no wait ran.
         """
+        return self._await(user_id, barrier_snapshot)[0]
+
+    def _await(
+        self,
+        user_id: Optional[str],
+        barrier_snapshot: Optional[int] = None,
+    ) -> Tuple[WaitOutcome, Optional[int]]:
+        """``await_pending_writes``, and the snapshot it waited on
+        (None when it took none: no user, no barrier, or a provider
+        that commits synchronously)."""
         barrier = self.barrier
         if (
             not user_id
             or barrier is None
             or commits_synchronously(self.provider)
         ):
-            return WaitOutcome.BYPASSED
+            return WaitOutcome.BYPASSED, None
         if barrier_snapshot is None:
             barrier_snapshot = barrier.snapshot(user_id)
         if not barrier_snapshot:
-            return WaitOutcome.BYPASSED
-        return barrier.wait_until_drained(user_id, barrier_snapshot)
+            return WaitOutcome.BYPASSED, barrier_snapshot
+        return (barrier.wait_until_drained(user_id, barrier_snapshot),
+                barrier_snapshot)
 
     def fetch(
         self, scope_user_id: str, query_text: str, top_k: int
@@ -161,7 +172,11 @@ class Selector:
             decides what that means: SDK search fails on the own error,
             injection reports both (``MemoryPipeline.inject``).
             ``barrier_wait_ms``, ``search_ms`` (the provider calls) and
-            ``select_ms`` (partition through cap) time the stages.
+            ``select_ms`` (partition through cap) time the stages;
+            ``barrier_snapshot`` is the barrier sequence the wait
+            covered (None when no wait could run) and
+            ``fetch_started_at`` the wall-clock time the provider
+            search began (Subtask 18).
         """
         started = time.perf_counter()
         resolved_user_id = self.resolver.resolve(
@@ -195,13 +210,18 @@ class Selector:
             "shared_error": None,
         }
 
-        outcome = self.await_pending_writes(scope_user_id, barrier_snapshot)
+        outcome, diagnostics["barrier_snapshot"] = self._await(
+            scope_user_id, barrier_snapshot
+        )
         if outcome is not WaitOutcome.BYPASSED:
             diagnostics["barrier_waits"].append({
                 "user_id": scope_user_id,
                 "outcome": outcome.name,
             })
         waited = time.perf_counter()
+        # Wall clock, so a write's commit time can be set against it
+        # (STRESS_DIMENSIONS.md, Concurrency, "late_writes").
+        diagnostics["fetch_started_at"] = time.time()
 
         # The provider's own LLM and embedding calls count to this user.
         with self.usage_tag(scope_user_id):

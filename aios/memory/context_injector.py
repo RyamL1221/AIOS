@@ -64,6 +64,7 @@ class ContextInjector:
         query: LLMQuery,
         user_id: Optional[str] = None,
         session: Optional[int] = None,
+        barrier_snapshot: Optional[int] = None,
     ) -> "tuple[LLMQuery, dict]":
         """Retrieve relevant memories and prepend as a system
         message, returning diagnostics alongside the query.
@@ -81,6 +82,10 @@ class ContextInjector:
             session: The caller's current session (benchmark v2):
                 with ``memory.block_recency_unit: session``, each
                 bullet's age counts the sessions since its row's.
+            barrier_snapshot: The write-barrier sequence taken when the
+                kernel accepted the request (Subtask 18): the
+                retrieval waits for the writes accepted before it. None
+                takes one now.
 
         Retrieval behavior:
 
@@ -147,6 +152,7 @@ class ContextInjector:
                     k=self.max_memories,
                     max_tokens=self.max_tokens,
                     session=session,
+                    barrier_snapshot=barrier_snapshot,
                 )
             )
             resolved_user_id = diagnostics["resolved_user_id"]

@@ -32,8 +32,8 @@ def useMemoryRequestQueue() -> (
     QueueStore.REQUEST_QUEUE[r_str] = _
 
     # Function to get messages from the queue
-    def getMessage():
-        return QueueStore.getMessage(_)
+    def getMessage(timeout: float = 0.1):
+        return QueueStore.getMessage(_, timeout)
 
     # Function to add messages to the queue
     def addMessage(message: str):

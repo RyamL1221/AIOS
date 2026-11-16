@@ -1,7 +1,7 @@
 import logging
 import time
 import json
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
+from typing import Callable, Dict, List, Any, Optional, TYPE_CHECKING
 
 # Update import to use the new location
 from aios.memory.note import MemoryNote
@@ -79,7 +79,91 @@ class SyscallExecutor:
         elif isinstance(query, ToolQuery):
             return ToolSyscall(agent_name, query)
 
-    def _execute_syscall(self, agent_name: str, query) -> Dict[str, Any]:
+    def _next_id(self) -> int:
+        with self.id_lock:
+            self.id += 1
+            return self.id
+
+    def _submit(self, agent_name: str, query, syscall_id: int,
+                session_token: Optional[str] = None):
+        """Create the syscall for ``query``, stamp it if it is a memory
+        syscall, queue it and start its thread, on the calling thread.
+        Returns the syscall, which the scheduler answers."""
+        syscall = self.create_syscall(agent_name, query)
+        syscall.set_status("active")
+        syscall.set_created_time(time.time())
+        syscall.set_response(None)
+
+        if not syscall.get_source():
+            syscall.set_source(syscall.agent_name)
+
+        if not syscall.get_pid():
+            syscall.set_pid(syscall_id)
+
+        # Stamp memory syscalls before they are enqueued. See
+        # ``MemoryManager.stamp_syscall``. When no manager is wired
+        # (tests), the sentinel ``0`` makes ``release`` a no-op.
+        from aios.syscall.memory import MemorySyscall
+        if isinstance(syscall, MemorySyscall):
+            # The kernel session the request was bound to: the write
+            # quota counts per session (Subtask 18).
+            syscall.session_token = session_token
+            mm = self._memory_manager()
+            if mm is not None:
+                mm.stamp_syscall(syscall)
+
+        if isinstance(syscall, LLMSyscall):
+            global_llm_req_queue_add_message(syscall)
+            print(f"Syscall {syscall.agent_name} added to LLM queue")
+        elif isinstance(syscall, StorageSyscall):
+            global_storage_req_queue_add_message(syscall)
+        elif isinstance(syscall, ToolSyscall):
+            global_tool_req_queue_add_message(syscall)
+        elif isinstance(syscall, MemorySyscall):
+            global_memory_req_queue_add_message(syscall)
+
+        syscall.start()
+        return syscall
+
+    def _memory_manager(self):
+        return self.memory_manager or (
+            self.context_injector.memory_manager
+            if self.context_injector else None
+        )
+
+    # The memory operations ``execute_request`` serves with one syscall.
+    PLAIN_MEMORY_OPERATIONS = (
+        "add_memory", "remove_memory", "update_memory", "retrieve_memory",
+        "get_memory", "list_memory", "forget_memory",
+    )
+
+    def accept_memory(
+        self, agent_name: str, query: MemoryQuery,
+        session_token: Optional[str] = None,
+    ) -> Callable[[], Dict[str, Any]]:
+        """Accept a memory request now, on the calling thread: create
+        its syscall, stamp it against the write barrier and queue it.
+        The kernel's ``/query`` handler calls this on its event loop, so
+        requests are accepted in the order they arrive, and waits for
+        the answer off the loop (Subtask 18, docs/STRESS_DIMENSIONS.md,
+        "Concurrency"). Returns a function that waits for the scheduler's
+        answer and returns ``execute_request``'s result. A request served
+        another way (``add_agentic_memory``, an unknown operation) is
+        served by that function, through ``execute_request``."""
+        if query.operation_type not in self.PLAIN_MEMORY_OPERATIONS:
+            return lambda: self.execute_request(agent_name, query)
+        syscall_id = self._next_id()
+        syscall = self._submit(agent_name, query, syscall_id,
+                               session_token=session_token)
+
+        def finish() -> Dict[str, Any]:
+            return self._execute_syscall(
+                agent_name, query, accepted=(syscall, syscall_id)
+            )
+        return finish
+
+    def _execute_syscall(self, agent_name: str, query,
+                         accepted=None) -> Dict[str, Any]:
         """
         Execute a system call and collect timing metrics.
         
@@ -107,52 +191,16 @@ class SyscallExecutor:
         start_times, end_times = [], []
         waiting_times, turnaround_times = [], []
 
-        with self.id_lock:
-            self.id += 1
-            syscall_id = self.id
-        
+        if accepted is not None:
+            submitted, syscall_id = accepted
+        else:
+            submitted, syscall_id = None, self._next_id()
+
         while True:
-            # syscall = copy.deepcopy(syscall)
-            syscall = self.create_syscall(agent_name, query)
-            syscall.set_status("active")
-            
-            current_time = time.time()
-            syscall.set_created_time(current_time)
-            syscall.set_response(None)
-
-            if not syscall.get_source():
-                syscall.set_source(syscall.agent_name)
-            
-            if not syscall.get_pid():
-                syscall.set_pid(syscall_id)
-
-            # Stamp memory syscalls before they are enqueued. See
-            # ``MemoryManager.stamp_syscall``. When no manager is wired
-            # (tests), the sentinel ``0`` makes ``release`` a no-op.
-            from aios.syscall.memory import MemorySyscall
-            if isinstance(syscall, MemorySyscall):
-                mm = self.memory_manager or (
-                    self.context_injector.memory_manager
-                    if self.context_injector else None
-                )
-                if mm is not None:
-                    mm.stamp_syscall(syscall)
-
-            if isinstance(syscall, LLMSyscall):
-                global_llm_req_queue_add_message(syscall)
-                print(f"Syscall {syscall.agent_name} added to LLM queue")
-                
-            elif isinstance(syscall, StorageSyscall):
-                global_storage_req_queue_add_message(syscall)
-            elif isinstance(syscall, ToolSyscall):
-                global_tool_req_queue_add_message(syscall)
-            else:
-                # MemorySyscall — imported locally to avoid circular import
-                from aios.syscall.memory import MemorySyscall
-                if isinstance(syscall, MemorySyscall):
-                    global_memory_req_queue_add_message(syscall)
-            
-            syscall.start()
+            # A syscall accepted earlier (``accept_memory``) is the
+            # first one waited for; any retry is submitted here.
+            syscall = submitted or self._submit(agent_name, query, syscall_id)
+            submitted = None
             syscall.join()
             
             # breakpoint()
@@ -767,13 +815,24 @@ class SyscallExecutor:
                     request_user_id = getattr(
                         query, "_request_user_id", None
                     )
+                    # Taken when the kernel accepted the request, and
+                    # the claim its session overrode (Subtask 18).
+                    arrival_snapshot = getattr(
+                        query, "_barrier_snapshot", None
+                    )
+                    overridden = getattr(
+                        query, "_identity_overridden", None
+                    )
                     query, injection_diag = (
                         self.context_injector.inject(
                             agent_name, query,
                             user_id=request_user_id,
                             session=request_session,
+                            barrier_snapshot=arrival_snapshot,
                         )
                     )
+                    if overridden:
+                        injection_diag["identity_overridden"] = overridden
                     logger.debug(
                         "Injection diagnostics: %s",
                         injection_diag,

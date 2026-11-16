@@ -24,8 +24,12 @@ from .pipeline import (
     IdentityRules,
     MemoryPipeline,
     PipelineSettings,
+    QuotaSettings,
     Selector,
+    SessionRegistry,
+    UnknownSession,  # noqa: F401  (re-exported for the kernel)
     Visibility,
+    WriteQuota,
     note_from_request,
 )
 from .pipeline.barrier import MemoryWriteBarrier, WaitOutcome
@@ -144,6 +148,14 @@ class MemoryManager:
         self.identity_rules = IdentityRules.from_config(
             memory_config.get("identity")
         )
+        # The kernel's sessions: a request that names one is bound to
+        # its user (Subtask 18, docs/STRESS_DIMENSIONS.md).
+        self.sessions = SessionRegistry()
+        # One write quota for every request, as one barrier
+        # (memory.write_quota; off by default). Validated here.
+        self.write_quota = WriteQuota(QuotaSettings.from_config(
+            memory_config.get("write_quota")
+        ))
 
         barrier_config = memory_config.get("write_barrier", {}) or {}
         self._barrier_config = dict(barrier_config)
@@ -247,6 +259,11 @@ class MemoryManager:
             block_recency=getattr(self, "block_recency", False),
             block_recency_unit=getattr(self, "block_recency_unit", "time"),
             supersession=getattr(self, "supersession", "off"),
+            write_quota=(
+                self.write_quota.settings.as_dict()
+                if getattr(self, "write_quota", None) is not None
+                else QuotaSettings().as_dict()
+            ),
         )
 
     def memory_pipeline(self) -> MemoryPipeline:
@@ -263,6 +280,7 @@ class MemoryManager:
             tombstones=getattr(self, "tombstones", None),
             # The provider's calls count to the user they serve.
             usage_tag=tagged,
+            quota=getattr(self, "write_quota", None),
         )
 
     def _resolve_user_id(
@@ -334,6 +352,89 @@ class MemoryManager:
                 memory_syscall.barrier_snapshot = self.barrier.snapshot(
                     user_id
                 )
+
+    def open_session(self, user_id: Optional[str]) -> str:
+        """A kernel session for ``user_id`` (canonicalized), and its
+        token (``SessionRegistry.open``)."""
+        return self.sessions.open(self.canonical_user_id(user_id))
+
+    def bind_session(
+        self, query, session_token: Optional[str]
+    ) -> Optional[Dict[str, str]]:
+        """Bind a memory request to its session's user, in place: its
+        ``metadata.user_id`` (a write or an update) and its
+        ``params.user_id`` (every other request, and an update that
+        names one) become the session's user. The agent's claim is
+        never trusted (Subtask 18, docs/STRESS_DIMENSIONS.md,
+        "wrong_user").
+
+        Returns ``{"claimed", "bound"}`` when the request claimed
+        another user (canonicalized first, so a V2 alias of the user is
+        no override), else None. Raises ``UnknownSession`` for a token
+        the kernel does not hold. Without a token, nothing changes."""
+        if not session_token:
+            return None
+        bound = self.sessions.user_of(session_token)
+        params = getattr(query, "params", None)
+        if not isinstance(params, dict):
+            query.params = params = {}
+        metadata = params.get("metadata")
+        claims = [params.get("user_id")]
+        if isinstance(metadata, dict):
+            claims.append(metadata.get("user_id"))
+        claimed = next((self.canonical_user_id(c) for c in claims if c),
+                       None)
+        if query.operation_type in ("add_memory", "add_agentic_memory"):
+            if not isinstance(metadata, dict):
+                params["metadata"] = metadata = {}
+            metadata["user_id"] = bound
+            if params.get("user_id"):
+                params["user_id"] = bound
+        else:
+            params["user_id"] = bound
+            if isinstance(metadata, dict) and metadata.get("user_id"):
+                metadata["user_id"] = bound
+        if claimed and claimed != bound:
+            logger.warning(
+                "identity overridden: %s claimed user %s in session of "
+                "%s (op=%s)", "memory request", claimed, bound,
+                query.operation_type,
+            )
+            return {"claimed": claimed, "bound": bound}
+        return None
+
+    def bind_chat_user(
+        self, request_user_id: Optional[str], session_token: Optional[str]
+    ) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
+        """A chat request's user: the session's, with ``{"claimed",
+        "bound"}`` when the request claimed another (as
+        ``bind_session``). Without a token: the request's own id and
+        None. Raises ``UnknownSession``."""
+        if not session_token:
+            return request_user_id, None
+        bound = self.sessions.user_of(session_token)
+        claimed = self.canonical_user_id(request_user_id)
+        if claimed and claimed != bound:
+            logger.warning(
+                "identity overridden: chat request claimed user %s in "
+                "session of %s", claimed, bound,
+            )
+            return bound, {"claimed": claimed, "bound": bound}
+        return bound, None
+
+    def arrival_snapshot(self, user_id: Optional[str]) -> Optional[int]:
+        """The barrier sequence a chat request arriving now must wait
+        for (Subtask 18): taken when the kernel accepts it, so a write
+        accepted after it never delays it and one accepted before it is
+        always covered. None (take one at injection) without a user, a
+        barrier, or with a provider that commits synchronously."""
+        uid = self.canonical_user_id(user_id)
+        barrier = getattr(self, "barrier", None)
+        if not uid or barrier is None:
+            return None
+        if commits_synchronously(getattr(self, "provider", None)):
+            return None
+        return barrier.snapshot(uid)
 
     def canonical_user_id(self, user_id: Optional[str]) -> Optional[str]:
         """``user_id`` under the kernel's identity rules."""
@@ -518,6 +619,11 @@ class MemoryManager:
                     memory_syscall.agent_name, None, memory_note,
                     barrier_seq=getattr(memory_syscall, "barrier_seq", 0),
                     outcome=outcome,
+                    # The quota counts per kernel session when the
+                    # request was bound to one (Subtask 18).
+                    session_key=getattr(
+                        memory_syscall, "session_token", None
+                    ),
                 )
                 resp = MemoryResponse(
                     success=True, memory_id=memory_id, metadata=outcome,

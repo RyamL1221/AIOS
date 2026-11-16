@@ -138,7 +138,9 @@ def library_over(manager) -> MemoryPipeline:
 def without_timings(diagnostics: dict) -> dict:
     return {
         key: value for key, value in diagnostics.items()
-        if not key.endswith("_ms")
+        # Durations, and the wall-clock time the fetch began (Subtask
+        # 18): never equal between two calls.
+        if not key.endswith("_ms") and key != "fetch_started_at"
     }
 
 
@@ -227,6 +229,58 @@ def test_kernel_writes_equal_library_writes(kernel):
         user = f"user{seed:02d}"
         assert stored_rows(manager.provider, user) == stored_rows(store, user)
         assert stored_rows(store, user)
+
+
+def flooded_requests(seed: int) -> list:
+    """``seeded_requests`` with each write followed by copies: one
+    re-cased (a duplicate after normalization) and two numbered (new
+    texts), as a flooding writer sends them (Subtask 18)."""
+    out = []
+    for agent, params in seeded_requests(seed):
+        out.append((agent, params))
+        content = params["content"]
+        for copy in (content.upper(), f"(copy 1) {content}",
+                     f"(copy 2) {content}"):
+            out.append((agent, dict(params, content=copy)))
+    return out
+
+
+def test_kernel_and_library_quotas_reject_the_same_writes():
+    """With the write quota on, the kernel's write path and a library
+    built with the settings the kernel reports reject the same writes,
+    for the same reason, and store the same rows (Subtask 18)."""
+    memory_config = dict(MEMORY_CONFIG, write_quota={
+        "enabled": True, "max_writes": 2, "dedupe": True,
+    })
+    with patch("aios.memory.manager.global_config") as config:
+        config.get_memory_config.return_value = memory_config
+        config.get_storage_config.return_value = {}
+        manager = MemoryManager()
+    store = InHouseProvider()
+    store.initialize({})
+    library = MemoryPipeline(store, PipelineSettings.from_memory_config(
+        manager.pipeline_settings().as_dict()
+    ))
+    reasons = {"kernel": [], "library": []}
+    for seed in range(20):
+        for agent, params in flooded_requests(seed):
+            syscall = MemorySyscall(agent, MemoryQuery(
+                operation_type="add_memory", params=params,
+            ))
+            manager.stamp_syscall(syscall)
+            response = manager.address_request(syscall)
+            assert response.success
+            reasons["kernel"].append(
+                (response.metadata or {}).get("quota_rejected"))
+            outcome = {}
+            library.write(agent, None, note_from_request(params),
+                          outcome=outcome)
+            reasons["library"].append(outcome.get("quota_rejected"))
+    assert reasons["kernel"] == reasons["library"]
+    assert {"duplicate", "quota", None} <= set(reasons["kernel"])
+    for seed in range(20):
+        user = f"user{seed:02d}"
+        assert stored_rows(manager.provider, user) == stored_rows(store, user)
 
 
 @pytest.mark.parametrize("block_format", ["compact", "legacy"])

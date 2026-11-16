@@ -6,7 +6,7 @@ included).
     python scripts/set_memory_mode.py aios/config/config.yaml \\
         --provider mem0 --kernel-memory on|off [--extract on|off]
         [--recency off|time|session] [--barrier-timeout-ms N] [--k N]
-        [--budget N] [--supersession off|exclude]
+        [--budget N] [--supersession off|exclude] [--write-quota on|off]
 
 ``--kernel-memory`` sets ``auto_inject`` and ``auto_extract`` together;
 ``--extract`` then sets ``auto_extract`` alone (benchmark v2 kernel runs
@@ -24,7 +24,9 @@ sets ``memory.write_barrier.timeout_ms`` (benchmark v2 kernel runs use
 ``memory.max_memory_tokens`` (benchmark v2 runs use 10 and 300).
 ``--supersession`` sets ``memory.supersession`` (benchmark v2 runs use
 ``exclude``, and the ``no_supersession`` control ``off``;
-docs/BENCHMARK_V2.md, Amendment 4).
+docs/BENCHMARK_V2.md, Amendment 4). ``--write-quota`` sets
+``memory.write_quota.enabled`` (on under the flood levels,
+docs/STRESS_DIMENSIONS.md).
 
 Run drivers call it between runs, never during one.
 """
@@ -162,6 +164,22 @@ def set_supersession(text: str, mode: str) -> str:
     return text
 
 
+def set_write_quota(text: str, enabled: bool) -> str:
+    """Set ``memory.write_quota.enabled``: the ``enabled`` line right
+    under ``write_quota:`` (``write_barrier`` has one too), matched
+    exactly once, its comment kept in its column."""
+    value = "true" if enabled else "false"
+    text, count = re.subn(
+        r"^(  write_quota:\n    enabled: )(true|false)([ \t]*)(#.*)?$",
+        _keep_column(value), text, flags=re.M,
+    )
+    if count != 1:
+        raise SystemExit(f"expected one write_quota.enabled line, got "
+                         f"{count}")
+    assert yaml.safe_load(text)["memory"]["write_quota"]["enabled"] is enabled
+    return text
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
@@ -174,6 +192,7 @@ def main(argv=None) -> None:
     parser.add_argument("--k", type=int)
     parser.add_argument("--budget", type=int)
     parser.add_argument("--supersession", choices=["off", "exclude"])
+    parser.add_argument("--write-quota", choices=["on", "off"])
     args = parser.parse_args(argv)
     with open(args.config) as handle:
         text = handle.read()
@@ -187,6 +206,8 @@ def main(argv=None) -> None:
     text = set_selection(text, args.k, args.budget)
     if args.supersession:
         text = set_supersession(text, args.supersession)
+    if args.write_quota:
+        text = set_write_quota(text, args.write_quota == "on")
     with open(args.config, "w") as handle:
         handle.write(text)
 

@@ -9,6 +9,8 @@ condition every copy matches the kernel's settings by construction.
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict
 
+from .quota import QuotaSettings
+
 # ``memory.supersession``: off, or retire earlier statements and never
 # select them (docs/DELETION_AND_SUPERSESSION.md).
 SUPERSESSION_MODES = ("off", "exclude")
@@ -29,7 +31,9 @@ class PipelineSettings:
     ``supersession`` (``memory.supersession``) is ``"off"`` (the
     default) or ``"exclude"``: a later statement of a fact retires the
     earlier rows of its slot, and selection never picks a retired
-    row."""
+    row. ``write_quota`` (``memory.write_quota``) bounds what one writer
+    stores per user per session (``quota.QuotaSettings``; off by
+    default, Subtask 18)."""
 
     relevance_threshold: float = 0.0
     max_injected_memories: int = 5
@@ -39,8 +43,14 @@ class PipelineSettings:
     block_recency: bool = False
     block_recency_unit: str = "time"
     supersession: str = "off"
+    write_quota: Dict[str, Any] = field(
+        default_factory=lambda: QuotaSettings().as_dict()
+    )
 
     def __post_init__(self):
+        # Validated here, so a bad block fails where the settings are
+        # built (the kernel at startup, an agent when it copies them).
+        QuotaSettings.from_config(self.write_quota)
         if self.block_format not in ("compact", "legacy"):
             raise ValueError(
                 "memory.block_format must be 'compact' or 'legacy', "
@@ -87,6 +97,9 @@ class PipelineSettings:
             supersession=memory_config.get(
                 "supersession", defaults.supersession
             ),
+            write_quota=QuotaSettings.from_config(
+                memory_config.get("write_quota")
+            ).as_dict(),
         )
 
     def as_dict(self) -> Dict[str, Any]:

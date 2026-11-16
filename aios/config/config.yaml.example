@@ -131,6 +131,17 @@ memory:
     enabled: true        # set false to disable the barrier
     timeout_ms: 5000     # max wait per retrieval
 
+  # Write quota (Subtask 18, docs/STRESS_DIMENSIONS.md): at most
+  # max_writes accepted writes per writer, per user, per session (the
+  # kernel session when the request names one, else metadata.session);
+  # with dedupe, a write whose normalized text the writer already
+  # stored for the user in that session is rejected. Off by default;
+  # on under the flood levels. Reported in /memory/config "pipeline".
+  write_quota:
+    enabled: false
+    max_writes: 4
+    dedupe: true
+
   # Mem0 provider configuration (used when provider: "mem0")
   mem0:
     api_key: ""  # Optional: for Mem0 cloud

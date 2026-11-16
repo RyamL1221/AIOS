@@ -160,3 +160,24 @@ def test_extract_sets_auto_extract_alone(tmp_path):
         "auto_extract"] is True
     # Without the flag --kernel-memory sets both, as before.
     assert yaml.safe_load(run(tmp_path))["memory"]["auto_extract"] is True
+
+
+@pytest.mark.parametrize("value,enabled", [("on", True), ("off", False)])
+def test_write_quota_sets_only_its_enabled_line(tmp_path, value, enabled):
+    """Subtask 18 (docs/STRESS_DIMENSIONS.md): the flood levels run with
+    ``memory.write_quota.enabled`` true. Only that line changes, not the
+    write barrier's ``enabled`` line, and both config files carry the
+    block, off."""
+    for path in (EXAMPLE, ROOT / "aios" / "config" / "config.yaml"):
+        if path.is_file():
+            quota = yaml.safe_load(path.read_text())["memory"]["write_quota"]
+            assert quota == {"enabled": False, "max_writes": 4,
+                             "dedupe": True}
+    original = EXAMPLE.read_text()
+    text = run(tmp_path, "--write-quota", value)
+    memory = yaml.safe_load(text)["memory"]
+    assert memory["write_quota"]["enabled"] is enabled
+    assert memory["write_barrier"]["enabled"] is True
+    changed = [line for line in changed_lines(original, text)
+               if not line.startswith(MODE_KEYS)]
+    assert changed == ([] if not enabled else ["    enabled: false"])

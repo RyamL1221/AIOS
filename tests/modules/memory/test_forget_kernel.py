@@ -691,13 +691,17 @@ def test_an_operation_the_manager_does_not_serve_is_answered():
 def test_a_write_reply_reports_its_outcome():
     """The ``add_memory`` reply's ``metadata`` says what the write
     swept, retired and lifted and whether it was suppressed; a plain
-    write did none of it."""
+    write did none of it. Since Subtask 18 it also names the barrier
+    sequence the write held and when the provider stored it."""
     manager = kernel()
     response = request(manager, WRITER, "add_memory", content=CITY,
                        metadata={"owner_agent": WRITER, "user_id": USER,
                                  "memory_type": "profile"})
     assert response.success and response.memory_id
-    assert response.metadata == {
+    outcome = dict(response.metadata)
+    assert isinstance(outcome.pop("committed_at"), float)
+    assert isinstance(outcome.pop("barrier_seq"), int)
+    assert outcome == {
         "swept": [], "retired": [], "lifted": [], "suppressed": False,
     }
 

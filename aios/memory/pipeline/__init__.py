@@ -51,8 +51,14 @@ from .formatter import (
     estimate_tokens,
     session_age,
 )
-from .identity import IdentityResolver, IdentityRules
+from .identity import (
+    IdentityResolver,
+    IdentityRules,
+    SessionRegistry,
+    UnknownSession,
+)
 from .matching import match_any, match_forms, normalize, value_in
+from .quota import QuotaSettings, WriteQuota
 from .selector import SHARED_FETCH_FACTOR, Selector
 from .settings import SUPERSESSION_MODES, PipelineSettings
 from .tombstones import (
@@ -100,12 +106,16 @@ __all__ = [
     "MemoryPipeline",
     "MemoryWriteBarrier",
     "PipelineSettings",
+    "QuotaSettings",
     "Selector",
+    "SessionRegistry",
     "Tombstone",
     "TombstoneStore",
+    "UnknownSession",
     "Visibility",
     "WaitOutcome",
     "WriteBarrier",
+    "WriteQuota",
     "after_write",
     "apply_sharing_filter",
     "carried_form",

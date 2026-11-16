@@ -120,7 +120,9 @@ def test_chat_passes_the_request_session_to_injection_and_extraction():
     executor = chat_executor(query)
     executor.execute_request(AGENT, query)
     inject = executor.context_injector.inject
-    assert inject.call_args.kwargs == {"user_id": USER, "session": 7}
+    assert inject.call_args.kwargs == {
+        "user_id": USER, "session": 7, "barrier_snapshot": None,
+    }
     extract = executor.conversation_extractor.extract_async
     assert extract.call_args.args == (AGENT, "where is the sync?", "Birch.")
     assert extract.call_args.kwargs == {
@@ -154,24 +156,33 @@ def test_chat_passes_the_request_provenance_event_to_extraction():
         "provenance_event": "u004-p6-integration",
     }
     assert executor.context_injector.inject.call_args.kwargs == {
-        "user_id": USER, "session": 7,
+        "user_id": USER, "session": 7, "barrier_snapshot": None,
     }
 
 
 # --- the /query handler -----------------------------------------------
 
 
-def launch_handler(execute_request, llm_query=LLMQuery):
+def launch_handler(execute_request, llm_query=LLMQuery, manager=None,
+                   accept_memory_request=None):
     """``QueryRequest`` and ``handle_query``, compiled from
     runtime/launch.py's source with the names they use.
 
     Importing runtime.launch would start the whole kernel (it
-    initializes every component on import), so only these two
-    definitions run; ``execute_request`` stands in for the executor,
-    and ``llm_query`` for the SDK's ``LLMQuery``.
+    initializes every component on import), so only these definitions
+    run (and the session helpers they call); ``execute_request`` stands
+    in for the executor, ``llm_query`` for the SDK's ``LLMQuery``,
+    ``manager`` for the memory manager (None: not initialized) and
+    ``accept_memory_request`` for the executor's memory path.
     """
+    from aios.memory.pipeline import UnknownSession
+
+    if accept_memory_request is None:
+        def accept_memory_request(agent_name, query, session_token=None):
+            return lambda: execute_request(agent_name, query)
     tree = ast.parse(LAUNCH.read_text())
-    wanted = {"QueryRequest", "handle_query"}
+    wanted = {"QueryRequest", "handle_query", "bind_chat_request",
+              "bind_memory_request"}
     nodes = [
         node for node in tree.body
         if getattr(node, "name", None) in wanted
@@ -191,6 +202,10 @@ def launch_handler(execute_request, llm_query=LLMQuery):
         "logger": logging.getLogger(__name__),
         "selected_llms": {"llms": []},
         "execute_request": execute_request,
+        "active_components": {"memory": manager},
+        "UnknownSession": UnknownSession,
+        "MemoryResponse": MemoryResponse,
+        "accept_memory_request": accept_memory_request,
     }
     module = ast.Module(body=nodes, type_ignores=[])
     exec(compile(module, str(LAUNCH), "exec"), namespace)

@@ -304,7 +304,9 @@ def kernel_with_history(users):
 def without_timings(diagnostics: dict) -> dict:
     return {
         key: value for key, value in diagnostics.items()
-        if not key.endswith("_ms")
+        # Durations, and the wall-clock time the fetch began (Subtask
+        # 18): never equal between two calls.
+        if not key.endswith("_ms") and key != "fetch_started_at"
     }
 
 

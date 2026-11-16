@@ -1,6 +1,7 @@
-# This implements a (mostly) FIFO task queue using threads and queue, in a
-# similar fashion to the round robin scheduler. However, the timeout is 1 second
-# instead of 0.05 seconds.
+# A FIFO scheduler: one thread per module queue. Each thread blocks on
+# its queue until a syscall arrives (the queue's condition variable), so
+# no request waits for a polling interval (NeurIPS Subtask 18,
+# docs/STRESS_DIMENSIONS.md; known issue 15).
 
 from aios.hooks.types.llm import LLMRequestQueueGetMessage
 from aios.hooks.types.memory import MemoryRequestQueueGetMessage
@@ -33,10 +34,13 @@ logger = logging.getLogger(__name__)
 class FIFOScheduler(BaseScheduler):
     """
     A FIFO (First-In-First-Out) task scheduler implementation.
-    
-    This scheduler processes tasks in the order they arrive.
-    LLM tasks are batched based on a time interval. Other tasks (Memory, Storage, Tool)
-    are processed individually as they arrive.
+
+    This scheduler processes tasks in the order they arrive. The LLM
+    thread waits for a request, takes every request already queued with
+    it and runs them as one batch; requests that arrive while a batch
+    runs form the next one. Other tasks (Memory, Storage, Tool) are
+    processed individually as they arrive. No thread polls on an
+    interval: each blocks on its queue until a syscall is put.
     
     Example:
         ```python
@@ -50,7 +54,6 @@ class FIFOScheduler(BaseScheduler):
             get_memory_syscall=memory_queue.get,
             get_storage_syscall=storage_queue.get,
             get_tool_syscall=tool_queue.get,
-            batch_interval=0.1  # Process LLM requests every 100ms
         )
         scheduler.start()
         ```
@@ -67,7 +70,6 @@ class FIFOScheduler(BaseScheduler):
         get_memory_syscall: MemoryRequestQueueGetMessage,
         get_storage_syscall: StorageRequestQueueGetMessage,
         get_tool_syscall: ToolRequestQueueGetMessage,
-        batch_interval: float = 1.0,
     ):
         """
         Initialize the FIFO Scheduler.
@@ -81,8 +83,11 @@ class FIFOScheduler(BaseScheduler):
             get_llm_syscall: Function to get LLM syscalls
             get_memory_syscall: Function to get Memory syscalls
             get_storage_syscall: Function to get Storage syscalls
-            get_tool_syscall: Function to get Tool syscalls
-            batch_interval: Time interval in seconds to batch LLM requests. Defaults to 0.1.
+            get_tool_syscall: Function to get Tool syscalls. Each getter
+                waits a short time for a syscall and raises
+                ``queue.Empty`` when none came; the LLM getter also
+                takes ``timeout=0`` (take without waiting), which the
+                LLM thread uses to collect a batch.
         """
         super().__init__(
             llm,
@@ -95,7 +100,6 @@ class FIFOScheduler(BaseScheduler):
             get_storage_syscall,
             get_tool_syscall,
         )
-        self.batch_interval = batch_interval
         
     def _execute_syscall(
         self, 
@@ -203,36 +207,47 @@ class FIFOScheduler(BaseScheduler):
             traceback.print_exc()
 
 
+    def _queued(self, get) -> List[Any]:
+        """Every syscall already in the queue ``get`` reads, in arrival
+        order, without waiting for more."""
+        taken = []
+        while True:
+            try:
+                taken.append(get(timeout=0))
+            except Empty:
+                return taken
+
     def process_llm_requests(self) -> None:
         """
-        Process LLM requests from the queue in batches based on batch_interval.
-        
+        Process LLM requests as they arrive, in batches.
+
+        The thread blocks on the queue until a request is put (its wait
+        ends at once; the short timeout only lets it see ``stop``), then
+        takes every request already queued and runs them as one batch,
+        in arrival order. Requests that arrive while a batch runs wait
+        for it and form the next batch. Until Subtask 18 the thread
+        slept ``batch_interval`` (1 s) before each collection, so a
+        request waited up to a second for nothing (known issue 15).
+
         Example:
             ```python
-            # Collects LLM requests for 0.1 seconds (default) then processes them:
+            # Two requests queued together run as one batch:
             # Batch = [
             #   {"messages": [{"role": "user", "content": "Hello"}]},
             #   {"messages": [{"role": "user", "content": "World"}]}
             # ]
-            # Calls self.llm.execute_batch_llm_syscall(Batch)
+            # Calls self.llm.execute_llm_syscalls(Batch)
             ```
         """
         while self.active:
-            time.sleep(self.batch_interval)
-
-            batch = []
-            while True:
-                try:
-                    llm_syscall = self.get_llm_syscall()
-                    # Add logging here: print(f"Retrieved syscall: {llm_syscall.pid}, Queue size now: {self.llm_queue.qsize()}")
-                    batch.append(llm_syscall)
-                except Empty:
-                    # This is the expected way to finish collecting the batch
-                    # print(f"Queue empty, finishing batch collection with {len(batch)} items.")
-                    break
-
-            if batch:
-                self._execute_batch_syscalls(batch, self.llm.execute_llm_syscalls, "LLM")
+            try:
+                first = self.get_llm_syscall()
+            except Empty:
+                continue
+            batch = [first] + self._queued(self.get_llm_syscall)
+            self._execute_batch_syscalls(
+                batch, self.llm.execute_llm_syscalls, "LLM"
+            )
 
     def process_memory_requests(self) -> None:
         """

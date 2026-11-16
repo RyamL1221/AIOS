@@ -7,6 +7,7 @@ that decides what is stored and what an agent sees is here, so both run
 the same code.
 """
 import logging
+import time
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import (
@@ -19,6 +20,7 @@ from .barrier import MemoryWriteBarrier
 from .deletion import LIST_TOP_K, MARKS, after_write, forget_fact
 from .formatter import Formatter, estimate_tokens
 from .identity import IdentityResolver
+from .quota import QuotaSettings, WriteQuota
 from .selector import Selector
 from .settings import PipelineSettings
 from .tombstones import TombstoneStore, carried_form
@@ -166,6 +168,10 @@ class MemoryPipeline:
             calls with the user they serve (``cerebrum.utils.usage
             .tagged`` in the kernel and the replicated agents); omitted,
             nothing is tagged.
+        quota: The write quota (``WriteQuota``). Omitted: a new one of
+            the agent's own, from ``settings.write_quota``; the kernel
+            passes its one quota to every per-request pipeline.
+            ``None``: no quota.
     """
 
     def __init__(
@@ -177,6 +183,7 @@ class MemoryPipeline:
         resolver: Optional[IdentityResolver] = None,
         tombstones: Any = _LOCAL,
         usage_tag: Optional[UsageTag] = None,
+        quota: Any = _LOCAL,
     ):
         self.provider = provider
         self.usage_tag: UsageTag = usage_tag or untagged
@@ -189,6 +196,10 @@ class MemoryPipeline:
         self.tombstones: Optional[TombstoneStore] = (
             TombstoneStore() if tombstones is _LOCAL else tombstones
         )
+        self.quota: Optional[WriteQuota] = (
+            WriteQuota(QuotaSettings.from_config(self.settings.write_quota))
+            if quota is _LOCAL else quota
+        )
         self.selector = Selector(
             provider, self.settings, self.barrier, self.resolver,
             tombstones=self.tombstones, usage_tag=self.usage_tag,
@@ -200,6 +211,7 @@ class MemoryPipeline:
         self, agent_name: str, user_id: Optional[str], note: MemoryNote,
         *, barrier_seq: Optional[int] = None,
         outcome: Optional[Dict[str, Any]] = None,
+        session_key: Any = None,
     ) -> str:
         """Store one note and return its id; raises ``ProviderError``.
 
@@ -220,6 +232,15 @@ class MemoryPipeline:
         that stored nothing does. When the row the provider named was
         swept but another row of the write was kept (Mem0's extraction
         may store several), that row's id is returned.
+
+        With the quota on (``quota.WriteQuota``), a write the quota
+        rejects stores nothing and returns ``""``; ``outcome`` gets
+        ``quota_rejected`` (``"duplicate"`` or ``"quota"``). It counts
+        in the writer's bucket for the user and ``session_key`` (the
+        kernel's session), else the note's ``metadata.session``.
+        ``outcome`` also gets ``barrier_seq``, the barrier sequence the
+        write held (0: none), and ``committed_at``, the wall-clock time
+        the provider returned (Subtask 18).
         """
         if note.metadata is None:
             note.metadata = {}
@@ -252,9 +273,40 @@ class MemoryPipeline:
                 self.barrier.acquire(uid) if self.barrier else 0
             )
         success = False
+        session = (session_key if session_key is not None
+                   else metadata.get("session"))
         try:
+            if outcome is not None:
+                outcome["barrier_seq"] = barrier_seq or 0
+            if self.quota is not None:
+                rejected = self.quota.admit(
+                    uid, metadata["owner_agent"], session, note.content
+                )
+                if rejected:
+                    success = True  # nothing failed; nothing was stored
+                    logger.info(
+                        "write quota: rejected a write of %s for %s "
+                        "(session %s): %s",
+                        metadata["owner_agent"], uid, session, rejected,
+                    )
+                    if outcome is not None:
+                        outcome.update({
+                            "swept": [], "retired": [], "lifted": [],
+                            "suppressed": False,
+                            "quota_rejected": rejected,
+                        })
+                    return ""
             with self.usage_tag(uid):
-                memory_id = self.provider.add(note)
+                try:
+                    memory_id = self.provider.add(note)
+                except Exception:
+                    if self.quota is not None:
+                        self.quota.refund(
+                            uid, metadata["owner_agent"], session,
+                            note.content,
+                        )
+                    raise
+                committed_at = time.time()
                 success = True
                 report = after_write(
                     self.provider, self.tombstones, self.settings, uid,
@@ -264,6 +316,7 @@ class MemoryPipeline:
             kept_own = report.pop("kept_own")
             if outcome is not None:
                 outcome.update(report)
+                outcome["committed_at"] = committed_at
             if report["suppressed"] or not memory_id:
                 return ""
             swept = {entry["memory_id"] for entry in report["swept"]}
@@ -568,12 +621,15 @@ class MemoryPipeline:
         k: Optional[int] = None,
         max_tokens: Optional[int] = None,
         session: Optional[int] = None,
+        barrier_snapshot: Optional[int] = None,
     ) -> Tuple[List[dict], Dict[str, Any]]:
         """Retrieve for the latest user message and prepend the block as
         a system message. Returns the new message list and the
         injection diagnostics. Messages come back unchanged when there
         is no user message or nothing to inject. ``session`` is the
-        caller's current session (``build_block``).
+        caller's current session (``build_block``). ``barrier_snapshot``
+        is the barrier sequence taken when the request was accepted
+        (``Selector.await_pending_writes``; None: take one now).
 
         ``diagnostics["retrieval_error"]`` is None when both fetches
         succeeded, else which failed and why (``retrieval_error``). The
@@ -608,6 +664,7 @@ class MemoryPipeline:
         candidates, retrieval = self.retrieve(
             agent_name, agent_name, user_text,
             k=k, include_shared=True, request_user_id=user_id,
+            barrier_snapshot=barrier_snapshot,
         )
         # Reported, not dropped: a failed fetch left an empty block that
         # passed deletion and privacy probes (BENCHMARK_V2.md, Amendment
