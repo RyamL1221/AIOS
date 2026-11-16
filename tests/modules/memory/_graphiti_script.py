@@ -34,14 +34,17 @@ ENTITIES = re.compile(r"<ENTITIES>\s*(.*?)\s*</ENTITIES>", re.DOTALL)
 
 
 def load_env() -> None:
-    """NEO4J_* from AIOS/.env, without overriding the environment."""
+    """NEO4J_* from AIOS/.env, without overriding the environment. No
+    other line is copied: the file holds the Azure key too, which no
+    test process needs (known issue 51)."""
     path = AIOS_ROOT / ".env"
     if not path.is_file():
         return
     for line in path.read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip())
+            if key.strip().startswith("NEO4J_"):
+                os.environ.setdefault(key.strip(), value.strip())
 
 
 def neo4j_ready() -> bool:
