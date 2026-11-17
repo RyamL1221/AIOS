@@ -3007,6 +3007,238 @@ three decisions on the Graphiti smoke's findings. Design:
 - `docs/FULL_GRID.md`, a stub for Subtask 23, holds the judge-window
   plan and the native k = 30 sensitivity cell.
 
+**Spec before code** (AIOS `67bc226`; one correction before any code,
+`23b97d1`: a flood copy keeps its source event): `STRESS_DIMENSIONS.md`,
+the three dimensions, their levels, what each locus is predicted to do
+and why, the measures and the grounding.
+
+**Code** (AIOS `c389539`, Cerebrum `d876f0f`):
+- **Agent count.** `agents_v1.py` derives `agents_n3`, `agents_n6` and
+  `agents_n12` (and `pilot_agents_nN`) from `users_v2`: the same
+  events, utterances, sessions and probes, written by N − 1 writers
+  (one writer turn per writer active in a session; each event keeps its
+  v2 memory type). `--agents N`; at H > 0, round(H·N/3) agents deviate
+  (`schedule_for`, Subtask 10's schedule at N = 3).
+- **Concurrency.** `--concurrency concurrent`: each write of a session
+  its own task, the probes issued at once when every write task of the
+  last session has begun. In the kernel, a memory request is now
+  accepted on the event loop (stamped against the barrier and queued,
+  in arrival order) and awaited off it, and a chat request's barrier
+  snapshot is taken on arrival. Before, the `/query` handler served a
+  memory request on the event loop, so concurrent writers were
+  serialized at the HTTP layer and no probe could race a write.
+- **Load mode.** `--load M`: M users at a time against one kernel.
+- **Faulty agent.** `--fault wrong_user | missing_metadata | flood10 |
+  flood50`, one writer (or the consumer, for `missing_metadata`) per
+  user by a seeded rotation, paired across loci; the wrong-user victim
+  is the next user. Kernel sessions (`POST /session/open`,
+  `/session/close`, `session_token`): a request is served for the
+  session's user, the claim it overrode recorded
+  (`identity_overridden`). WriteQuota (`memory.write_quota`, off by
+  default, on under the floods): at most `max_writes` (4) writes per
+  writer, user and session, duplicates (normalized text) rejected
+  first.
+- **Scheduler.** Event-driven (known issue 15).
+- **Measures.** `stress.measures` on every trial (`TrialResult.stress`);
+  `stress_report.py` pairs each trial with its reference.
+
+**One-user tries** (in-house, user 0): N = 12 ran end to end, and the
+user's blocks and answers were byte-identical at N = 4 and 12;
+concurrency: no late write in the kernel, 3 in replicated, 2 in native;
+wrong user: no kernel row misfiled, 7 to 8 rows misfiled by replicated
+and by native, held in the victim's blocks; flooding: no kernel flood
+row stored, 19 and 20 by replicated and native, and native's
+integration block lost the whole profile.
+
+**Scheduler check** (`results/scheduler_check_s18`, its
+`PROVENANCE.md`): pilot_v1, users 0 to 9, H = 0, kernel in-house, Qwen,
+before (AIOS `7053e0a`, from a worktree) and after (`c389539`), one
+`config.yaml`. Blocks, writes and answers identical for all 10 users.
+`schedule_wait_ms` median 845 ms (409 to 925) before, 1.0 ms (0.7 to
+3.4) after; the kernel's overhead median 906 ms before, 77 ms after.
+Judged together in one pass, the identical answers' scores agree for 5
+of 10 profile, 10 of 10 task and 6 of 10 integration scores: the
+judge's own variation (known issue 24, extended), not the scheduler's.
+A first "before" run was invalid (Azure refused the network after a
+router restart, then its re-run reused the run id, known issue 36);
+excluded, recorded in the provenance.
+
+**Review** (one adversarial pass over the code and the spec, while a
+first functional attempt, `f18`, ran; that attempt was stopped after
+about 30 minutes for the fixes, and its partial results are neither
+used nor archived) and its fixes (AIOS `d451801`, Cerebrum `8ef6d6f`),
+each with a test that fails without it:
+1. **wrong_user outside the kernel failed every Mem0 trial.** The
+   faulty writer's rows were in the victim's partition, which no
+   per-session listing read, so `extraction_failure` took its writes for
+   writes that stored nothing. Each session's listing now lists the
+   user's rows in the victim's partition (`misfiled`) and credits them
+   to the writes that stored them.
+2. **A forget's reply had no commit time.** The harness fell back on
+   its own reply time, so a revoke the kernel served last could look
+   late although the probe's barrier covered it. A forget's report now
+   carries `committed_at` and `barrier_seq`, as a write's outcome does.
+3. **Uncovered writes counted as misses.** A write the kernel accepted
+   after the probe is outside its guarantee; the misses now count
+   `late_covered` (the late writes that are not uncovered).
+4. **`reappeared_ids` read only a session's last writer turn.**
+5. **Concurrent probes' latency and completion** were taken in the
+   dataset's order; now in each probe's own thread.
+6. **Load mode:** a request could wait, unmeasured, for one of the
+   default pool's 12 workers; the server now awaits every request on a
+   64-worker pool of its own (`aios/utils/request_pool.py`).
+7. **Probes issued before a last-session writer failed** ran on into
+   the next trial; they are drained and their session closed.
+8. **The flood check** counted rows (a Mem0 write can leave none or
+   several), "its events" had to mean write events (a revoke-only turn
+   is flooded too), and the create capture counted quota-rejected
+   creates. The check now counts each flooding turn's accepted flood
+   writes against `max_writes` less its write events
+   (`flood_sessions_over_bound`), with the kernel's quota from the
+   pre-flight.
+9. **Four tests would have passed with their rule broken:** the bound
+   injection (now a kernel-vs-library equivalence over 20 users whose
+   writes and chats claim the next user), the chat's arrival snapshot
+   (untested), the quota's lock (now under forced interleaving), and
+   the agent-count check's "private fact not its writer's last", which
+   read a flag hard-coded False at N = 6 and 12 (now computed from the
+   file's own turns; the data files' headers record the new generator
+   hash, no user changes).
+10. **Minor:** `--agents` with another dataset ran it as N agents (now
+    refused); spec wording (`stop()`, the generator's checks, when the
+    probes are issued, where `identity_overridden` sits).
+
+**Functional check** (`f18b`, Cerebrum
+`results/stress_functional_f18b`, its `PROVENANCE.md` and
+`analysis.md`; AIOS `d451801`, Cerebrum `8ef6d6f`): judge-free, Qwen,
+users 0 to 4 of the pilot (16 in the load cells), all 72 cells:
+kernel in-house and Mem0 at every level, the four agent-managed cells
+at every level but the load mode. Every check that must hold held
+(the report's "Checks that must hold"):
+- **Agent count.** N = 12 ran end to end in every cell. In-house at
+  H = 0, every judge-free outcome and every block (byte for byte) was
+  the same at N = 3, 6 and 12 in all three loci (30 of 30 probes
+  each). On Mem0 the outcomes agreed in 29 of 30 (kernel), 21 of 24
+  (replicated) and 18 of 18 probes (native; the users with a failed
+  trial left out) and no block was byte-equal: Mem0's extraction
+  words each row anew.
+- **Concurrency.** Every probe was issued with writes in flight. The
+  kernel's waited for them (median 99 ms in-house, 3.7 s on Mem0,
+  where a write is a GPT-4o call; no timeout) and read no late write.
+  Replicated and native read at once: 77 to 90 late writes over their
+  30 probes, every probe, and two late forgets (a deletion probe whose
+  block held the value its revoke, still in flight, was removing:
+  replicated Mem0 and native in-house). No timing miss or stale read
+  was possible: none of the five users' recall, recency or
+  contradiction targets is written in the last session (in the smoke's
+  30 users, 6 recency and 4 contradiction targets are).
+- **Wrong user.** The kernel misfiled no row and recorded
+  `identity_overridden` on each of the faulty writer's 27 requests;
+  every outcome as without the fault in-house (on Mem0 one recency
+  probe passed that had failed). Replicated and native misfiled 27 to
+  34 rows into the next user's partition, which reached that user's
+  blocks 65 to 88 times, and their users missed about one more fact
+  (`memories_missing` +0.80 to +1.20, every interval above 0).
+- **Missing metadata.** As Subtask 10's V3: native shows private rows
+  of other agents (2 in-house, 1 on Mem0); the kernel and replicated
+  none.
+- **Floods.** The kernel accepted at most `4 − (its write events)` of
+  the flooder's writes in every turn (9 at F = 10 and at F = 50; on
+  Mem0 they left 7 rows), rejected none of a reference writer's, and
+  its outcomes did not move (`memories_missing` +0.20 to +0.40, every
+  interval across 0). Replicated and native accepted every flood write
+  (90 and 450; on Mem0 its extraction merged them into 30 to 340
+  rows), which reached the blocks 71 to 295 times; in-house, their
+  users missed 1.0 to 1.6 more facts (at F = 50 replicated +1.20
+  [+0.16, +2.24], native +1.60 [+0.92, +2.28]).
+- **Load** (kernel only, 16 users at M at a time): throughput stayed
+  at the model's (in-house 0.75, 0.96 and 1.00 users a minute at
+  M = 1, 4 and 16; Mem0 0.66, 0.69, 0.61), probe latency grew
+  (in-house median 8.9, 34 and 80 s), and the kernel's memory path did
+  not: barrier waits stayed under 2 ms (p95), with no timeout. The
+  growth is the LLM queue: a request arriving while a batch runs waits
+  for the batch, which Ollama serves one completion at a time
+  (`schedule_wait_ms` median 1 ms, 8.8 s and 12 s in-house; known
+  issue 54). Writes did queue on the kernel's one memory thread, as
+  the spec said: a Mem0 write took a median 1.3, 3.2 and 24 s at
+  M = 1, 4 and 16 (in-house 0.05, 0.16 and 0.67 s), which is why
+  Mem0's throughput fell at M = 16. But the spec's prediction that a
+  probe's barrier wait would grow with them did not hold: in the load
+  mode a user's probes start after its own writes have completed, so
+  no write of the user is in flight at a probe.
+- **Deviation: Mem0 stores nothing for one vague sentence when its
+  writer has written little** (known issue 53). Six trials failed, all
+  by the extraction check, all on the same two writes, users 0's and
+  4's "Issues are sent to Rollbar." (a paraphrase of "Errors get
+  reported to Rollbar."); every other trial of every cell passed. Mem0 2.0.2 shows its extraction LLM the
+  user's earlier memories of the same `agent_id` and that agent's last
+  messages, and every locus passes the writer as `agent_id`. At N = 3
+  and 6 the sentence's writer is the task agent, with the user's task
+  facts already stored; at N = 12 it is `code_review_agent`, with
+  almost nothing; under concurrency its writer's earlier writes of the
+  session were still in flight. Over every Mem0 attempt: stored 54 of
+  54 times at N = 3 and 6 run one write at a time; nothing 7 of 16
+  times at N = 12 (kernel 1 of 6, replicated 3 of 6, native 3 of 4)
+  and 1 of 6 under concurrency (native). The trial fails, as any
+  Mem0 write that stores nothing does (known issue 32). Two cells were
+  re-run once each under a new prefix: the kernel's passed, the
+  replicated cell failed again the same way and was not re-run
+  further; every other cell ran once. So "the kernel is unaffected
+  except cost" holds for the kernel's own path but not for a backend
+  that extracts per writer.
+
+**Smoke** (`s18`, Cerebrum `results/stress_smoke_s18`, its
+`PROVENANCE.md` and `analysis.md`; AIOS `d451801`, Cerebrum `8ef6d6f`):
+judge-free, Qwen, all 30 pilot users at N = 6 and H = 0, in-house,
+the sequential reference, `concurrent`, `flood10` and `flood50` in the
+three loci; one attempt, no failed trial. Every check that must hold
+held. Paired against the same users' sequential trial (exact McNemar
+for outcomes, a t interval for means; pass rates with 95% Wilson
+intervals in the report):
+- **Concurrency.** 6 users have a recency target, 4 a contradiction
+  target, 6 a private event and 14 a revoke in the last session. The
+  kernel's 180 probes waited (median 114 ms, at most 248) and read no
+  late write; every outcome as sequential. Replicated's read 552 late
+  writes, native's 498; the timing cost, paired: replicated lost 2
+  contradiction probes (both stale reads: the earlier statement not
+  yet retired), native 1 (a timing miss); no other outcome moved, and
+  `memories_missing` did not (replicated +0.00 [+0.00, +0.00], native
+  −0.03 [−0.10, +0.03]). Native's other stale reads (6 recency, 3
+  contradiction) and its 6 late forgets were in probes it fails
+  sequentially too. `memories_missing_timing` counted 4 and 5 writers
+  (replicated, native), each also missing from the user's sequential
+  block (the budget keeps it out), so the measure is read paired
+  (`STRESS_DIMENSIONS.md`, corrected).
+- **Floods.** The kernel accepted at most `4 − (its write events)` per
+  flooding turn (94 flood writes at F = 10, 98 at F = 50, over 30
+  users), rejected no reference writer's write, and moved nothing:
+  `memories_missing` −0.03 [−0.24, +0.17] at both levels, profile facts
+  in the integration block +0.00, every outcome as sequential; its
+  accepted flood rows reached a block 1.7 to 1.8 times a probe.
+  Replicated and native accepted all 530 and 2,650 flood writes, every
+  flooding turn over the bound, 4.3 to 10 flood rows in a probe's
+  block: `memories_missing` +0.60 [+0.21, +0.99] and +1.03 [+0.57,
+  +1.50] (replicated, F = 10 and 50), +0.60 [+0.23, +0.97] and +1.47
+  [+1.03, +1.90] (native); profile facts in the block −0.23 [−0.38,
+  −0.07] and −0.53 [−0.72, −0.34] (replicated), −0.36 [−0.54, −0.18]
+  and −0.69 [−0.86, −0.52] (native). Native's recency rose (11 users
+  gained, 1 lost at F = 50, p 0.006; 10 of 30 sequentially): its
+  near-duplicates repeat the newest statement, which then wins native's
+  10-row search more often.
+
+**After the runs.** The report (Cerebrum `4279ce6`) prints the checks
+that must hold first, each write a backend stored nothing for
+(`writes_without_row`), the pass rates with their Wilson intervals,
+the paired `memories_missing` beside the concurrency measures, and the
+H = 2 rows in a table of their own (computed before, but printed as
+dashes); each with a test that fails without it. `STRESS_DIMENSIONS.md`
+(this commit) now says, as the code does, that a `timing_miss` needs
+the target's value missing from the block; that a late write can still
+be read (the fetch embeds the query before it searches, behind the
+writes' embeddings at Ollama); that `memories_missing_timing` is read
+paired; and, under the agent count's predictions, what the functional
+check found on Mem0. The runs' records: Cerebrum `060cb9d`.
+
 ## Open decisions
 
 1. **Native Mem0's install.** The agents run the pinned `mem0ai` 2.0.2
@@ -3062,6 +3294,20 @@ three decisions on the Graphiti smoke's findings. Design:
    (c) the review's finding 2, a V4 consumer's 0.5 threshold applied to
    native A-MEM's distance at H = 2, is documented, not changed, as on
    native Mem0 (`NATIVE_USAGE.md`, "native_amem").
+7. **Mem0 writes stored as nothing under the stress dimensions**
+   (Subtask 18, known issue 53). At N = 12 and under concurrency, Mem0
+   stored one vague sentence as nothing in 8 of 22 attempts (never in
+   54 sequential attempts at N = 3 and 6), and the harness fails such
+   a trial, as it has every Mem0 write that stores nothing since
+   Subtask 10 (known issue 32: Mem0 also swallows LLM errors that
+   way). For the full grid's Mem0 cells at N = 12 and `concurrent`:
+   (a) keep failing the trial (the users differ between cells, and
+   the failure rate is reported); (b) count such a write as a lost
+   memory when Mem0 logged no LLM error ("extracted no facts"), as
+   Graphiti's empty writes are (Amendment 5); (c) leave N = 12 and
+   `concurrent` out of the Mem0 cells. Proposed: (b), which keeps
+   every user and reports the loss; the kernel's and the library's
+   provider log tells the two apart, and the harness would read it.
 
 ## Test baselines
 
@@ -3115,7 +3361,17 @@ These fail on `workshop-postrun` too and are not caused by later work.
   and one of known issue 35's two deadline tests) and the end of
   Subtask 17 (AIOS `ec3c467`, Cerebrum `062d12c`: AIOS 764 passed, the
   7 errors; Cerebrum 1173 passed, 4 skipped, the same 19 failures and 2
-  errors, by name). The names
+  errors, by name) and Subtask 18's code (AIOS `c389539`, the set now
+  with `tests/modules/scheduler`: 816 passed, the 7 errors; Cerebrum
+  `d876f0f`, `tests/agents`: 1208 passed, 4 skipped, the same 19
+  failures and 2 errors, by name) and its review fixes (AIOS `d451801`:
+  821 passed, the 7 errors; Cerebrum `8ef6d6f`, with
+  `tests/test_live_kernel_guard.py`: 1226 passed, 4 skipped, the 19
+  failures, one of known issue 35's two and the 2 errors) and the
+  report (Cerebrum `4279ce6`: 1231 passed, 4 skipped, the 19 failures
+  and 2 errors, and once
+  `test_write_barrier_determinism.py::test_determinism_under_latency_permutation`,
+  known issue 35). The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 
@@ -3165,12 +3421,14 @@ These fail on `workshop-postrun` too and are not caused by later work.
 14. Fixed in Subtask 7: native Mem0's extraction cost is recorded
     (`backend_llm_tokens`), about 24,000 tokens and 0.066 USD per GPT-4o
     trial.
-15. The FIFO scheduler waits up to `batch_interval` (1.0 s, set in
-    `useFIFOScheduler`) before running an LLM request; sequential
-    requests wait about the full second. That is 14% of `kernel_shared`
-    latency on GPT-4o and more on fast models. It is in
-    `kernel_overhead_ms`; whether to shorten it is a question for the
-    latency claims (Subtask 19 or later), not changed here.
+15. Fixed in Subtask 18 (AIOS `c389539`): the FIFO scheduler's LLM
+    thread blocks on its queue and runs what is queued as one batch, in
+    arrival order, with no `batch_interval`. Before: it waited up to
+    `batch_interval` (1.0 s) before running an LLM request, so
+    sequential requests waited about the full second (14% of
+    `kernel_shared` latency on GPT-4o). Measured on pilot_v1, 10 users:
+    `schedule_wait_ms` median 845 ms before, 1.0 ms after, blocks and
+    answers identical (`results/scheduler_check_s18`).
 16. The harness's user-less post-ProfileAgent diagnostic search (known
     issue 10) is tagged with the agent name, not the trial's user, so
     its embedding call is not counted in the trial. It is harness
@@ -3210,7 +3468,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
     temperature), 24% of profile, 1% of task and 16% of integration
     scores differ, with mean differences within 0.03. Qwen and Llama on
     Ollama are deterministic. GPT-4o and judge noise remain, so compare
-    cells paired and with CIs.
+    cells paired and with CIs. Within one pass too: in Subtask 18's
+    scheduler check, 20 identical answers judged one after the other
+    got different scores in 5 of 10 profile and 4 of 10 integration
+    pairs, so a behavior-preserving change is shown by identical blocks
+    and answers, not by equal scores.
 25. Fixed in Subtask 10 (Cerebrum `8ed13d5`): the guard is ported;
     tests that need a kernel are marked `live_kernel`. Before: Cerebrum on this branch had no `tests/conftest.py` kernel guard (it
     exists only on `feature/self-improving-memory`), so `pytest
@@ -3284,7 +3546,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
     `test_kernel_shared_delta_is_zero` and
     `test_delta_equals_arithmetic_difference`, sometimes hit
     Hypothesis's deadline (timing, not logic, 200 ms; more often under
-    load); they make the Cerebrum failure count 19, 20 or 21.
+    load); they make the Cerebrum failure count 19, 20 or 21. So can
+    `test_write_barrier_determinism.py::test_determinism_under_latency_permutation`
+    (Subtask 18, once in the suite: its barrier stand-in waited 611 ms
+    against a 500 ms timeout for two 370 ms writes; it passes alone, and
+    Hypothesis calls it flaky).
 36. Nothing resets the memory stores between runs. The kernel keeps
     one set for every run and prefix: its Chroma stores
     (`.mem0/chroma`, `.aios_state/chroma_inhouse`), its tombstones
@@ -3627,6 +3893,32 @@ These fail on `workshop-postrun` too and are not caused by later work.
     a test that called Azure unmocked elsewhere would reach it with the
     real key (Cerebrum's guard blocks only the kernel).
     `LITELLM_MODE=PRODUCTION` stops the load.
+52. Embedding scores move in the fourth decimal between runs (Ollama,
+    nomic-embed-text), which can change which row a budget or a cap
+    cuts last, so a block's tail row can differ between two runs of
+    the same history. Within one run every locus sees the same scores,
+    so paired comparisons are unaffected.
+53. Mem0 scopes its extraction context by `agent_id`: Mem0 2.0.2 shows
+    its extraction LLM the user's earlier memories of the same agent
+    (top 10) and that agent's last 10 messages, and every locus passes
+    the writer as `agent_id`. A vague sentence written by an agent that
+    has stored little for the user yet can be stored as nothing: in
+    Subtask 18's functional check, "Issues are sent to Rollbar." (users
+    0 and 4) 7 of 16 times at N = 12 and 1 of 6 under concurrency,
+    never in 54 sequential writes at N = 3 or 6. The trial then fails
+    by the extraction check (known issue 32). The full grid's N = 12
+    and concurrency cells on Mem0 will fail some users so; how to
+    count them (failed trials, or memories lost, as Graphiti's are,
+    Amendment 5) is open decision 7.
+54. Under the load mode the kernel's LLM queue, not its memory path,
+    holds a request: a chat request that arrives while a batch runs
+    waits for the whole batch, which Ollama serves one completion at a
+    time (`schedule_wait_ms` median 12 s at M = 16 in-house, 59 s on
+    Mem0), and a user's writes queue behind other users' on the one
+    memory thread (a Mem0 write's median 24 s at M = 16). The barrier
+    wait does not grow. Behavior as before Subtask 18 (the batching is
+    unchanged); recorded so the load mode's latency is read as the
+    model's and the memory thread's.
 
 ## Fixed
 

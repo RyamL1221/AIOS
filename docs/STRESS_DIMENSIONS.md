@@ -168,6 +168,15 @@ extracted differently when the writer holds fewer of the user's facts.
 A recency update stays with its owner, so the "update names both"
 failures should not change.
 
+Found in the functional check (`DEV_STATUS.md`, Subtask 18, known issue
+53): the difference can be no row at all. Mem0 shows its extraction LLM
+the user's earlier memories of the same `agent_id` and that agent's
+last messages, and every locus passes the writer as `agent_id`. One
+vague sentence, "Issues are sent to Rollbar.", was stored as nothing 7
+of 16 times at N = 12, where its writer had stored almost nothing for
+the user yet, and never at N = 3 or 6; the trial then fails by the
+extraction check, as any Mem0 write that stores nothing does.
+
 **At H > 0, the per-probe effect is flat in N; the number of deviating
 agents grows.** With H a fraction, a probe's target writer deviates with
 about the same probability at every N, and so does the consumer (2/3 at
@@ -290,12 +299,15 @@ Per probe:
   replicated) or the native consumer's own wall clock
   (`fetch_started_at`); the commit time is the write's own
   (`committed_at`, kernel and replicated, a forget's included) or the
-  harness's completion time (native, an upper bound);
+  harness's completion time (native, an upper bound). A late write can
+  still be read: the fetch embeds the query before it searches, and
+  that embedding queues behind the writes' at Ollama, so the misses
+  below also look at what the block held;
 - `late_covered`: the late writes that are not uncovered (below), the
   ones a miss counts: every late write outside the kernel. `late_rows`
   are their rows the consumer may see;
 - `timing_miss`: the probe's target statement was a covered late
-  write;
+  write and the block lacks its value;
 - `stale_read`: a recency or contradiction probe whose newest
   statement was a covered late write and whose block held the stale
   value;
@@ -305,9 +317,11 @@ Per probe:
   in the kernel, `uncovered_writes`: writes whose barrier sequence is
   above the probe's snapshot (accepted after it).
 
-Per trial, `memories_missing_timing`: writers with a covered late write none of
-whose rows reached the block. And the probes' judge-free outcomes,
-paired against the sequential trial.
+Per trial, `memories_missing_timing`: writers with a covered late
+write none of whose rows reached the integration probe's block. A
+writer the budget keeps out of the sequential trial's block too is
+counted, so what timing cost is the paired `memories_missing` (and the
+probes' judge-free outcomes), against the sequential trial.
 
 ### The load mode
 
