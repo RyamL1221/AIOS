@@ -170,11 +170,13 @@ failures should not change.
 
 Found in the functional check (`DEV_STATUS.md`, Subtask 18, known issue
 53): the difference can be no row at all. Mem0 shows its extraction LLM
-the user's earlier memories of the same `agent_id` and that agent's
-last messages, and every locus passes the writer as `agent_id`. One
-vague sentence, "Issues are sent to Rollbar.", was stored as nothing 7
-of 16 times at N = 12, where its writer had stored almost nothing for
-the user yet, and never at N = 3 or 6; the trial then fails by the
+up to 10 of the user's memories with the same `agent_id` (the most
+similar to the write) and the last 10 messages of that agent for that
+user, and every locus passes the writer as `agent_id`. One vague
+sentence, "Issues are sent to Rollbar.", was stored as nothing 7 of 16
+times at N = 12, where its writer had stored almost nothing for the
+user yet, and never in the 54 writes at N = 3 or 6 made one at a time
+per user (once in 6 under concurrency); the trial then fails by the
 extraction check, as any Mem0 write that stores nothing does.
 
 **At H > 0, the per-probe effect is flat in N; the number of deviating
@@ -300,8 +302,9 @@ Per probe:
   (`fetch_started_at`); the commit time is the write's own
   (`committed_at`, kernel and replicated, a forget's included) or the
   harness's completion time (native, an upper bound). A late write can
-  still be read: the fetch embeds the query before it searches, and
-  that embedding queues behind the writes' at Ollama, so the misses
+  still be read: `fetch_started_at` precedes the search's query
+  embedding, so a write committing during the search is found (seen
+  in-house; never on Mem0, whose writes take seconds), and the misses
   below also look at what the block held;
 - `late_covered`: the late writes that are not uncovered (below), the
   ones a miss counts: every late write outside the kernel. `late_rows`
@@ -319,9 +322,9 @@ Per probe:
 
 Per trial, `memories_missing_timing`: writers with a covered late
 write none of whose rows reached the integration probe's block. A
-writer the budget keeps out of the sequential trial's block too is
-counted, so what timing cost is the paired `memories_missing` (and the
-probes' judge-free outcomes), against the sequential trial.
+writer the budget or a cap keeps out of the sequential trial's block
+too is counted, so what timing cost is the paired `memories_missing`
+(and the probes' judge-free outcomes), against the sequential trial.
 
 ### The load mode
 
@@ -333,10 +336,12 @@ latency (p50 and p95), and the kernel's share of it, split as the
 diagnostics split it (`barrier_wait_ms`, `search_ms`, `select_ms`,
 `format_ms`, `schedule_wait_ms`, `llm_ms`), with barrier timeouts and
 the cell's milliseconds per completion token. The server awaits each
-request it serves off its event loop on a pool of its own (64 workers,
-`aios/utils/request_pool.py`), so no request waits for a worker under
-the load mode; the loop's default pool (12 workers here) would have
-held a request for a time no diagnostic covers.
+chat and memory request (and the audit and cost reads) off its event
+loop on a pool of its own (64 workers, `aios/utils/request_pool.py`),
+so none waits for a worker under the load mode; the loop's default
+pool (12 workers here) would have held a request for a time no
+diagnostic covers. Storage and tool requests are still served on the
+loop.
 
 Prediction: the local model bounds throughput (Ollama serves one
 completion at a time here), so users per minute grows little with M and
