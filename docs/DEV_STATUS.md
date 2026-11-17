@@ -3167,8 +3167,8 @@ at every level but the load mode. Every check that must hold held
   users missed 1.0 to 1.6 more facts (at F = 50 replicated +1.20
   [+0.16, +2.24], native +1.60 [+0.92, +2.28]).
 - **Load** (kernel only, 16 users at M at a time): in-house
-  throughput rose by a third from M = 1 to 4 and then held (0.75, 0.96
-  and 1.00 users a minute at M = 1, 4 and 16; Mem0 0.66, 0.69 and
+  throughput rose by about a quarter from M = 1 to 4 and held at
+  M = 16 (0.75, 0.96 and 1.00 users a minute; Mem0 0.66, 0.69 and
   0.61); probe latency grew (in-house median 8.9, 34 and 80 s); the
   barrier wait did not (p95 under 2 ms, no timeout). Most of the
   growth is the model's: a probe's LLM call waits at Ollama behind its
@@ -3223,7 +3223,8 @@ intervals in the report):
   kernel's 180 probes waited (median 114 ms, at most 248) and read no
   late write; every outcome as sequential. Replicated's had 552 late
   writes, native's 498 (366 and 210 of them were in the same probe's
-  block: committed during the search). The timing cost, paired:
+  block: committed during the search, or for native, whose time is
+  an upper bound, returned during it). The timing cost, paired:
   replicated lost 2 contradiction probes (both stale reads: the
   earlier statement not yet retired), native 1 (a timing miss, also a
   stale read); no other outcome moved, and `memories_missing` did not
@@ -3249,7 +3250,8 @@ intervals in the report):
   −0.07] and −0.53 [−0.72, −0.34] (replicated), −0.36 [−0.54, −0.18]
   and −0.69 [−0.86, −0.52] (native). Native's recency answers changed
   (11 users gained, 1 lost at F = 50, p 0.006; 10 of 30 sequentially),
-  not its blocks: none of the 11 gained users' flooders wrote the
+  not which recency values its blocks held (4 to 8 of their 10 rows
+  were flood rows): none of the 11 gained users' flooders wrote the
   recency target, each block held one row of the update with and
   without the flood, and both values were in the block both times; with
   the flood rows around them Qwen's answer stopped naming the stale
@@ -3275,7 +3277,8 @@ imprecisions, corrected here (this commit): among them the late-write
 counts on Mem0, the kernel's flood outcomes on Mem0, what grows under
 load (the LLM call at Ollama, more than the batch wait), native's
 stale reads (none changed an outcome but the one timing miss), native's
-recency under floods (its answers changed, not its blocks), and open
+recency under floods (its answers changed, not the recency values
+its blocks held), and open
 decision 7 (the provider's log does not tell an empty extraction from
 a swallowed error). With them (Cerebrum `7a149ab`, each with a test
 that fails without it): the "stored nothing" check matches that
@@ -3943,7 +3946,7 @@ These fail on `workshop-postrun` too and are not caused by later work.
     `LITELLM_MODE=PRODUCTION` stops the load.
 52. The embedding scores of the same row and query differ slightly
     between runs (Ollama, nomic-embed-text): up to 1.1e-6 between the
-    cells of Subtask 18's functional check and smoke (254 of 5,646
+    in-house cells of Subtask 18's functional check and smoke (254 of 5,646
     rows). A difference that reorders two rows at a budget's or a
     cap's edge would change a block's tail row; no in-house block
     compared in Subtask 18 differed for it (across N, and kernel
@@ -3969,8 +3972,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
     runs waits for that batch (`schedule_wait_ms` median 12 s at M = 16
     in-house, 59 s on Mem0); a user's writes queue behind other users'
     on the memory thread (a Mem0 write's median 24 s at M = 16). The
-    barrier wait does not grow. Behavior as before Subtask 18 (the
-    batching is unchanged); recorded so the load mode's latency is read
+    barrier wait does not grow. A request arriving during a batch
+    waited for that batch before Subtask 18 too (which removed only the
+    1 s collection wait); recorded so the load mode's latency is read
     as the model's and the memory thread's.
 
 ## Fixed
