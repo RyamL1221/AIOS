@@ -136,6 +136,46 @@ def test_nothing_extracted_returns_no_id_without_error(tmp_path):
     provider.close()
 
 
+class FailingLLM:
+    """Mem0's LLM when its call fails (``raises``) or answers what Mem0
+    cannot parse."""
+
+    def __init__(self, raises=True):
+        self.raises = raises
+
+    def generate_response(self, messages, response_format=None, **_):
+        if self.raises:
+            raise RuntimeError("Azure refused the call")
+        return '{"memory": [unterminated'
+
+
+@needs_ollama
+@pytest.mark.parametrize("raises,logged", [
+    (True, "LLM extraction failed: Azure refused the call"),
+    (False, "Error parsing extraction response"),
+])
+def test_an_empty_write_after_a_swallowed_failure_raises(tmp_path, raises,
+                                                         logged):
+    """BENCHMARK_V2.md, Amendment 9 (open decision 7): Mem0 logs and
+    swallows its extraction call's error and stores nothing, as when it
+    finds no fact. The provider now tells the two apart by Mem0's log
+    line for the write, so the harness can count Mem0's empty writes as
+    lost memories."""
+    from aios.memory.providers.base import ProviderError
+
+    provider = build(tmp_path)
+    provider._get_client_for_user(USER).llm = FailingLLM(raises)
+    with pytest.raises(ProviderError, match="swallowed") as error:
+        provider.add(note("Hello."))
+    assert logged in str(error.value)
+    assert provider.list(USER, 10) == []
+    # The failure is the write's own: the next write that finds nothing
+    # still returns no id, without error.
+    with_llm(provider, [])
+    assert provider.add(note("Hello again.")) == ""
+    provider.close()
+
+
 @needs_ollama
 def test_the_assistant_model_does_not_replace_the_pinned_llm(tmp_path):
     provider = build(tmp_path)

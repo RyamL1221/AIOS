@@ -600,7 +600,8 @@ into the top level:
   no row never is (a suppressed write's names none; Amendment 4,
   "Corrected during the smoke"). On Graphiti, whose extraction errors
   raise, such a write is a lost memory and the trial is scored
-  (Amendment 5).
+  (Amendment 5); on A-MEM too (Amendment 8), and on Mem0 since
+  Amendment 9, whose writes now raise when Mem0 swallowed a failure.
 
 A cell with a failed user is re-run whole under a new run id (known
 issue 36).
@@ -1533,3 +1534,57 @@ from the logs (the line `A-MEM evolved <n> note(s) at note <id>` that
 every locus's writes log once, `AMEM_BACKEND.md`, "One note per
 write"); and the lines in which A-MEM reports an LLM failure it caught
 (`AMEM_BACKEND.md`, "Open risks", 4).
+
+## Amendment 9 (2026-11-18, Subtask 19, before its code; open decision 7)
+
+**Why.** Under the stress dimensions Mem0 stored a vague sentence as
+nothing: "Issues are sent to Rollbar." in 8 of 22 attempts at N = 12
+and under concurrency in Subtask 18's functional check, never in the
+54 writes at N = 3 or 6 (known issue 53: Mem0 shows its extraction LLM
+only the writer's own memories and messages for the user). Under the
+extraction rule ("A v2 extraction failure", in "Harness") each such
+write failed its trial, as every Mem0 write that stored nothing has
+since Subtask 10, because Mem0 also logs and swallows its extraction
+call's errors and stores nothing then (known issue 32). The full
+grid's Mem0 cells at N = 12 and `concurrent` would lose users to it.
+Open decision 7 offered (a) keep failing the trial, (b) count such a
+write as a lost memory when Mem0 logged no failure for it, as
+Graphiti's are (Amendment 5), and (c) leave those cells out; (b) was
+taken.
+
+**The rule.** Mem0 2.0.2's `add` logs and swallows four failures of a
+write: its extraction LLM call ("LLM extraction failed"), parsing that
+call's reply ("Error parsing extraction response"), embedding the
+extracted facts ("Failed to embed memory text") and inserting them
+("Failed to insert memory"), all on its `mem0.memory.main` logger in
+`_add_to_vector_store`. Every locus's Mem0 write now collects those
+lines while it runs (Cerebrum `cerebrum/utils/mem0_errors.py`; the add
+runs on the caller's thread): the kernel's and the replicated agents'
+provider (`Mem0Provider.add`) and the native agents' write. A write
+that stored nothing after one of them raises, so the writer's error
+fails the trial, as before. A Mem0 write that returned and stored
+nothing therefore had no such failure: its extraction found no fact
+(or only facts already stored, which Mem0 skips by hash). On Mem0, as
+on Graphiti and A-MEM (`EMPTY_WRITE_IS_LOSS`):
+- such a write is a lost memory, not a failure: the trial is scored
+  and records the write in `writes_without_fact`;
+- a probe on its fact is scored like any other, so the loss counts
+  against Mem0's cells;
+- a write whose reply named rows its writer's listing does not show
+  fails the trial (`backend_rows_unlisted`), a trial with no backend
+  LLM call fails, and any writer error fails.
+
+A write that stored some of its facts after such a failure (one fact's
+embedding failed, say) is stored and passes the rule, as before. The
+rule applies to v1's Mem0 cells too (the same set, by writer).
+
+**Reported.** The analysis's reading "Writes that stored no fact
+(Amendments 5, 8, 9)" gives the Mem0 cells as it gives Graphiti's and
+A-MEM's; the stress report's `writes_without_row` already counted
+such writes over every trial, failed or not.
+
+**What it changes.** Results already written keep the verdicts they
+were written with: Subtask 18's Mem0 trials that failed on such a write
+stay failed, and no earlier Mem0 cell recorded one in a scored trial
+(each passed the stricter rule). The full grid's Mem0 cells run under
+this rule.

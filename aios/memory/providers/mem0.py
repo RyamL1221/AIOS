@@ -23,6 +23,7 @@ import threading
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
+from cerebrum.utils import mem0_errors
 from cerebrum.utils.usage import count_embeddings, seed_mem0_llm
 
 from .base import (
@@ -772,7 +773,9 @@ class Mem0Provider(MemoryProvider):
     def add(self, memory_note: "MemoryNote") -> str:
         """Store one note and return a memory id. With extraction, Mem0
         may store several facts (each with the full metadata) or none;
-        the first fact's id is returned, ``""`` for none."""
+        the first fact's id is returned, ``""`` for none. A write that
+        stored nothing after a failure Mem0 logged and swallowed raises
+        (``cerebrum.utils.mem0_errors``; BENCHMARK_V2.md, Amendment 9)."""
         metadata = note_metadata(memory_note)
         user_id = self._scope(metadata.get("user_id"))
         kwargs: Dict[str, Any] = {
@@ -790,11 +793,19 @@ class Mem0Provider(MemoryProvider):
             kwargs["agent_id"] = self.default_agent_id
         client = self._get_client_for_user(user_id)
         try:
-            result = client.add(content, **kwargs)
+            with mem0_errors.swallowed_errors() as swallowed:
+                result = client.add(content, **kwargs)
         except Exception as e:
             raise ProviderError(f"Mem0 add failed: {e}") from e
         memory_ids = self._extract_memory_ids(result)
         if not memory_ids:
+            if swallowed:
+                # Amendment 9: Mem0 logged and swallowed a failure of
+                # this write (its extraction call, say), so its storing
+                # nothing is an error, not an extraction with no fact.
+                raise ProviderError(
+                    f"Mem0 stored nothing after a failure it swallowed: "
+                    f"{swallowed[0]}")
             if self.backend_extraction:
                 logger.info("add: Mem0 extracted no facts for %s", user_id)
                 return ""

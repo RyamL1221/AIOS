@@ -52,6 +52,7 @@ do not describe this branch.
 | 16 | Graphiti backend and native condition | Done |
 | 17 | A-MEM backend and native condition | Done |
 | 18 | Agent count, concurrency and faulty-agent stress dimensions; event-driven scheduler | Done |
+| 19 | Kernel ablation switches | In progress |
 
 ### Subtask 1
 
@@ -3495,21 +3496,14 @@ at `7a149ab`, so the mutation run's 54).
    native A-MEM's distance at H = 2, is documented, not changed, as on
    native Mem0 (`NATIVE_USAGE.md`, "native_amem").
 7. **Mem0 writes stored as nothing under the stress dimensions**
-   (Subtask 18, known issue 53). At N = 12 and under concurrency, Mem0
-   stored one vague sentence as nothing in 8 of 22 attempts (never in
-   54 sequential attempts at N = 3 and 6), and the harness fails such
-   a trial, as it has every Mem0 write that stores nothing since
-   Subtask 10 (known issue 32: Mem0 also swallows LLM errors that
-   way). For the full grid's Mem0 cells at N = 12 and `concurrent`:
-   (a) keep failing the trial (the users differ between cells, and
-   the failure rate is reported); (b) count such a write as a lost
-   memory when Mem0 logged no "LLM extraction failed" error for that
-   write, as Graphiti's empty writes are (Amendment 5); (c) leave
-   N = 12 and `concurrent` out of the Mem0 cells. Proposed: (b), which
-   keeps every user and reports the loss. The provider's own "extracted
-   no facts" line is logged in both cases, so (b) needs the harness to
-   read Mem0's error line for the write (native has no provider line
-   at all).
+   (Subtask 18, known issue 53). Resolved 2026-11-18 (Subtask 19):
+   (b), `BENCHMARK_V2.md` Amendment 9. Every locus's Mem0 write now
+   raises when Mem0 logged and swallowed a failure of it and stored
+   nothing (Cerebrum `cerebrum/utils/mem0_errors.py`), so a Mem0 write
+   that returned and stored nothing found no fact, and is a lost
+   memory (`writes_without_fact`), not a failed trial. The options were
+   (a) keep failing the trial, (b) this, (c) leave N = 12 and
+   `concurrent` out of the Mem0 cells.
 
 ## Test baselines
 
@@ -4119,11 +4113,11 @@ These fail on `workshop-postrun` too and are not caused by later work.
     Subtask 18's functional check, "Issues are sent to Rollbar." (users
     0 and 4) 7 of 16 times at N = 12 and 1 of 6 under concurrency,
     never in the 54 writes at N = 3 or 6 made one at a time per user;
-    no log held Mem0's "LLM extraction failed". The trial then fails
-    by the extraction check (known issue 32). The full grid's N = 12
-    and concurrency cells on Mem0 will fail some users so; how to
-    count them (failed trials, or memories lost, as Graphiti's are,
-    Amendment 5) is open decision 7.
+    no log held Mem0's "LLM extraction failed". The trial then failed
+    by the extraction check (known issue 32). How to count such writes
+    in the full grid's N = 12 and concurrency cells on Mem0 was open
+    decision 7: since Amendment 9 they are memories lost, as Graphiti's
+    are (Amendment 5), and the trial is scored.
 54. Under the load mode a probe is held by the LLM queue, not the
     barrier, and a write by the one memory thread. A probe's LLM call
     waits at Ollama behind its batch-mates (`llm_ms` median 47 s at
