@@ -131,6 +131,73 @@ def test_two_memory_requests_are_accepted_while_both_are_in_flight():
     ]
 
 
+def test_a_request_is_stamped_before_a_chat_that_arrives_after_it():
+    """A write or a forget that reaches the handler before a chat is
+    stamped before the chat's arrival snapshot, so the chat waits for
+    it: acceptance runs on the event loop, in arrival order. Accepted
+    off the loop, the write was stamped after the chat in 199 of 200
+    pairs (Subtask 18's mutation run), an ``uncovered_write`` in the
+    stress measures, which the kernel's concurrency cells report as 0."""
+    manager = kernel()
+    scheduler = FIFOScheduler(
+        llm=None, memory_manager=manager, storage_manager=None,
+        tool_manager=None, log_mode="console", get_llm_syscall=None,
+        get_memory_syscall=None, get_storage_syscall=None,
+        get_tool_syscall=None,
+    )
+    executor = SyscallExecutor()
+    executor.memory_manager = manager
+    snapshots = []
+
+    def serve(syscall):  # the memory thread's step, on the caller's
+        scheduler._execute_syscall(syscall, manager.address_request,
+                                   "Memory")
+
+    def execute_request(agent_name, query):
+        if isinstance(query, LLMQuery):  # the chat: its snapshot
+            snapshots.append(query._barrier_snapshot)
+            return {"response": "ok"}
+        return executor.execute_request(agent_name, query)
+
+    forget = {
+        "agent_name": "assistant_agent", "query_type": "memory",
+        "query_data": MemoryQuery(operation_type="forget_memory", params={
+            "user_id": USER, "fact_key": "trip",
+        }).model_dump(),
+    }
+    chat_body = {
+        "agent_name": "assistant_agent", "query_type": "llm",
+        "query_data": LLMQuery(
+            messages=[{"role": "user", "content": "which trip?"}],
+            action_type="chat",
+        ).model_dump() | {"user_id": USER},
+    }
+    with patch(QUEUE, serve):
+        QueryRequest, handle_query = launch_handler(
+            execute_request, manager=manager,
+            accept_memory_request=executor.accept_memory,
+        )
+
+        async def pair(body):
+            first = asyncio.create_task(handle_query(QueryRequest(**body)))
+            then = asyncio.create_task(handle_query(QueryRequest(
+                **chat_body)))
+            reply, _ = await asyncio.gather(first, then)
+            assert reply["response"].success
+            return reply["response"].metadata["barrier_seq"], snapshots[-1]
+
+        async def pairs():
+            stamps = []
+            for i in range(20):
+                stamps.append(await pair(write_body(f"Trip {i}.")))
+                stamps.append(await pair(forget))
+            return stamps
+
+        stamps = asyncio.run(pairs())
+    assert all(seq and snapshot for seq, snapshot in stamps)
+    assert [seq for seq, snapshot in stamps if seq > snapshot] == []
+
+
 def chat(injector, snapshot):
     query = LLMQuery(messages=[{"role": "user", "content": "which trip?"}],
                      action_type="chat")

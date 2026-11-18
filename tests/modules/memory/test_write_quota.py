@@ -20,6 +20,7 @@ from aios.memory.pipeline import (
     PipelineSettings,
     QuotaSettings,
     WriteQuota,
+    after_write,
 )
 from aios.memory.providers.in_house import InHouseProvider
 from aios.syscall.memory import MemorySyscall
@@ -103,6 +104,22 @@ def test_a_disabled_quota_admits_everything():
     for _ in range(10):
         assert quota.admit(USER, FLOODER, 1, "same") is None
     assert quota.counts() == {}
+
+
+def test_an_over_quota_text_resent_is_still_over_quota():
+    """A ``duplicate`` is a text the writer already stored for the user
+    in that session (docs/STRESS_DIMENSIONS.md:479-481, quota.py); a
+    write the quota turned away stored nothing, so the same text sent
+    again in the same bucket is ``quota`` again, never ``duplicate``.
+    At F = 50 the flood resends its prefixed copies, so the reported
+    split of ``quota_rejected`` by reason depends on this."""
+    quota = WriteQuota(QuotaSettings(enabled=True, max_writes=1))
+    assert quota.admit(USER, FLOODER, 1, "One.") is None
+    assert quota.admit(USER, FLOODER, 1, "Again: one.") == "quota"
+    assert quota.admit(USER, FLOODER, 1, "Again: one.") == "quota"
+    assert quota.admit(USER, FLOODER, 1, "again: ONE") == "quota"
+    assert quota.admit(USER, FLOODER, 1, "ONE") == "duplicate"
+    assert quota.counts()[(USER, FLOODER, "1")] == 1
 
 
 def test_a_refund_frees_the_slot_and_the_text():
@@ -232,6 +249,45 @@ def test_a_write_reports_its_barrier_sequence_and_commit_time():
     assert before <= outcome["committed_at"] <= time.time()
     assert outcome["barrier_seq"] >= 1
     assert "quota_rejected" not in outcome
+
+
+class _TimedAdd(InHouseProvider):
+    """The in-memory provider, whose ``add`` takes 0.1 s and records
+    when it returned."""
+
+    def __init__(self):
+        super().__init__()
+        self.returned_at = None
+
+    def add(self, memory_note):
+        time.sleep(0.1)
+        memory_id = super().add(memory_note)
+        self.returned_at = time.time()
+        return memory_id
+
+
+def test_a_writes_commit_time_is_when_the_provider_returned():
+    """``committed_at`` is the wall-clock time the provider's ``add``
+    returned (``MemoryPipeline.write``; docs/STRESS_DIMENSIONS.md:303,
+    "late_writes": the commit time is the write's own): not taken
+    before the call, which would date a write still in flight before a
+    probe's fetch and hide it as a late write, and not after
+    ``after_write`` (the sweep and supersession), which would date it
+    later than its commit."""
+    memory = MemoryPipeline(_TimedAdd(), PipelineSettings())
+    after_write_began = []
+
+    def timed_after_write(*args, **kwargs):
+        after_write_began.append(time.time())
+        time.sleep(0.1)
+        return after_write(*args, **kwargs)
+
+    outcome = {}
+    with patch("aios.memory.pipeline.facade.after_write", timed_after_write):
+        assert memory.write(FLOODER, USER, note("A."), outcome=outcome)
+    (began,) = after_write_began
+    assert memory.provider.returned_at <= outcome["committed_at"]
+    assert outcome["committed_at"] <= began
 
 
 class _AsyncCommit(InHouseProvider):

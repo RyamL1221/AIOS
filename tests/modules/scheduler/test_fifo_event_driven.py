@@ -7,11 +7,26 @@ requests that arrive while a batch runs form the next batch. Until
 Subtask 18 it slept a fixed 1 s before each collection (known issue
 15). No model is called: a fake adapter records the batches."""
 import queue
+import statistics
 import threading
 import time
 
+import pytest
+
+from aios.hooks.modules.llm import useLLMRequestQueue
+from aios.hooks.modules.memory import useMemoryRequestQueue
+from aios.hooks.modules.storage import useStorageRequestQueue
+from aios.hooks.modules.tool import useToolRequestQueue
 from aios.hooks.stores import queue as QueueStore
 from aios.scheduler.fifo_scheduler import FIFOScheduler
+
+# The kernel's four queues, in the scheduler's order (llm, memory,
+# storage, tool).
+HOOKS = (useLLMRequestQueue, useMemoryRequestQueue, useStorageRequestQueue,
+         useToolRequestQueue)
+# A drain that waits out the getter's timeout (0.1 s) adds about 100 ms
+# to every request; a thread hop takes well under a millisecond.
+NO_WAIT = 0.05
 
 # Well under the old fixed interval (1 s), well over a thread hop.
 PROMPT = 0.5
@@ -145,3 +160,69 @@ def test_stop_returns_promptly():
     started = time.monotonic()
     scheduler.stop()
     assert time.monotonic() - started < PROMPT
+
+
+@pytest.fixture
+def kernel_queues():
+    """The hooks register each queue they build in ``REQUEST_QUEUE``;
+    restore the registry after the test."""
+    saved = dict(QueueStore.REQUEST_QUEUE)
+    yield
+    QueueStore.REQUEST_QUEUE.clear()
+    QueueStore.REQUEST_QUEUE.update(saved)
+
+
+@pytest.mark.parametrize("hook", HOOKS, ids=lambda hook: hook.__name__)
+def test_the_kernels_getters_drain_at_once_and_otherwise_wait(
+        hook, kernel_queues):
+    """Each module's getter, as its hook builds it: ``timeout=0`` takes
+    what is queued without waiting (the LLM thread's drain), and the
+    default waits on the queue, not polling, and gives up after about
+    0.1 s, so an idle thread sees ``stop``."""
+    _, get, add, _ = hook()
+    started = time.monotonic()
+    with pytest.raises(queue.Empty):
+        get(timeout=0)
+    assert time.monotonic() - started < NO_WAIT
+    started = time.monotonic()
+    with pytest.raises(queue.Empty):
+        get()
+    assert NO_WAIT <= time.monotonic() - started < PROMPT
+    add("request")
+    assert get(timeout=0) == "request"
+
+
+def test_a_request_waits_for_no_drain_through_the_kernels_getters(
+        kernel_queues):
+    """Through the getters the hooks build, a request's wait from its
+    enqueue to its batch's start (the kernel's ``schedule_wait_ms``) is
+    a thread hop: the drain takes what is queued without waiting. A
+    drain that waited out the getter's timeout added about 100 ms to
+    every request (Subtask 18's mutation run: 104 ms against 0.3 ms)."""
+    llm = FakeLLM()
+    built = [hook() for hook in HOOKS]
+    llm_add = built[0][2]
+    llm_get, memory_get, storage_get, tool_get = (
+        queue_hook[1] for queue_hook in built
+    )
+    scheduler = FIFOScheduler(
+        llm=llm, memory_manager=None, storage_manager=None,
+        tool_manager=None, log_mode="console",
+        get_llm_syscall=llm_get, get_memory_syscall=memory_get,
+        get_storage_syscall=storage_get, get_tool_syscall=tool_get,
+    )
+    scheduler.start()
+    waits = []
+    try:
+        time.sleep(0.2)  # the thread is idle, waiting on the queue
+        for name in "abcde":  # one request in the queue at a time
+            syscall = FakeSyscall(name)
+            syscall.enqueued_at = time.monotonic()
+            llm_add(syscall)
+            assert syscall.done.wait(5)
+            waits.append(syscall.ran_at - syscall.enqueued_at)
+            time.sleep(0.02)
+    finally:
+        scheduler.stop()
+    assert llm.batches == [[name] for name in "abcde"]
+    assert statistics.median(waits) < NO_WAIT

@@ -80,6 +80,31 @@ def test_a_session_maps_its_token_to_its_user_until_closed():
         registry.open("  ")
 
 
+def test_a_token_differs_from_every_earlier_token():
+    """A session's token is random (``secrets.token_hex``), so a request
+    cannot name another user's session (``SessionRegistry``;
+    docs/STRESS_DIMENSIONS.md:547-550): a token opened after others
+    were closed differs from every earlier one, and opening never takes
+    over a session still open. The harness opens and closes one session
+    per v2 session, one after another and, in the load mode,
+    overlapping: a reused token would merge the write quota's
+    per-session buckets, or serve one user's requests for another."""
+    registry = SessionRegistry()
+    issued = []
+    for user in ("alice", "bob", "carol"):  # one after another
+        token = registry.open(user)
+        assert token not in issued
+        issued.append(token)
+        assert registry.close(token) is True
+    bob = registry.open("bob")
+    alice = registry.open("alice")
+    assert registry.close(bob) is True
+    carol = registry.open("carol")  # alice's session is still open
+    assert len({*issued, bob, alice, carol}) == len(issued) + 3
+    assert registry.user_of(alice) == "alice"
+    assert registry.user_of(carol) == "carol"
+
+
 # --- the manager's binding ------------------------------------------------
 
 def test_a_write_claiming_another_user_is_bound_to_the_session():

@@ -591,6 +591,39 @@ def test_forget_records_the_tombstone_before_any_delete():
     assert stored(provider) == {}
 
 
+class TimedDeletes(InHouseProvider):
+    """The in-memory store, whose ``delete`` takes 0.1 s and records
+    when it was done."""
+
+    def __init__(self):
+        super().__init__()
+        self.deleted_at = []
+
+    def delete(self, memory_id, user_id):
+        time.sleep(0.1)
+        result = super().delete(memory_id, user_id)
+        self.deleted_at.append(time.time())
+        return result
+
+
+def test_a_forgets_commit_time_is_after_its_deletes():
+    """A forget's report names when its deletes were done
+    (``committed_at``; ``MemoryPipeline.forget``, Subtask 18;
+    docs/STRESS_DIMENSIONS.md:303, "late_writes": the commit time is the
+    write's own, a forget's included): after its last delete, not when
+    the forget began, which would date a revoke still deleting before a
+    probe's fetch and hide a late forget."""
+    provider = TimedDeletes()
+    pipeline = MemoryPipeline(provider)
+    write(pipeline, WRITER, "My lawyer is Greta Sandvik.",
+          **stated(VALUE, "e1"))
+    write(pipeline, TASK, "Meeting with Greta Sandvik.",
+          memory_type="task_context", fact_key="meeting")
+    report = pipeline.forget(WRITER, USER, SLOT)
+    assert len(report["deleted"]) == 2 == len(provider.deleted_at)
+    assert max(provider.deleted_at) <= report["committed_at"]
+
+
 @pytest.mark.parametrize("user_id, fact_key", [
     (None, SLOT), ("", SLOT), ("  ", SLOT), (USER, ""), (USER, None),
 ])

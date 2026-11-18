@@ -12,6 +12,8 @@ import json
 import random
 import subprocess
 import sys
+import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -321,6 +323,69 @@ def test_block_is_printed_in_type_order_after_ranking(block_format):
     _, diagnostics = small.build_block(rows)
     kept = [m["memory_id"] for m in diagnostics["injected_memories"]]
     assert kept == ["t", "c", "x"]
+
+
+class TimedSearchStore(InHouseProvider):
+    """The in-memory store, not synchronous, so a retrieval waits on
+    the barrier (as for Mem0 and the Chroma in-house store); ``search``
+    records when each call began and takes 0.1 s, as a query embedding
+    does."""
+
+    synchronous_commit = False
+
+    def __init__(self):
+        super().__init__()
+        self.search_began = []
+
+    def search(self, query, user_id, top_k):
+        self.search_began.append(time.time())
+        time.sleep(0.1)
+        return super().search(query, user_id, top_k)
+
+
+def test_fetch_started_at_is_wall_clock_after_the_wait_before_the_search():
+    """``fetch_started_at`` is the wall-clock time the fetch began:
+    after the barrier wait, before the provider's search
+    (docs/STRESS_DIMENSIONS.md:299-308, Concurrency, "late_writes";
+    Subtask 18). The harness sets each write's ``committed_at``
+    (``time.time()``) against it: taken before the wait, every write a
+    kernel probe waited for would count as a late write the kernel
+    accepted before it; taken after the search, a write committing
+    during the search would not count as late; on another clock, every
+    write would."""
+    store = TimedSearchStore()
+    pipeline = MemoryPipeline(store, PipelineSettings.from_memory_config(
+        {"write_barrier": {"enabled": True, "timeout_ms": 5000}}
+    ))
+    waiting = threading.Event()
+    wait = pipeline.barrier.wait_until_drained
+
+    def watched(*args, **kwargs):
+        waiting.set()
+        return wait(*args, **kwargs)
+
+    seq = pipeline.barrier.acquire("alice")  # a write still in flight
+    result = {}
+
+    def read():
+        result["diagnostics"] = pipeline.retrieve(
+            "assistant_agent", "alice", "which trip?")[1]
+
+    with patch.object(pipeline.barrier, "wait_until_drained", watched):
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        assert waiting.wait(5)  # the retrieval is held at the barrier
+        time.sleep(0.1)
+        released_at = time.time()
+        pipeline.barrier.release("alice", seq, success=True)
+        reader.join(5)
+    diagnostics = result["diagnostics"]
+    assert diagnostics["barrier_waits"] == [
+        {"user_id": "alice", "outcome": "DRAINED"},
+    ]
+    assert store.search_began
+    assert released_at <= diagnostics["fetch_started_at"]
+    assert diagnostics["fetch_started_at"] <= min(store.search_began)
 
 
 LIBRARY_ONLY = """

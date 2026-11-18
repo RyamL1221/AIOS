@@ -741,8 +741,10 @@ class SyscallExecutor:
 
         ``kernel_overhead_ms`` is the memory stages plus
         ``schedule_wait_ms``, the scheduler's wait before the model call
-        (the FIFO scheduler collects LLM requests every
-        ``batch_interval``): both are time the kernel adds, and together
+        (since Subtask 18 the FIFO scheduler runs a request as soon as
+        it arrives, or with the batch it queued behind; it collected
+        every ``batch_interval`` before): both are time the kernel adds,
+        and together
         with ``llm_ms`` they account for the call's latency.
         """
         llm_timing = llm_timing or {}
