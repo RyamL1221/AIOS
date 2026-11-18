@@ -202,7 +202,8 @@ def test_a_switch_never_rewrites_another_setting():
     assert settings.write_quota["enabled"] is True
     assert (settings.effective_supersession, settings.effective_threshold,
             settings.effective_block_format) == ("off", 0.3, "legacy")
-    assert settings.effective_write_barrier["enabled"] is False
+    assert settings.effective_write_barrier["waits"] is False
+    assert settings.effective_write_barrier["enabled"] is True
     assert settings.effective_write_quota["enabled"] is False
 
 
@@ -221,9 +222,10 @@ def test_both_config_files_ship_the_full_kernel():
 
 def test_without_the_barrier_a_chat_reads_before_a_write_accepted_first():
     """Full kernel: a chat arriving after a write was accepted waits for
-    it, and its block holds the write. ``barrier: off``: nothing is
-    stamped (sequence 0, snapshot 0) and the chat reads at once, before
-    the write is served."""
+    it, and its block holds the write. ``barrier: off``: the write is
+    still stamped and the chat still gets its arrival snapshot (so
+    which writes it could have waited for is known), but it reads at
+    once, before the write is served."""
     for barrier, waits in (("on", True), ("off", False)):
         manager, injector = kernel(AsyncCommit(), ablate={"barrier": barrier})
         call = syscall(WRITER, "add_memory", {
@@ -233,8 +235,9 @@ def test_without_the_barrier_a_chat_reads_before_a_write_accepted_first():
                          "sharing_policy": "shared"},
         })
         manager.stamp_syscall(call)
-        assert bool(call.barrier_seq) is waits
+        assert call.barrier_seq >= 1
         snapshot = manager.arrival_snapshot(USER)
+        assert snapshot == call.barrier_seq
         done = {}
         reader = threading.Thread(target=lambda: done.update(
             d=chat(injector, "which trip?", barrier_snapshot=snapshot),
@@ -248,61 +251,142 @@ def test_without_the_barrier_a_chat_reads_before_a_write_accepted_first():
             assert done["at"] >= served_at
             assert "Porto" in done["d"]["block_text"]
         else:
-            assert snapshot == 0
             assert done["at"] < served_at
             assert done["d"]["block_text"] == ""
             assert done["d"]["barrier_waits"] == []
+            assert done["d"]["barrier_snapshot"] == snapshot
 
 
-def test_a_replicated_copy_builds_its_barrier_off():
+@pytest.mark.parametrize("read", ["audit", "cost"])
+def test_without_the_barrier_the_harness_reads_still_wait(read):
+    """The audit and the cost reads are measurements, not agents' reads:
+    under ``barrier: off`` they still wait for the writes accepted
+    before them."""
+    manager, _ = kernel(AsyncCommit(), ablate={"barrier": "off"})
+    call = syscall(WRITER, "add_memory", {
+        "content": "Trip to Porto in May.",
+        "metadata": {"owner_agent": WRITER, "user_id": USER,
+                     "memory_type": "calendar", "sharing_policy": "shared"},
+    })
+    manager.stamp_syscall(call)
+    done = {}
+
+    def run():
+        done["value"] = (manager.audit_rows(USER) if read == "audit"
+                         else manager.await_writes(USER))
+        done["at"] = time.monotonic()
+
+    reader = threading.Thread(target=run)
+    reader.start()
+    time.sleep(0.3)
+    assert "at" not in done, "the read did not wait"
+    served_at = time.monotonic()
+    assert manager.address_request(call).success
+    reader.join(5)
+    assert done["at"] >= served_at
+    if read == "audit":
+        assert [r["content"] for r in done["value"]["rows"]] == [
+            "Trip to Porto in May."]
+
+
+def test_a_replicated_copy_keeps_its_bookkeeping_and_skips_its_waits():
     settings = PipelineSettings(write_barrier={"enabled": True},
                                 ablate={"barrier": "off"})
     pipeline = MemoryPipeline(AsyncCommit(), settings)
-    assert pipeline.barrier.acquire(USER) == 0
+    seq = pipeline.barrier.acquire(USER)
+    assert seq >= 1 and pipeline.barrier.snapshot(USER) == seq
+    started = time.monotonic()
+    assert pipeline.selector.await_pending_writes(USER).name == "BYPASSED"
+    assert time.monotonic() - started < 0.5
+    full = MemoryPipeline(AsyncCommit(), PipelineSettings(
+        write_barrier={"enabled": True, "timeout_ms": 200}))
+    full.barrier.acquire(USER)
+    assert full.selector.await_pending_writes(USER).name == "TIMEOUT"
 
 
 # --- identity: claim ------------------------------------------------------
 
 
-def test_under_claim_a_session_binds_nothing():
-    """Full kernel: a wrong-user write in a session is filed under the
-    session's user and the claim reported. ``identity: claim``: the
-    request keeps its claim and nothing is reported."""
-    for identity, bound in (("session", USER), ("claim", "bob")):
-        manager, _ = kernel(ablate={"identity": identity})
-        token = manager.open_session(USER)
-        query = MemoryQuery(operation_type="add_memory", params={
-            "content": "x", "metadata": {"user_id": "bob"}})
-        token = manager.honored_session(token)
-        overridden = (manager.bind_session(query, token)
-                      if token else None)
-        assert query.params["metadata"]["user_id"] == bound
-        assert bool(overridden) is (identity == "session")
-        user, chat_override = (
-            manager.bind_chat_user("bob", token) if token else ("bob", None)
-        )
-        assert user == bound
-        assert bool(chat_override) is (identity == "session")
+def handler(manager, seen):
+    from tests.modules.syscall.test_v2_requests import launch_handler
+
+    def execute_request(agent_name, query):
+        seen.append(query)
+        return {"response": "ok"}
+
+    return launch_handler(execute_request, manager=manager)
+
+
+@pytest.mark.parametrize("identity", ["session", "claim"])
+def test_under_claim_a_session_binds_nothing(identity):
+    """Through the ``/query`` handler, with a real session token. Full
+    kernel: a wrong-user write and chat are served for the session's
+    user and the claim is reported. ``identity: claim``: both keep the
+    user they claim and nothing is reported."""
+    import asyncio
+
+    manager, _ = kernel(ablate={"identity": identity})
+    token = manager.open_session(USER)
+    seen = []
+    QueryRequest, handle_query = handler(manager, seen)
+    write = asyncio.run(handle_query(QueryRequest(
+        agent_name=WRITER, query_type="memory", session_token=token,
+        query_data=MemoryQuery(operation_type="add_memory", params={
+            "content": "x", "metadata": {"user_id": "bob"},
+        }).model_dump())))
+    asyncio.run(handle_query(QueryRequest(
+        agent_name=ASSISTANT, query_type="llm", session_token=token,
+        user_id="bob", query_data=json.loads(LLMQuery(
+            messages=[{"role": "user", "content": "hi"}],
+            action_type="chat").model_dump_json()))))
+    filed, chatted = seen
+    if identity == "session":
+        assert filed.params["metadata"]["user_id"] == USER
+        assert write["identity_overridden"] == {"claimed": "bob",
+                                                "bound": USER}
+        assert chatted._request_user_id == USER
+        assert chatted._identity_overridden
+    else:
+        assert filed.params["metadata"]["user_id"] == "bob"
+        assert "identity_overridden" not in write
+        assert chatted._request_user_id == "bob"
+        assert getattr(chatted, "_identity_overridden", None) is None
+
+
+def test_under_claim_the_quota_still_buckets_by_the_session():
+    """``identity: claim`` drops the binding only: the token still goes
+    with the request as the write quota's bucket key."""
+    import ast
+
+    tree = ast.parse((ROOT / "runtime" / "launch.py").read_text())
+    node = next(n for n in tree.body
+                if getattr(n, "name", None) == "accept_memory_request")
+    seen = {}
+
+    class Executor:
+        def accept_memory(self, agent_name, query, session_token=None):
+            seen["token"] = session_token
+
+    manager, _ = kernel(ablate={"identity": "claim"})
+    namespace = {"syscall_executor": Executor(),
+                 "active_components": {"memory": manager}}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "launch",
+                 "exec"), namespace)
+    namespace["accept_memory_request"](WRITER, None, "tok-1")
+    assert seen["token"] == "tok-1"
 
 
 def test_the_handler_ignores_a_session_under_claim():
     """Through the ``/query`` handler: the faulty writer's write goes to
     the user it claims, even an unknown token is not refused, and the
     configured identity rules are still reported."""
-    from aios.memory.pipeline import UnknownSession
-    from tests.modules.syscall.test_v2_requests import launch_handler
-
     import asyncio
+
+    from aios.memory.pipeline import UnknownSession
 
     manager, _ = kernel(ablate={"identity": "claim"})
     seen = []
-
-    def execute_request(agent_name, query):
-        seen.append(query)
-        return {"response": "ok"}
-
-    QueryRequest, handle_query = launch_handler(execute_request,
-                                                manager=manager)
+    QueryRequest, handle_query = handler(manager, seen)
     body = {
         "agent_name": WRITER, "query_type": "memory",
         "session_token": "not-a-token",
@@ -501,6 +585,7 @@ def test_similarity_order_keeps_the_selectors_score_order():
         return [m["memory_type"] for m in diagnostics["injected_memories"]]
 
     assert types(typed) == ["profile", "task_context", "task_context"]
+    assert "block_order" not in typed  # the full kernel's, as before
     assert scored["block_order"] == "similarity"
     assert types(scored) == ["task_context", "task_context", "profile"]
     assert scored["block_text"].index("budget is tight") < (
@@ -535,19 +620,25 @@ def test_the_threshold_switch_drops_rows_below_it():
 V4 = {"k": 5, "relevance_threshold": 0.5, "max_memory_tokens": 1500}
 
 
+V4_QUERY = "Porto tram line"
+STOPS = ("one", "two", "three", "four", "five", "six", "seven", "eight")
+
+
 def v4_kernel(consumer_config):
+    """Eight rows that score above V4's 0.5 against ``V4_QUERY`` (so its
+    k of 5 binds) and one that scores 0 (so its threshold drops it)."""
     manager, injector = kernel(ablate={"consumer_config": consumer_config})
-    for i in range(8):
-        add(manager, WRITER, f"Porto fact {i}: tram line {i}.")
-    add(manager, TASK, "Porto trip on the night train.",
+    for stop in STOPS:
+        add(manager, WRITER, f"Porto tram line {stop}.")
+    add(manager, TASK, "Tax return due in April.",
         memory_type="task_context")
     return manager, injector
 
 
 def test_the_kernel_ignores_a_consumers_own_config_by_default():
     manager, injector = v4_kernel("kernel")
-    sent = chat(injector, "Porto tram", consumer_config=V4)
-    plain = chat(injector, "Porto tram")
+    sent = chat(injector, V4_QUERY, consumer_config=V4)
+    plain = chat(injector, V4_QUERY)
     assert sent["consumer_config"] == {"sent": V4, "applied": False}
     assert "consumer_config" not in plain
     assert block_ids(sent) == block_ids(plain)
@@ -559,9 +650,10 @@ def test_under_honor_the_kernel_block_is_the_replicated_v4_block():
     consumer builds over the same store (Cerebrum
     ``variants.base._replicated_pipeline``)."""
     manager, injector = v4_kernel("honor")
-    honored = chat(injector, "Porto tram", consumer_config=V4)
+    honored = chat(injector, V4_QUERY, consumer_config=V4)
     assert honored["consumer_config"] == {"sent": V4, "applied": True}
     assert honored["threshold_used"] == 0.5
+    assert (honored["after_threshold"], honored["after_cap"]) == (8, 5)
     replicated = MemoryPipeline(
         manager.provider,
         dataclasses.replace(
@@ -572,16 +664,77 @@ def test_under_honor_the_kernel_block_is_the_replicated_v4_block():
         ),
     )
     _, own = replicated.inject(
-        ASSISTANT, [{"role": "user", "content": "Porto tram"}], user_id=USER)
-    assert honored["block_text"] == own["block_text"]
+        ASSISTANT, [{"role": "user", "content": V4_QUERY}], user_id=USER)
+    assert honored["block_text"] and honored["block_text"] == own[
+        "block_text"]
     assert block_ids(honored) == block_ids(own)
-    assert honored["after_threshold"] < chat(injector, "Porto tram")[
-        "after_threshold"]
+    full = chat(injector, V4_QUERY)
+    assert (full["after_threshold"], full["after_cap"]) == (9, 9)
+
+
+CEREBRUM_VARIANTS = (ROOT.parent / "Cerebrum" / "cerebrum" / "example"
+                     / "agents" / "variants")
+
+
+def cerebrum_variants():
+    """Cerebrum's variant modules ``base`` and ``v4_tuned_consumer``,
+    loaded by path as a package of their own (they import only the
+    standard library), so this test runs the replicated locus's own
+    ``_replicated_pipeline``."""
+    import importlib
+    import sys
+    import types
+
+    if not CEREBRUM_VARIANTS.is_dir():
+        pytest.skip("no Cerebrum checkout beside AIOS")
+    name = "_cerebrum_variants_under_test"
+    if name not in sys.modules:
+        package = types.ModuleType(name)
+        package.__path__ = [str(CEREBRUM_VARIANTS)]
+        sys.modules[name] = package
+    base = importlib.import_module(f"{name}.base")
+    v4 = importlib.import_module(f"{name}.v4_tuned_consumer")
+    return base, v4
+
+
+def test_honor_gives_the_block_cerebrums_replicated_v4_pipeline_gives():
+    """The comparison above, with the replicated pipeline built by
+    Cerebrum's ``variants.base._replicated_pipeline`` from the V4
+    variant (its key mapping, its ``dataclasses.replace``, the same
+    provider, barrier, resolver and tombstones) and injected as the
+    replicated assistant injects (``pipeline.inject(agent, messages,
+    user_id=...)``)."""
+    import types
+
+    import aios.memory.pipeline as library
+
+    base, v4 = cerebrum_variants()
+    manager, injector = v4_kernel("honor")
+    honored = chat(injector, V4_QUERY, consumer_config=dict(v4.TUNED))
+    assert honored["after_cap"] == 5
+    agent = types.SimpleNamespace(memory=types.SimpleNamespace(
+        library=library,
+        pipeline=MemoryPipeline(
+            manager.provider,
+            PipelineSettings.from_memory_config(
+                manager.pipeline_settings().as_dict()),
+        ),
+    ))
+    restore = base._Restore()
+    tuned = base._replicated_pipeline(v4.VARIANT, agent, "consumer",
+                                      restore)
+    _, own = tuned.inject(ASSISTANT, [{"role": "user",
+                                       "content": V4_QUERY}],
+                          user_id=USER)
+    assert honored["block_text"] and honored["block_text"] == own[
+        "block_text"]
+    assert block_ids(honored) == block_ids(own)
+    restore.undo()
 
 
 def test_a_consumer_config_with_an_unknown_key_is_an_injection_error():
     _, injector = v4_kernel("honor")
-    diagnostics = chat(injector, "Porto tram", consumer_config={"top_p": 1})
+    diagnostics = chat(injector, V4_QUERY, consumer_config={"top_p": 1})
     assert "unknown keys" in diagnostics["injection_error"]
 
 

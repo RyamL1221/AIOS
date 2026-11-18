@@ -64,6 +64,7 @@ class Selector:
         self,
         user_id: Optional[str],
         barrier_snapshot: Optional[int] = None,
+        required: bool = False,
     ) -> WaitOutcome:
         """Wait for writes accepted before a retrieval of ``user_id``.
 
@@ -72,16 +73,19 @@ class Selector:
             barrier_snapshot: The high-water mark stamped when the
                 retrieval was accepted. ``None`` takes one now; the
                 sentinel ``0`` skips the wait.
+            required: Wait even under the ablation ``barrier: off`` (a
+                measurement read; ``MemoryWriteBarrier``).
 
         Returns:
             The wait outcome; ``BYPASSED`` when no wait ran.
         """
-        return self._await(user_id, barrier_snapshot)[0]
+        return self._await(user_id, barrier_snapshot, required)[0]
 
     def _await(
         self,
         user_id: Optional[str],
         barrier_snapshot: Optional[int] = None,
+        required: bool = False,
     ) -> Tuple[WaitOutcome, Optional[int]]:
         """``await_pending_writes``, and the snapshot it waited on
         (None when it took none: no user, no barrier, or a provider
@@ -97,6 +101,9 @@ class Selector:
             barrier_snapshot = barrier.snapshot(user_id)
         if not barrier_snapshot:
             return WaitOutcome.BYPASSED, barrier_snapshot
+        if required:
+            return (barrier.wait_until_drained(
+                user_id, barrier_snapshot, required=True), barrier_snapshot)
         return (barrier.wait_until_drained(user_id, barrier_snapshot),
                 barrier_snapshot)
 

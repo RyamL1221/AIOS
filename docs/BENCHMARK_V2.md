@@ -1590,7 +1590,10 @@ on Graphiti and A-MEM (`EMPTY_WRITE_IS_LOSS`):
 
 A write that stored some of its facts after such a failure (one fact's
 embedding failed, say) is stored and passes the rule, as before. The
-rule applies to v1's Mem0 cells too (the same set, by writer).
+rule is v2's: v1's Mem0 cells keep the old one (`EMPTY_WRITE_IS_LOSS_V1`),
+since a v1 kernel writer reads a create the kernel refused as one that
+stored nothing, so a v1 empty write cannot tell the two apart
+(corrected on review, before any run under the amendment).
 
 **Reported.** The analysis's reading "Writes that stored no fact
 (Amendments 5, 8, 9)" gives the Mem0 cells as it gives Graphiti's and

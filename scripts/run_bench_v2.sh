@@ -7,8 +7,9 @@
 #                kernel_shared
 #   phase agent: kernel memory off: replicated_mem0, replicated_inhouse,
 #                native_mem0, native_inhouse; 0 kernel memory ops checked
-#   phases kmem0_ns, kinh_ns, agent_ns: the same kernels with
-#                memory.supersession off, for the no_supersession control
+#   phases kmem0_ns, kinh_ns, agent_ns: the same kernels with the
+#                ablation supersession: off (memory.supersession off before
+#                Subtask 19), for the no_supersession control
 #                (kernel_shared; replicated_mem0, replicated_inhouse)
 #   Graphiti (Subtask 16, docs/GRAPHITI_BACKEND.md), chosen with PHASES:
 #   phase kgra:  Graphiti, kernel injection on, extraction off:

@@ -147,10 +147,11 @@ class PipelineSettings:
 
     @property
     def effective_write_barrier(self) -> Dict[str, Any]:
-        """``write_barrier``, disabled under ``barrier: off``."""
+        """``write_barrier``; under ``barrier: off`` its waits are off
+        and its bookkeeping kept (``MemoryWriteBarrier``)."""
         if self.ablation.barrier_on:
             return dict(self.write_barrier)
-        return dict(self.write_barrier, enabled=False)
+        return dict(self.write_barrier, waits=False)
 
     @property
     def effective_write_quota(self) -> Dict[str, Any]:

@@ -63,6 +63,12 @@ class MemoryWriteBarrier:
     - ``timeout_ms`` (default ``5000``): maximum time a single
       ``wait_until_drained`` call will block before returning
       ``WaitOutcome.TIMEOUT``.
+    - ``waits`` (default ``True``; set by the ablation ``barrier: off``,
+      docs/ABLATION.md, never in the config file): ``False`` keeps the
+      bookkeeping (sequences, snapshots, the pending set) and skips
+      every wait but a ``required`` one (the harness's audit and cost
+      reads), so a read no longer waits for the writes accepted before
+      it, and which writes those were is still known.
     """
 
     def __init__(self, config: dict):
@@ -75,6 +81,7 @@ class MemoryWriteBarrier:
         """
         cfg = config or {}
         self._enabled: bool = bool(cfg.get("enabled", True))
+        self._waits: bool = bool(cfg.get("waits", True))
         timeout_ms = cfg.get("timeout_ms", 5000)
         self._timeout_seconds: float = float(timeout_ms) / 1000.0
 
@@ -259,6 +266,7 @@ class MemoryWriteBarrier:
         user_id: Optional[str],
         barrier_seq: int,
         deadline: Optional[float] = None,
+        required: bool = False,
     ) -> WaitOutcome:
         """Block until all pending writes at or below ``barrier_seq`` drain.
 
@@ -276,6 +284,8 @@ class MemoryWriteBarrier:
             deadline: Optional override for the configured timeout, in
                 seconds. Used by tests to surface bounded-wait
                 behavior quickly.
+            required: Wait even when ``waits`` is off (a measurement
+                read, not an agent's).
 
         Returns:
             One of ``WaitOutcome.DRAINED``, ``WaitOutcome.TIMEOUT``,
@@ -286,6 +296,9 @@ class MemoryWriteBarrier:
         # returns ``_SENTINEL_SEQ`` for all of these cases too, so this
         # branch covers both "barrier off" and "nothing to wait for".
         if not self._enabled or not user_id or barrier_seq == _SENTINEL_SEQ:
+            return WaitOutcome.BYPASSED
+        # The ablation barrier: off. No agent's read waits.
+        if not self._waits and not required:
             return WaitOutcome.BYPASSED
 
         # Resolve the effective per-call timeout. ``deadline`` is

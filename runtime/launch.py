@@ -639,9 +639,11 @@ def accept_memory_request(agent_name, query, session_token=None):
     """Accept a memory request on the calling thread, the event loop,
     so requests are accepted (stamped and queued) in arrival order;
     returns the function that waits for its answer off the loop
-    (``SyscallExecutor.accept_memory``)."""
+    (``SyscallExecutor.accept_memory``). The token goes with it as the
+    write quota's bucket key, also under the ablation ``identity:
+    claim``, which drops only the binding (``bind_memory_request``)."""
     return syscall_executor.accept_memory(
-        agent_name, query, session_token=honored_session(session_token)
+        agent_name, query, session_token=session_token
     )
 
 

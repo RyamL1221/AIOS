@@ -177,11 +177,13 @@ class MemoryManager:
 
         barrier_config = memory_config.get("write_barrier", {}) or {}
         self._barrier_config = dict(barrier_config)
-        # Under ``barrier: off`` the kernel's one barrier stamps nothing
-        # and no read waits; the configured block is still reported.
+        # Under ``barrier: off`` the kernel's one barrier still stamps
+        # every write and read (so which writes a read could have waited
+        # for is known), and no agent's read waits; the harness's audit
+        # and cost reads still do. The configured block is reported.
         self.barrier = MemoryWriteBarrier(
             config=barrier_config if self.ablation.barrier_on
-            else dict(barrier_config, enabled=False)
+            else dict(barrier_config, waits=False)
         )
 
         # Selection settings for retrieve_for_agent. A threshold of 0.0
@@ -290,15 +292,6 @@ class MemoryManager:
             ablate=kernel_ablation(self).as_dict(),
         )
 
-    def honored_session(
-        self, session_token: Optional[str]
-    ) -> Optional[str]:
-        """``session_token``, or None under ``identity: claim``: the
-        kernel then neither binds nor checks a token, and serves the
-        request for the id it claims (docs/ABLATION.md)."""
-        if not kernel_ablation(self).binds_identity:
-            return None
-        return session_token
 
     def memory_pipeline(self) -> MemoryPipeline:
         """The library over what placement gives the kernel: the one
@@ -332,18 +325,24 @@ class MemoryManager:
         self,
         user_id: Optional[str],
         barrier_snapshot: Optional[int] = None,
+        required: bool = False,
     ) -> WaitOutcome:
         """Wait for writes accepted before a retrieval of ``user_id``
-        (``Selector.await_pending_writes``)."""
-        return self.memory_pipeline().selector.await_pending_writes(
-            user_id, barrier_snapshot
-        )
+        (``Selector.await_pending_writes``); ``required`` waits under
+        the ablation ``barrier: off`` too (a measurement read)."""
+        selector = self.memory_pipeline().selector
+        if required:
+            return selector.await_pending_writes(
+                user_id, barrier_snapshot, required=True
+            )
+        return selector.await_pending_writes(user_id, barrier_snapshot)
 
     def await_writes(self, user_id: Optional[str]) -> WaitOutcome:
         """Wait for every write of ``user_id`` accepted so far, as a
         retrieval accepted now would (``GET /memory/cost`` reads a
-        trial's backend usage after them)."""
-        return self._await_pending_writes(user_id)
+        trial's backend usage after them). A measurement read: it waits
+        under the ablation ``barrier: off`` too."""
+        return self._await_pending_writes(user_id, required=True)
 
     def stamp_syscall(self, memory_syscall) -> None:
         """Stamp a memory syscall against the write barrier.
@@ -945,9 +944,10 @@ class MemoryManager:
         store"). Not a retrieval path: no agent and no SDK call uses it.
         Waits for the user's writes accepted before it, as a listing
         does. ``at_limit``: the listing reached ``LIST_TOP_K`` and may
-        be partial."""
+        be partial. A measurement read: it waits under the ablation
+        ``barrier: off`` too."""
         uid = self.canonical_user_id(user_id)
-        self._await_pending_writes(uid)
+        self._await_pending_writes(uid, required=True)
         with tagged(uid):
             found = self.provider.list(uid, LIST_TOP_K)
         return {

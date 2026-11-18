@@ -341,7 +341,6 @@ class Formatter:
             ),
             "tokens_estimated": estimate_tokens(text) if text else 0,
             "block_format": self.block_format,
-            "block_order": self.order,
             "block_recency": self.recency,
             "block_recency_unit": self.recency_unit,
             # The caller's current session (benchmark v2), or None.
@@ -351,4 +350,6 @@ class Formatter:
             "block_text": text,
             "format_ms": (time.perf_counter() - started) * 1000,
         }
+        if self.order != "type":  # the full kernel's diagnostics as before
+            diagnostics["block_order"] = self.order
         return text, diagnostics

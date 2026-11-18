@@ -82,9 +82,10 @@ ablation, recorded as such:
 | `writer_scoped` | `forget_scope: writer` | the writers revoked by their own list and delete |
 | `no_supersession` | `supersession: off` | `memory.supersession: off` |
 
-A trial written before this subtask has no `ablation`; readers take it
-from the trial's `control` by this table, so earlier results load as
-the ablations they were. Two aliases change mechanism, not meaning:
+A trial written before this subtask has no `ablation`;
+`ablation.trial_ablation` (Cerebrum) takes it from the trial's
+`control` by this table, so earlier results load as the ablations they
+were. Two aliases change mechanism, not meaning:
 under `no_delete` and `writer_scoped` the kernel and replicated writers
 now call the user's forget as in the full kernel, and the forget (the
 kernel's, or the library's in a replicated agent) deletes nothing, or
@@ -109,9 +110,9 @@ before the code. N = 6 is the agent-count dataset `agents_n6`
 
 | Component | Switch | What it removes | Visible under | Measurement | Prediction |
 |---|---|---|---|---|---|
-| Write barrier | `barrier: off` | the kernel stamps no write and no read waits (chat, SDK read, list, forget). The memory thread still runs SDK requests in arrival order, so only a chat's injection, which runs on the request pool, can overtake a queued write | `concurrent` | covered late writes (`stress.probes[*].late_covered`), `stale_read`, `timing_miss`; paired outcomes | covered late writes from 0 to hundreds over 30 users, as replicated's (s18: 552 late writes over 180 probes); a few stale reads or timing misses (s18 replicated: 2 stale reads, both contradiction probes lost) |
-| Identity resolution | `identity: claim` | the kernel serves a request for the user id the agent claims, verbatim: a session token is ignored (no binding, no `identity_overridden`) and ids are not canonicalized | `wrong_user`; V2 on `profile_agent` | `stress.misfiled_rows`, cross-user rows in the blocks (`stress_report.cross_user_rows`), `memories_missing`; under V2 `profile_facts_in_block` | wrong_user: misfiled rows from 0 to about one per faulty write (s18 functional check, replicated: 27 to 34 over 5 users), reaching the next user's blocks, `memories_missing` up by about 1; V2: the profile writer's rows go to the alias's partition, profile facts in the block fall to 0. Kernel ≈ replicated |
-| Visibility | `visibility: off` | every row of the user's partition is visible to every agent: the selector applies no sharing rule and a read by id needs no ownership or share. Writes stay owner-only, and the user partition stays | V3 on the consumer; the privacy probe | privacy probe `passed`, `forbidden_in_block`; `private_rows_from_others` | the privacy probe fails (its forbidden value in the block) in most users; the full kernel's never fails (Subtask 15: 55 probes) |
+| Write barrier | `barrier: off` | no agent's read waits (chat, SDK read, list, forget). The kernel still stamps every write and read, so which writes a read could have waited for stays known, and the harness's audit and cost reads still wait. The memory thread still runs SDK requests in arrival order, so only a chat's injection, which runs on the request pool, can overtake a queued write | `concurrent` | covered late writes (`stress.probes[*].late_covered`), `stale_read`, `timing_miss`; paired outcomes | covered late writes from 0 to hundreds over 30 users, as replicated's (s18: 552 late writes over 180 probes); a few stale reads or timing misses (s18 replicated: 2 stale reads, both contradiction probes lost) |
+| Identity resolution | `identity: claim` | the kernel serves a request for the user id the agent claims: a session token binds nothing and is not checked (no `identity_overridden`), and the canonicalization rules (casefold, email domains) are off; surrounding whitespace is still stripped, and the token still keys the write quota's bucket | `wrong_user`; V2 on `profile_agent` | `stress.misfiled_rows`, cross-user rows in the blocks (`stress_report.cross_user_rows`), `memories_missing`; under V2 `profile_facts_in_block` | wrong_user: misfiled rows from 0 to about one per faulty write (s18 functional check, replicated: 27 to 34 over 5 users), reaching the next user's blocks, `memories_missing` up by about 1; V2: the profile writer's rows go to the alias's partition, profile facts in the block fall to 0. Kernel ≈ replicated |
+| Visibility | `visibility: off` | every row of the user's partition is visible to every agent: the selector applies no sharing rule (nor an SDK caller's own `sharing_policy` narrowing) and a read by id needs no ownership or share. Writes stay owner-only, the user partition stays, and a forget's report still names only the values its caller may read | V3 on the consumer; the privacy probe | privacy probe `passed`, `forbidden_in_block`; `private_rows_from_others` | the privacy probe fails (its forbidden value in the block) in most users; the full kernel's never fails (Subtask 15: 55 probes) |
 | Supersession | `supersession: off` | a later statement of a slot retires no earlier row, and selection excludes none | H = 0; recency and contradiction probes | earlier statements' rows in the block (`stale_in_block`), recency and contradiction `passed` | an earlier statement's row in every in-house recency and contradiction block, and both pass rates down to the levels before supersession (`no_supersession` in Subtask 15: as `f15a`, recency 1 of 5 and contradiction 3 of 5 in-house) |
 | Forget scope | `forget_scope: writer` | the forget deletes only the requesting writer's own rows (the slot's, and its own carriers of a value), records no tombstone and scrubs only what it deleted | H = 0; the deletion probe, echo users (i mod 9 in {0, 4, 8}) | carriers left in the store (`revoked_value_rows`), deletion `passed` split by echo user | echo users keep the echo row and fail the deletion probe (Subtask 15 `writer_scoped`: 6 of 8 echo-user probes failed); non-echo users pass as in the full kernel |
 | Quota | `quota: off` | no write quota, with `memory.write_quota` still enabled | `flood10`, `flood50` | flood rows in the block per probe (`flood_rows_in_block`), `profile_facts_in_block`, `memories_missing`, `flood_writes_accepted` | the flooding writer's writes all accepted; the native-like collapse, as replicated's in s18: 4.3 to 10 flood rows in a probe's block, profile facts −0.23 and −0.53, `memories_missing` +0.60 and +1.03 (F = 10 and 50) against the full kernel's 1.7 to 1.8 flood rows per probe and no change |
@@ -195,7 +196,8 @@ confirmed when its primary measure's interval excludes 0 in the
 predicted direction: covered late writes per user (`barrier`), misfiled
 rows per user (`identity`), flood rows in the block per probe and
 profile facts (`quota`), carriers left per user (`forget_scope`; with
-the deletion probe's echo-user outcomes reported beside it). "≈
+the deletion probe's echo-user outcomes reported beside it). One pair
+confirms nothing. "≈
 replicated" is reported against s18's replicated cells on the same
 users where they exist (concurrency and floods), not tested: they ran
 at other commits. The formatting and budget rows need the judge and
@@ -207,6 +209,25 @@ value, the paired difference with its interval, and the measurement's
 name; and a contribution figure, one horizontal bar per component
 (the paired difference of its primary measure, with the interval), each
 on its own axis since the units differ.
+
+## Corrected on review
+
+Changed after this spec's commit, on the code review, before any of its
+runs was used (Subtask 19's functional check was stopped and run again
+on the corrected code):
+- `barrier: off` keeps the barrier's bookkeeping: with every sequence
+  and snapshot dropped, every late write read as one the barrier should
+  have covered, a write accepted after the read included, and the
+  harness's own audit and cost reads stopped waiting.
+- `identity: claim` drops the session binding only: the token still
+  keys the write quota's bucket (no condition here combines the two).
+  The rules it turns off are the canonicalization rules; whitespace is
+  still stripped.
+- `visibility: off` also skips an SDK caller's own narrowing, and the
+  forget report still names only readable values (both stated above;
+  no measurement here reads either).
+- The full kernel's block diagnostics are unchanged: `block_order` is
+  reported only when it is `similarity`.
 
 ## What this does not show
 
