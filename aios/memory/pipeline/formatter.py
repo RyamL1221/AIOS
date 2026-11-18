@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 TYPE_ORDER = ("profile", "task_context", "calendar", "conversation")
 
 BLOCK_FORMATS = ("compact", "legacy")
+# The block's row order: type order (the kernel's), or the selector's
+# score order (the ablation ``block_order: similarity``).
+BLOCK_ORDERS = ("type", "similarity")
 DEFAULT_BLOCK_FORMAT = "compact"
 
 # What a recency age counts: wall-clock time since the row's timestamp,
@@ -246,20 +249,30 @@ class Formatter:
     """Builds the memory block for one pipeline.
 
     ``recency_unit`` and ``current_session`` choose the age printed
-    when ``recency`` is on (``format_block``).
+    when ``recency`` is on (``format_block``). ``max_tokens`` None means
+    no budget, and ``order`` ``"similarity"`` keeps the rows in the
+    selector's score order instead of type order (the ablation switches
+    ``budget: off`` and ``block_order: similarity``, docs/ABLATION.md).
     """
 
     def __init__(
         self,
-        max_tokens: int,
+        max_tokens: Optional[int],
         block_format: str = DEFAULT_BLOCK_FORMAT,
         *,
         recency: bool = False,
         now: Optional[datetime] = None,
         recency_unit: str = DEFAULT_RECENCY_UNIT,
         current_session: Optional[int] = None,
+        order: str = "type",
     ):
         _check_format(block_format, recency_unit)
+        if order not in BLOCK_ORDERS:
+            raise ValueError(
+                f"block order must be one of {list(BLOCK_ORDERS)}, "
+                f"got {order!r}"
+            )
+        self.order = order
         self.max_tokens = max_tokens
         self.block_format = block_format
         self.recency = recency
@@ -278,7 +291,9 @@ class Formatter:
     def truncate_by_token_budget(self, memories: list) -> list:
         """Remove least-relevant memories until the formatted block
         fits within ``max_tokens``. Memories arrive sorted by score
-        descending; the tail goes first."""
+        descending; the tail goes first. No budget keeps them all."""
+        if self.max_tokens is None:
+            return memories
         while memories:
             block = self.render(memories)
             if estimate_tokens(block) <= self.max_tokens:
@@ -310,7 +325,8 @@ class Formatter:
             formatted.append(row)
 
         kept = self.truncate_by_token_budget(formatted)
-        kept = sorted(kept, key=type_rank)  # stable: score order within
+        if self.order == "type":
+            kept = sorted(kept, key=type_rank)  # stable: score order within
         text = self.render(kept) if kept else ""
         diagnostics: Dict[str, Any] = {
             "injected_count": len(kept),
@@ -325,6 +341,7 @@ class Formatter:
             ),
             "tokens_estimated": estimate_tokens(text) if text else 0,
             "block_format": self.block_format,
+            "block_order": self.order,
             "block_recency": self.recency,
             "block_recency_unit": self.recency_unit,
             # The caller's current session (benchmark v2), or None.

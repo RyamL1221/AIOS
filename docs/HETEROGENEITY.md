@@ -65,7 +65,7 @@ the agent a different set of channels:
 | sharing default on the writers' writes | applied | applied | applied |
 | write content and metadata: writers | applied, in the SDK request | applied, in the agent's library call | applied, in the agent's backend call |
 | write content and metadata: the assistant's conversation write | **not applied**: the kernel's extractor writes the conversation | applied | applied |
-| retrieval config (k, threshold, token budget, block format): the consumer | **not applied**: the chat request carries no retrieval config, and the kernel uses its own | applied, to the agent's own pipeline settings | applied, to the agent's own selection code |
+| retrieval config (k, threshold, token budget, block format): the consumer | **not applied**: the kernel uses its own. Since Subtask 19 the chat request carries the consumer's k, threshold and token budget (`LLMQuery.retrieval`), which the kernel applies only under the ablation `consumer_config: honor` (`ABLATION.md`); a block format has no channel | applied, to the agent's own pipeline settings | applied, to the agent's own selection code |
 | retrieval config: a writer's existence check before its upsert | **not applied** beyond `k`, which the SDK sends | applied | writers do not read |
 | access control on the consumer's reads | **not applied**: the kernel enforces visibility | **not applied**: the library the agent links enforces it, with no switch | applied |
 

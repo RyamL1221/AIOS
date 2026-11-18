@@ -183,7 +183,7 @@ def launch_handler(execute_request, llm_query=LLMQuery, manager=None,
             return lambda: execute_request(agent_name, query)
     tree = ast.parse(LAUNCH.read_text())
     wanted = {"QueryRequest", "handle_query", "bind_chat_request",
-              "bind_memory_request"}
+              "bind_memory_request", "honored_session"}
     nodes = [
         node for node in tree.body
         if getattr(node, "name", None) in wanted

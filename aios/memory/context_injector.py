@@ -5,12 +5,14 @@ Retrieves relevant memories from the configured memory provider and
 prepends them as a system message to the LLM query's message list,
 enabling personalized agent responses based on prior interactions.
 """
+import dataclasses
 import logging
 from typing import TYPE_CHECKING, Optional
 
 from cerebrum.llm.apis import LLMQuery
 
 from aios.memory.pipeline.facade import (
+    MemoryPipeline,
     latest_user_message,
     serialize_messages,
 )
@@ -65,6 +67,7 @@ class ContextInjector:
         user_id: Optional[str] = None,
         session: Optional[int] = None,
         barrier_snapshot: Optional[int] = None,
+        consumer_config: Optional[dict] = None,
     ) -> "tuple[LLMQuery, dict]":
         """Retrieve relevant memories and prepend as a system
         message, returning diagnostics alongside the query.
@@ -143,18 +146,31 @@ class ContextInjector:
 
         try:
             # The library does the work (MemoryPipeline.inject), over
-            # the kernel's shared barrier and identity registry.
-            messages, diagnostics = (
-                self.memory_manager.memory_pipeline().inject(
-                    agent_name,
-                    query.messages,
-                    user_id=user_id,
-                    k=self.max_memories,
-                    max_tokens=self.max_tokens,
-                    session=session,
-                    barrier_snapshot=barrier_snapshot,
-                )
+            # the kernel's shared barrier and identity registry. A
+            # consumer's own retrieval config is applied only under the
+            # ablation consumer_config: honor (docs/ABLATION.md).
+            pipeline = self.memory_manager.memory_pipeline()
+            k, max_tokens = self.max_memories, self.max_tokens
+            applied = bool(consumer_config) and (
+                pipeline.settings.ablation.honors_consumer_config
             )
+            if applied:
+                pipeline, k, max_tokens = self._consumer_pipeline(
+                    pipeline, consumer_config, k, max_tokens
+                )
+            messages, diagnostics = pipeline.inject(
+                agent_name,
+                query.messages,
+                user_id=user_id,
+                k=k,
+                max_tokens=max_tokens,
+                session=session,
+                barrier_snapshot=barrier_snapshot,
+            )
+            if consumer_config:
+                diagnostics["consumer_config"] = {
+                    "sent": dict(consumer_config), "applied": applied,
+                }
             resolved_user_id = diagnostics["resolved_user_id"]
             if diagnostics.get("retrieval_error"):
                 # Otherwise the log shows only "No memories selected",
@@ -226,6 +242,44 @@ class ContextInjector:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    # What a consumer's retrieval config may set, and the setting each
+    # replaces (as a replicated V4 consumer's own pipeline does).
+    CONSUMER_CONFIG_KEYS = (
+        "k", "relevance_threshold", "max_memory_tokens",
+    )
+
+    def _consumer_pipeline(self, pipeline, consumer_config: dict,
+                           k: int, max_tokens: int):
+        """The pipeline, k and token budget a consumer's own retrieval
+        config gives, as a replicated agent built with that config
+        would run (``dataclasses.replace`` of the settings, the
+        kernel's barrier, resolver, tombstones and quota kept). An
+        unknown key raises ``ValueError``."""
+        unknown = set(consumer_config) - set(self.CONSUMER_CONFIG_KEYS)
+        if unknown:
+            raise ValueError(
+                f"consumer retrieval config: unknown keys {sorted(unknown)}"
+            )
+        changes = {}
+        if consumer_config.get("k") is not None:
+            k = int(consumer_config["k"])
+            changes["max_injected_memories"] = k
+        if consumer_config.get("relevance_threshold") is not None:
+            changes["relevance_threshold"] = float(
+                consumer_config["relevance_threshold"]
+            )
+        if consumer_config.get("max_memory_tokens") is not None:
+            max_tokens = int(consumer_config["max_memory_tokens"])
+            changes["max_memory_tokens"] = max_tokens
+        settings = dataclasses.replace(pipeline.settings, **changes)
+        own = MemoryPipeline(
+            pipeline.provider, settings,
+            barrier=pipeline.barrier, resolver=pipeline.resolver,
+            tombstones=pipeline.tombstones, usage_tag=pipeline.usage_tag,
+            quota=pipeline.quota,
+        )
+        return own, k, max_tokens
+
     # The library's helpers, kept under their old names.
     _extract_latest_user_message = staticmethod(latest_user_message)
     _format_memory_block = staticmethod(format_block)
@@ -238,7 +292,7 @@ class ContextInjector:
         settings = self.memory_manager.pipeline_settings()
         return Formatter(
             self.max_tokens,
-            settings.block_format,
+            settings.effective_block_format,
             recency=settings.block_recency,
             recency_unit=settings.block_recency_unit,
         ).truncate_by_token_budget(memories)

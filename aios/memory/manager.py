@@ -17,6 +17,7 @@ from cerebrum.utils.usage import tagged
 from aios.config.config_manager import config as global_config
 from .embedding import EmbeddingConfig
 from .pipeline import (
+    Ablation,
     LIST_TOP_K,
     SHARED_FETCH_FACTOR,  # noqa: F401  (re-exported for callers)
     UPDATE_PROTECTED_METADATA,  # noqa: F401
@@ -40,6 +41,13 @@ from .providers.base import Candidate, ProviderError
 from .providers.factory import provider_config
 
 logger = logging.getLogger(__name__)
+
+
+def kernel_ablation(manager: Any) -> Ablation:
+    """A manager's ablation switches: the full kernel for one built
+    without them (tests build managers with ``__new__``, and doubles
+    borrow its methods)."""
+    return getattr(manager, "ablation", None) or Ablation()
 
 
 class _KernelIdentity(IdentityResolver):
@@ -148,6 +156,16 @@ class MemoryManager:
         self.identity_rules = IdentityRules.from_config(
             memory_config.get("identity")
         )
+        # The kernel ablation switches (memory.ablate; Subtask 19,
+        # docs/ABLATION.md), validated here, at startup. Every switch
+        # is the full kernel by default. Under ``identity: claim`` the
+        # kernel serves a request for the id the agent claims: no
+        # session binding and no canonicalization (the configured rules
+        # are still reported).
+        self.ablation = Ablation.from_config(memory_config.get("ablate"))
+        self.configured_identity_rules = self.identity_rules
+        if not self.ablation.binds_identity:
+            self.identity_rules = IdentityRules()
         # The kernel's sessions: a request that names one is bound to
         # its user (Subtask 18, docs/STRESS_DIMENSIONS.md).
         self.sessions = SessionRegistry()
@@ -159,7 +177,12 @@ class MemoryManager:
 
         barrier_config = memory_config.get("write_barrier", {}) or {}
         self._barrier_config = dict(barrier_config)
-        self.barrier = MemoryWriteBarrier(config=barrier_config)
+        # Under ``barrier: off`` the kernel's one barrier stamps nothing
+        # and no read waits; the configured block is still reported.
+        self.barrier = MemoryWriteBarrier(
+            config=barrier_config if self.ablation.barrier_on
+            else dict(barrier_config, enabled=False)
+        )
 
         # Selection settings for retrieve_for_agent. A threshold of 0.0
         # ranks scored candidates without dropping any.
@@ -264,7 +287,18 @@ class MemoryManager:
                 if getattr(self, "write_quota", None) is not None
                 else QuotaSettings().as_dict()
             ),
+            ablate=kernel_ablation(self).as_dict(),
         )
+
+    def honored_session(
+        self, session_token: Optional[str]
+    ) -> Optional[str]:
+        """``session_token``, or None under ``identity: claim``: the
+        kernel then neither binds nor checks a token, and serves the
+        request for the id it claims (docs/ABLATION.md)."""
+        if not kernel_ablation(self).binds_identity:
+            return None
+        return session_token
 
     def memory_pipeline(self) -> MemoryPipeline:
         """The library over what placement gives the kernel: the one

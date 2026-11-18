@@ -85,6 +85,7 @@ def forget_fact(
     scope: str,
     agent_name: str,
     fact_key: str,
+    forget_scope: str = "user",
 ) -> Dict[str, Any]:
     """Forget ``fact_key`` for the user ``scope``; returns the report.
 
@@ -97,8 +98,33 @@ def forget_fact(
 
     The report names ids and owners, never another agent's text
     (Decision 1): ``values`` holds only the values the caller may read.
+
+    ``forget_scope`` is the ablation switch (docs/ABLATION.md):
+    ``"writer"`` keeps only the rows ``agent_name`` owns (the slot's,
+    and its own carriers of the values those rows state), records no
+    tombstone and scrubs only the rows it deleted; ``"none"`` deletes
+    and records nothing. Either report names the scope
+    (``forget_scope``); the full kernel's has no such key.
     """
     rows = partition(provider, scope)
+    listed = len(rows)
+    if forget_scope == "none":
+        logger.info(
+            "forget: agent=%s user_id=%s fact_key=%s: deleted nothing "
+            "(ablation forget_scope: none)", agent_name, scope, fact_key,
+        )
+        return {
+            "user_id": scope, "fact_key": fact_key,
+            "requested_by": agent_name, "listed": listed,
+            "values_count": 0, "forms_count": 0, "values": [],
+            "deleted": [], "not_found": [],
+            "scrubbed": {"messages": 0, "history": 0},
+            "forget_scope": forget_scope,
+        }
+    writer_only = forget_scope == "writer"
+    if writer_only:
+        rows = [row for row in rows
+                if Visibility.can_write(agent_name, row.metadata)]
     values: Dict[str, Tuple[str, List[str]]] = {}
     # The spelling of each value as a row the caller may read states
     # it: another agent's private row may spell the same value its own
@@ -117,12 +143,12 @@ def forget_fact(
         key = _merge_value(values, *stated)
         if Visibility.can_read(agent_name, metadata):
             readable.setdefault(key, stated[0])
-    for tombstone in tombstones.entries(scope):
+    for tombstone in ([] if writer_only else tombstones.entries(scope)):
         if tombstone.fact_key == fact_key:
             _merge_value(values, tombstone.value, tombstone.aliases)
             events.extend(tombstone.events)
 
-    if values:
+    if values and not writer_only:
         tombstones.record(
             scope, fact_key, values.values(), events,
             requested_by=agent_name,
@@ -166,8 +192,14 @@ def forget_fact(
             )
 
     gone = {entry["memory_id"] for entry in deleted} | set(not_found)
-    kept = [row.memory_id for row in rows if row.memory_id not in gone]
-    scrubbed, detached = _scrub(provider, scope, forms, sorted(gone), kept)
+    if writer_only:
+        # Only the records of the rows it deleted: no other agent's.
+        scrubbed, detached = _scrub(provider, scope, [], sorted(gone), [])
+    else:
+        kept = [row.memory_id for row in rows if row.memory_id not in gone]
+        scrubbed, detached = _scrub(
+            provider, scope, forms, sorted(gone), kept
+        )
     deleted.extend(detached)
     logger.info(
         "forget: agent=%s user_id=%s fact_key=%s values=%d forms=%d "
@@ -175,11 +207,11 @@ def forget_fact(
         agent_name, scope, fact_key, len(values), len(forms),
         len(deleted), scrubbed,
     )
-    return {
+    report = {
         "user_id": scope,
         "fact_key": fact_key,
         "requested_by": agent_name,
-        "listed": len(rows),
+        "listed": listed,
         "values_count": len(values),
         "forms_count": len(forms),
         "values": sorted(readable.values()),
@@ -187,6 +219,9 @@ def forget_fact(
         "not_found": not_found,
         "scrubbed": scrubbed,
     }
+    if writer_only:  # the full kernel's report is unchanged
+        report["forget_scope"] = forget_scope
+    return report
 
 
 def _scrub(
@@ -291,7 +326,7 @@ def after_write(
             outcome["lifted"] = [stated[0]]
     forms = tombstones.forms(scope) if tombstones is not None else []
     marking = bool(
-        supersede and settings.supersession == "exclude"
+        supersede and settings.effective_supersession == "exclude"
         and fact_key and event
     )
     if not forms and not marking:

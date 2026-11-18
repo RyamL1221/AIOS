@@ -274,11 +274,56 @@ def test_the_amem_phases_run_the_amem_cells(tmp_path):
         "kamem/h0_kernel_shared",
         "kamem/writer_scoped_kernel_shared",
     ]
+    # Since Subtask 19 each control runs on a kernel of its own with its
+    # ablation switch (docs/ABLATION.md): kamem's full kernel and
+    # writer_scoped's, agent_amem's full kernel, no_visibility's and
+    # writer_scoped's.
     calls = log.read_text().splitlines()
     assert ["--provider amem --kernel-memory on --extract off" in c
-            for c in calls] == [True, False]
-    assert "--provider amem --kernel-memory off" in calls[1]
+            for c in calls] == [True, True, False, False, False]
+    assert all("--provider amem --kernel-memory off" in c
+               for c in calls[2:])
+    assert [c.split("--ablate ")[1] for c in calls] == [
+        "none", "forget_scope=writer", "none", "visibility",
+        "forget_scope=writer"]
     assert "kernel_memory_ops=0" in result.stdout
+
+
+def test_each_control_runs_on_a_kernel_with_its_switch(tmp_path):
+    """Subtask 19 (docs/ABLATION.md): a control's cells run on a fresh
+    kernel whose ``memory.ablate`` is its switch, the other cells on the
+    full kernel, in the same phase directory; supersession is exclude
+    in every one, no_supersession's included."""
+    aios = tree(tmp_path)
+    log = tmp_path / "mode.log"
+    result = launch(aios, "kinh kinh_ns",
+                    "h0 no_delete writer_scoped no_supersession",
+                    extra={"SIM_MODE_LOG": str(log)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = log.read_text().splitlines()
+    assert [c.split("--ablate ")[1] for c in calls] == [
+        "none", "forget_scope=none", "forget_scope=writer", "supersession"]
+    assert all("--supersession exclude" in c for c in calls)
+    logs = sorted((tmp_path / "Cerebrum" / "results" / "sim" / "logs")
+                  .glob("kernel_qwen_kinh*_2*.log"))
+    assert len(logs) == 4
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    assert sorted(cell.name for cell in (root / "kinh").iterdir()) == [
+        "h0_kernel_shared", "no_delete_kernel_shared",
+        "writer_scoped_kernel_shared"]
+
+
+def test_a_resume_reruns_only_the_unfinished_controls_kernel(tmp_path):
+    aios = tree(tmp_path)
+    log = tmp_path / "mode.log"
+    first = launch(aios, "kinh", "h0 no_delete",
+                   fail_run="t1-qwen-kinh-kernel_shared-no_delete")
+    assert first.returncode != 0
+    second = launch(aios, "kinh", "h0 no_delete",
+                    extra={"SIM_MODE_LOG": str(log)})
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert [c.split("--ablate ")[1]
+            for c in log.read_text().splitlines()] == ["forget_scope=none"]
 
 
 def test_the_amem_no_supersession_phases_run_their_control(tmp_path):

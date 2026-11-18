@@ -7,6 +7,7 @@ included).
         --provider mem0 --kernel-memory on|off [--extract on|off]
         [--recency off|time|session] [--barrier-timeout-ms N] [--k N]
         [--budget N] [--supersession off|exclude] [--write-quota on|off]
+        [--ablate none | --ablate SWITCH[=VALUE] ...]
 
 ``--kernel-memory`` sets ``auto_inject`` and ``auto_extract`` together;
 ``--extract`` then sets ``auto_extract`` alone (benchmark v2 kernel runs
@@ -26,14 +27,27 @@ sets ``memory.write_barrier.timeout_ms`` (benchmark v2 kernel runs use
 ``exclude``, and the ``no_supersession`` control ``off``;
 docs/BENCHMARK_V2.md, Amendment 4). ``--write-quota`` sets
 ``memory.write_quota.enabled`` (on under the flood levels,
-docs/STRESS_DIMENSIONS.md).
+docs/STRESS_DIMENSIONS.md). ``--ablate`` sets the whole
+``memory.ablate`` block (docs/ABLATION.md): each switch it names to
+its value (a bare switch to its ablated value), every other switch to
+the full kernel's; ``--ablate none`` is the full kernel.
 
 Run drivers call it between runs, never during one.
 """
 import argparse
+import os
 import re
+import sys
 
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(
+    __file__))))
+from aios.memory.pipeline.ablation import (  # noqa: E402
+    SWITCHES,
+    Ablation,
+    parse_switch,
+)
 
 # --recency: (memory.block_recency, memory.block_recency_unit).
 RECENCY = {
@@ -180,6 +194,59 @@ def set_write_quota(text: str, enabled: bool) -> str:
     return text
 
 
+def _yaml_value(value) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, float):
+        return repr(value)
+    return f'"{value}"'
+
+
+def set_ablation(text: str, switches: dict) -> str:
+    """Set every switch of the ``memory.ablate`` block: those in
+    ``switches`` to their values, the rest to the full kernel's. Each
+    line is matched exactly once inside the block (four spaces of
+    indent under ``  ablate:``), its comment kept in its column."""
+    ablation = Ablation.from_config(switches)  # validates
+    match = re.search(r"^  ablate:\n((?:    .*\n|[ \t]*#.*\n)*)", text,
+                      flags=re.M)
+    if match is None:
+        raise SystemExit("expected a memory.ablate block")
+    block = match.group(1)
+    for name, value in ablation.as_dict().items():
+        block, count = re.subn(
+            rf"^(    {name}: )(\S+)([ \t]*)(#.*)?$",
+            _keep_column(_yaml_value(value)), block, flags=re.M,
+        )
+        if count != 1:
+            raise SystemExit(f"expected one ablate.{name} line, got {count}")
+    text = text[:match.start(1)] + block + text[match.end(1):]
+    reported = Ablation.from_config(yaml.safe_load(text)["memory"]["ablate"])
+    assert reported == ablation, (reported, ablation)
+    return text
+
+
+def ablation_switches(values) -> dict:
+    """The switches ``--ablate`` names: ``none`` alone is the full
+    kernel; otherwise ``SWITCH[=VALUE]`` each (``parse_switch``)."""
+    if not values:
+        return {}
+    if values == ["none"]:
+        return {}
+    if "none" in values:
+        raise SystemExit("--ablate none cannot be combined with switches")
+    switches = {}
+    for text in values:
+        try:
+            name, value = parse_switch(text)
+        except ValueError as e:
+            raise SystemExit(f"--ablate: {e}")
+        if name in switches:
+            raise SystemExit(f"--ablate names {name} twice")
+        switches[name] = value
+    return switches
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
@@ -193,6 +260,11 @@ def main(argv=None) -> None:
     parser.add_argument("--budget", type=int)
     parser.add_argument("--supersession", choices=["off", "exclude"])
     parser.add_argument("--write-quota", choices=["on", "off"])
+    parser.add_argument(
+        "--ablate", action="append",
+        help="'none', or SWITCH[=VALUE], repeatable; switches: "
+             + ", ".join(SWITCHES),
+    )
     args = parser.parse_args(argv)
     with open(args.config) as handle:
         text = handle.read()
@@ -208,6 +280,8 @@ def main(argv=None) -> None:
         text = set_supersession(text, args.supersession)
     if args.write_quota:
         text = set_write_quota(text, args.write_quota == "on")
+    if args.ablate:
+        text = set_ablation(text, ablation_switches(args.ablate))
     with open(args.config, "w") as handle:
         handle.write(text)
 

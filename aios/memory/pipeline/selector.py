@@ -273,8 +273,12 @@ class Selector:
                 lambda mem: mem.get("metadata") or {},
             )
 
-        own = visible(own)
-        shared = visible(shared)
+        # Under the ablation ``visibility: off`` (docs/ABLATION.md) no
+        # sharing rule applies: every row of the user's partition is
+        # visible to every agent.
+        if self.settings.ablation.visibility_on:
+            own = visible(own)
+            shared = visible(shared)
         diagnostics["after_visibility"] = len(own) + len(shared)
 
         def drop(rows: list, dropping, dropped: dict) -> list:
@@ -292,7 +296,7 @@ class Selector:
         # A retired row (an earlier statement of a fact with a later
         # one) is never selected.
         superseded: Dict[str, dict] = {}
-        if self.settings.supersession == "exclude":
+        if self.settings.effective_supersession == "exclude":
             def retired(mem: dict) -> bool:
                 return bool((mem.get("metadata") or {}).get("superseded_by"))
 
@@ -337,7 +341,7 @@ class Selector:
         )
         diagnostics["scores_present"] = scores_present
         if scores_present:
-            threshold = self.settings.relevance_threshold
+            threshold = self.settings.effective_threshold
             diagnostics["threshold_used"] = threshold
             results = [
                 mem for mem in results

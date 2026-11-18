@@ -825,12 +825,22 @@ class SyscallExecutor:
                     overridden = getattr(
                         query, "_identity_overridden", None
                     )
+                    # The consumer's own retrieval config, if it sent
+                    # one (Subtask 19, docs/ABLATION.md).
+                    consumer_config = getattr(
+                        query, "_request_retrieval", None
+                    )
+                    # Passed only when sent: a chat without one calls
+                    # the injector as before.
+                    extra = ({"consumer_config": consumer_config}
+                             if consumer_config else {})
                     query, injection_diag = (
                         self.context_injector.inject(
                             agent_name, query,
                             user_id=request_user_id,
                             session=request_session,
                             barrier_snapshot=arrival_snapshot,
+                            **extra,
                         )
                     )
                     if overridden:

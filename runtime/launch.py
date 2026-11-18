@@ -555,7 +555,11 @@ async def get_memory_config():
         # The kernel's identity rules (memory.identity). Not part of
         # ``pipeline``: replicated agents resolve identity themselves
         # (docs/HETEROGENEITY.md).
-        "identity": manager.identity_rules.as_dict(),
+        # As configured: under the ablation identity: claim the kernel
+        # applies none of them (``pipeline.ablate``).
+        "identity": getattr(
+            manager, "configured_identity_rules", manager.identity_rules
+        ).as_dict(),
         # Where the kernel's store keeps its tombstones and, for Mem0,
         # its message history (docs/DELETION_AND_SUPERSESSION.md). Not
         # part of ``pipeline``: a replicated store keeps its own.
@@ -605,10 +609,24 @@ async def close_session(request: SessionClose):
     return {"closed": manager.sessions.close(request.session_token)}
 
 
+def honored_session(session_token):
+    """The request's session token as the kernel honors it: None under
+    the ablation ``identity: claim`` (docs/ABLATION.md), when the kernel
+    serves a request for the id it claims."""
+    manager = active_components.get("memory")
+    if manager is None or not session_token:
+        return session_token
+    ablation = getattr(manager, "ablation", None)
+    if ablation is not None and not ablation.binds_identity:
+        return None
+    return session_token
+
+
 def bind_memory_request(query, session_token):
     """Bind a memory request to its kernel session's user (Subtask
     18): ``{"claimed", "bound"}`` when the request claimed another user,
     else None. Raises ``UnknownSession``."""
+    session_token = honored_session(session_token)
     if not session_token:
         return None
     manager = active_components.get("memory")
@@ -623,7 +641,7 @@ def accept_memory_request(agent_name, query, session_token=None):
     returns the function that waits for its answer off the loop
     (``SyscallExecutor.accept_memory``)."""
     return syscall_executor.accept_memory(
-        agent_name, query, session_token=session_token
+        agent_name, query, session_token=honored_session(session_token)
     )
 
 
@@ -634,11 +652,12 @@ def bind_chat_request(request, query):
     ``UnknownSession``."""
     manager = active_components.get("memory")
     user_id = request.user_id
-    if request.session_token:
+    session_token = honored_session(request.session_token)
+    if session_token:
         if manager is None:
-            raise UnknownSession(request.session_token)
+            raise UnknownSession(session_token)
         user_id, overridden = manager.bind_chat_user(
-            user_id, request.session_token
+            user_id, session_token
         )
         query._identity_overridden = overridden
     if user_id:
@@ -982,6 +1001,14 @@ async def handle_query(request: QueryRequest):
             # none.
             query._request_provenance_event = getattr(
                 request.query_data, "provenance_event", None
+            )
+            # The consumer's own retrieval config (LLMQuery.retrieval,
+            # Subtask 19): k, threshold and token budget. The kernel
+            # applies it only under the ablation consumer_config: honor
+            # (docs/ABLATION.md); otherwise the injection diagnostics
+            # record it as sent and not applied.
+            query._request_retrieval = getattr(
+                request.query_data, "retrieval", None
             )
             result_dict = await off_loop(
                 execute_request, # The method to call

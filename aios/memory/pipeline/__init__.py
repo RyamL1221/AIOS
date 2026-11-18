@@ -24,6 +24,7 @@ be installed.
 import hashlib
 from pathlib import Path
 
+from .ablation import ALIASES, SWITCHES, Ablation, parse_switch
 from .barrier import MemoryWriteBarrier, WaitOutcome, WriteBarrier
 from .deletion import (
     LIST_TOP_K,
@@ -87,6 +88,10 @@ def _source_hash() -> str:
 PIPELINE_VERSION = _source_hash()
 
 __all__ = [
+    "ALIASES",
+    "SWITCHES",
+    "Ablation",
+    "parse_switch",
     "LIST_TOP_K",
     "MARKS",
     "PIPELINE_VERSION",

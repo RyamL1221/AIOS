@@ -189,7 +189,7 @@ class MemoryPipeline:
         self.usage_tag: UsageTag = usage_tag or untagged
         self.settings = settings or PipelineSettings()
         self.barrier: Optional[MemoryWriteBarrier] = (
-            MemoryWriteBarrier(config=self.settings.write_barrier)
+            MemoryWriteBarrier(config=self.settings.effective_write_barrier)
             if barrier is _LOCAL else barrier
         )
         self.resolver = resolver or IdentityResolver()
@@ -278,8 +278,11 @@ class MemoryPipeline:
         try:
             if outcome is not None:
                 outcome["barrier_seq"] = barrier_seq or 0
-            if self.quota is not None:
-                rejected = self.quota.admit(
+            # Under the ablation ``quota: off`` no write is bounded.
+            quota = (self.quota if self.settings.ablation.quota_on
+                     else None)
+            if quota is not None:
+                rejected = quota.admit(
                     uid, metadata["owner_agent"], session, note.content
                 )
                 if rejected:
@@ -300,8 +303,8 @@ class MemoryPipeline:
                 try:
                     memory_id = self.provider.add(note)
                 except Exception:
-                    if self.quota is not None:
-                        self.quota.refund(
+                    if quota is not None:
+                        quota.refund(
                             uid, metadata["owner_agent"], session,
                             note.content,
                         )
@@ -501,7 +504,11 @@ class MemoryPipeline:
         row) or carries a tombstoned value. The last logs a WARNING: a
         carrier that escaped the forget is never returned."""
         found = self.locate(memory_id, user_id, agent_name)
-        if found is None or not Visibility.can_read(
+        if found is None:
+            return None
+        # Under the ablation ``visibility: off`` any row of the user
+        # reads.
+        if self.settings.ablation.visibility_on and not Visibility.can_read(
             agent_name, found.metadata
         ):
             return None
@@ -562,6 +569,7 @@ class MemoryPipeline:
                 report = forget_fact(
                     self.provider, self.tombstones, scope, agent_name,
                     fact_key,
+                    forget_scope=self.settings.ablation.forget_scope,
                 )
             # As a write's outcome: the barrier sequence the forget held
             # and when its deletes were done (Subtask 18).
@@ -610,12 +618,14 @@ class MemoryPipeline:
             self.settings.max_memory_tokens
             if max_tokens is None else max_tokens
         )
+        ablation = self.settings.ablation
         return Formatter(
-            budget,
-            self.settings.block_format,
+            budget if ablation.budget_on else None,
+            self.settings.effective_block_format,
             recency=self.settings.block_recency,
             recency_unit=self.settings.block_recency_unit,
             current_session=session,
+            order=ablation.block_order,
         ).build(candidates)
 
     def inject(

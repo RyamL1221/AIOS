@@ -142,6 +142,24 @@ memory:
     max_writes: 4
     dedupe: true
 
+  # Kernel ablation switches (Subtask 19, docs/ABLATION.md): one per
+  # kernel responsibility, each removing that component alone. Every
+  # switch here is the full kernel; an absent block is too. Reported in
+  # /memory/config "pipeline"; scripts/set_memory_mode.py --ablate sets
+  # them; the harness's pre-flight compares them with the run's.
+  ablate:
+    barrier: "on"            # "off": no write stamped, no read waits
+    identity: "session"      # "claim": no session binding or canonicalization
+    visibility: "on"         # "off": every row of the user visible to every agent
+    supersession: "on"       # "off": no row retired, none excluded
+    forget_scope: "user"     # "writer": own rows only, no tombstone; "none"
+    quota: "on"              # "off": no write quota
+    block_format: "compact"  # "legacy": the pre-9d block
+    block_order: "type"      # "similarity": the selector's score order
+    budget: "on"             # "off": no token budget (k only)
+    threshold: null          # a number: used instead of relevance_threshold
+    consumer_config: "kernel"  # "honor": apply a consumer's own k, threshold, budget
+
   # Mem0 provider configuration (used when provider: "mem0")
   mem0:
     api_key: ""  # Optional: for Mem0 cloud

@@ -7,8 +7,9 @@ replicated agent builds its own copy from that report, so in the clean
 condition every copy matches the kernel's settings by construction.
 """
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from .ablation import Ablation
 from .quota import QuotaSettings
 
 # ``memory.supersession``: off, or retire earlier statements and never
@@ -33,7 +34,11 @@ class PipelineSettings:
     earlier rows of its slot, and selection never picks a retired
     row. ``write_quota`` (``memory.write_quota``) bounds what one writer
     stores per user per session (``quota.QuotaSettings``; off by
-    default, Subtask 18)."""
+    default, Subtask 18). ``ablate`` (``memory.ablate``) holds the
+    kernel ablation switches (``ablation.Ablation``; every one the full
+    kernel by default, Subtask 19, docs/ABLATION.md). A switch never
+    rewrites another field: the ``effective_*`` values are what the
+    library applies."""
 
     relevance_threshold: float = 0.0
     max_injected_memories: int = 5
@@ -46,11 +51,18 @@ class PipelineSettings:
     write_quota: Dict[str, Any] = field(
         default_factory=lambda: QuotaSettings().as_dict()
     )
+    ablate: Dict[str, Any] = field(
+        default_factory=lambda: Ablation().as_dict()
+    )
 
     def __post_init__(self):
         # Validated here, so a bad block fails where the settings are
         # built (the kernel at startup, an agent when it copies them).
         QuotaSettings.from_config(self.write_quota)
+        # Every switch, its defaults filled in and its values normalized.
+        object.__setattr__(
+            self, "ablate", Ablation.from_config(self.ablate).as_dict()
+        )
         if self.block_format not in ("compact", "legacy"):
             raise ValueError(
                 "memory.block_format must be 'compact' or 'legacy', "
@@ -100,7 +112,49 @@ class PipelineSettings:
             write_quota=QuotaSettings.from_config(
                 memory_config.get("write_quota")
             ).as_dict(),
+            ablate=Ablation.from_config(
+                memory_config.get("ablate")
+            ).as_dict(),
         )
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    # -- the ablation switches applied (docs/ABLATION.md) ---------------
+
+    @property
+    def ablation(self) -> Ablation:
+        return Ablation.from_config(self.ablate)
+
+    @property
+    def effective_supersession(self) -> str:
+        """``supersession``, or ``"off"`` under ``supersession: off``."""
+        return self.supersession if self.ablation.supersession_on else "off"
+
+    @property
+    def effective_block_format(self) -> str:
+        """``block_format``, or ``"legacy"`` under
+        ``block_format: legacy``."""
+        if self.ablation.block_format == "legacy":
+            return "legacy"
+        return self.block_format
+
+    @property
+    def effective_threshold(self) -> float:
+        """``relevance_threshold``, or the ablation's ``threshold``."""
+        threshold: Optional[float] = self.ablation.threshold
+        return self.relevance_threshold if threshold is None else threshold
+
+    @property
+    def effective_write_barrier(self) -> Dict[str, Any]:
+        """``write_barrier``, disabled under ``barrier: off``."""
+        if self.ablation.barrier_on:
+            return dict(self.write_barrier)
+        return dict(self.write_barrier, enabled=False)
+
+    @property
+    def effective_write_quota(self) -> Dict[str, Any]:
+        """``write_quota``, disabled under ``quota: off``."""
+        if self.ablation.quota_on:
+            return dict(self.write_quota)
+        return dict(self.write_quota, enabled=False)

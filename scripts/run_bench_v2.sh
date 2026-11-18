@@ -30,9 +30,14 @@
 # block; the harness keeps native consumers at k 10), set through
 # set_memory_mode.py; a probe writes nothing (Amendment 3: the
 # kernel's auto_extract is off, the agents skip their probe writes);
-# supersession is exclude, off in the _ns phases (Amendment 4); the
-# harness's pre-flight refuses any other setting (supersession only in
-# kernel and replicated cells: native runs none).
+# supersession is exclude (Amendment 4); the harness's pre-flight
+# refuses any other setting (supersession only in kernel and replicated
+# cells: native runs none). Since Subtask 19 (docs/ABLATION.md) the
+# controls no_delete, no_visibility, writer_scoped and no_supersession
+# are kernel ablation switches (memory.ablate, set through
+# set_memory_mode.py --ablate), which the pre-flight compares with the
+# run's: within a phase, the cells of each control run on a fresh
+# kernel of their own with its switch, the others on the full kernel.
 #
 #   MODE=functional: pilot_v2 users 0-4, no judge, conditions h0, h2
 #     (the seeded cycle) and the controls no_memory (kernel in-house
@@ -44,8 +49,8 @@
 #
 # Code: both repos must have no tracked change; every finished cell must
 # record exactly the current commits (no -dirty) and have no failed
-# trial, or the driver stops. One fresh kernel per model per phase, on a
-# port that must be free first; config.yaml restored byte for byte at
+# trial, or the driver stops. One fresh kernel per model, phase and
+# ablation, on a port that must be free first; config.yaml restored byte for byte at
 # exit. Resumable: a finished cell is skipped, an unfinished one is
 # re-run whole. RUN_PREFIX and OUTROOT are required. OUTROOT, a path
 # relative to the Cerebrum checkout, is the run's own, new for every
@@ -119,11 +124,20 @@ stop_kernel() {
 }
 finish() { stop_kernel; cp "$SAVED" "$CONFIG"; rm -f "$SAVED"; }
 trap finish EXIT
-SUPERSESSION=exclude
-mode() {  # supersession from $SUPERSESSION (off in the _ns phases)
+ABLATE=none
+mode() {  # the kernel's ablation from $ABLATE (none: the full kernel)
     "$AIOS/.venv/bin/python" scripts/set_memory_mode.py "$CONFIG" "$@" \
         --recency session --barrier-timeout-ms 60000 --k 30 --budget 300 \
-        --supersession "$SUPERSESSION"
+        --supersession exclude --ablate "$ABLATE"
+}
+ablation_of() {  # $1 = condition: its kernel ablation switch, or none
+    case "$1" in
+        no_delete) echo "forget_scope=none" ;;
+        writer_scoped) echo "forget_scope=writer" ;;
+        no_visibility) echo "visibility" ;;
+        no_supersession) echo "supersession" ;;
+        *) echo "none" ;;
+    esac
 }
 cell_done() {
     python3 "$AIOS/scripts/pilot_cell_done.py" "$1" "$TRIALS" --strict \
@@ -141,7 +155,14 @@ start_kernel() {  # $1 = log name; a resume never overwrites a log
     if lsof -nP -iTCP:8000 -sTCP:LISTEN > /dev/null 2>&1; then
         echo "port 8000 is in use: stop that process first" >&2; exit 1
     fi
-    KLOG="$LOGS/kernel_$1_$(date +%Y%m%dT%H%M%S).log"
+    local stamp n=1
+    stamp=$(date +%Y%m%dT%H%M%S)
+    KLOG="$LOGS/kernel_$1_$stamp.log"
+    # A phase may start several kernels (one per ablation): never two
+    # on one log.
+    while [ -e "$KLOG" ]; do
+        KLOG="$LOGS/kernel_$1_${stamp}_$n.log"; n=$((n + 1))
+    done
     "$AIOS/.venv/bin/python" -m uvicorn runtime.launch:app \
         --host 127.0.0.1 --port 8000 > "$KLOG" 2>&1 &
     KERNEL=$!
@@ -242,9 +263,11 @@ check_phase() {  # $1 = model, $2 = phase: every kernel log of the phase
     esac
 }
 
-phase_needed() {  # $1 = model, $2 = phase: true if a cell is unfinished
-    local model=$1 phase=$2
+group_needed() {  # $1 = model, $2 = phase, $3 = ablation: true if a
+    # cell of a condition with that ablation is unfinished
+    local model=$1 phase=$2 ablation=$3
     for cond in $CONDITIONS; do
+        [ "$(ablation_of "$cond")" = "$ablation" ] || continue
         for method in $(methods_of "$phase"); do
             applies "$cond" "$phase" "$method" || continue
             cell_done "$CEREBRUM/$(cell_path "$model" "$phase" "$cond" "$method")/results_$method.json" || return 0
@@ -253,41 +276,57 @@ phase_needed() {  # $1 = model, $2 = phase: true if a cell is unfinished
     return 1
 }
 
+phase_mode() {  # $1 = phase: set its mode (with $ABLATE) and $provider
+    case $1 in
+        kmem0|kmem0_ns) mode --provider mem0 --kernel-memory on --extract off
+               provider=mem0 ;;
+        kinh|kinh_ns)  mode --provider in-house --kernel-memory on --extract off
+               provider=in-house ;;
+        agent|agent_ns) mode --provider mem0 --kernel-memory off; provider="" ;;
+        kgra|kgra_ns) mode --provider graphiti --kernel-memory on --extract off
+               provider=graphiti ;;
+        agent_gra|agent_gra_ns)
+               mode --provider graphiti --kernel-memory off; provider="" ;;
+        kamem|kamem_ns) mode --provider amem --kernel-memory on --extract off
+               provider=amem ;;
+        agent_amem|agent_amem_ns)
+               mode --provider amem --kernel-memory off; provider="" ;;
+        *) echo "unknown phase $1" >&2; exit 1 ;;
+    esac
+}
+
 for model in $MODELS; do
     for phase in $PHASES; do
-        case $phase in
-            *_ns) SUPERSESSION=off ;;
-            *) SUPERSESSION=exclude ;;
-        esac
-        case $phase in
-            kmem0|kmem0_ns) mode --provider mem0 --kernel-memory on --extract off
-                   provider=mem0 ;;
-            kinh|kinh_ns)  mode --provider in-house --kernel-memory on --extract off
-                   provider=in-house ;;
-            agent|agent_ns) mode --provider mem0 --kernel-memory off; provider="" ;;
-            kgra|kgra_ns) mode --provider graphiti --kernel-memory on --extract off
-                   provider=graphiti ;;
-            agent_gra|agent_gra_ns)
-                   mode --provider graphiti --kernel-memory off; provider="" ;;
-            kamem|kamem_ns) mode --provider amem --kernel-memory on --extract off
-                   provider=amem ;;
-            agent_amem|agent_amem_ns)
-                   mode --provider amem --kernel-memory off; provider="" ;;
+        case $phase in  # an unknown phase stops here
+            kmem0|kinh|agent|kgra|agent_gra|kamem|agent_amem) ;;
+            kmem0_ns|kinh_ns|agent_ns|kgra_ns|agent_gra_ns) ;;
+            kamem_ns|agent_amem_ns) ;;
             *) echo "unknown phase $phase" >&2; exit 1 ;;
         esac
-        phase_needed "$model" "$phase" || {
-            echo "$(date) skip $model $phase"
-            check_phase "$model" "$phase"
-            continue
-        }
-        start_kernel "${model}_$phase"
+        # Each ablation the phase's conditions need, in their order.
+        ablations=""
         for cond in $CONDITIONS; do
-            for method in $(methods_of "$phase"); do
-                applies "$cond" "$phase" "$method" || continue
-                run_cell "$model" "$phase" "$method" "$cond" "$provider"
-            done
+            case " $ablations " in
+                *" $(ablation_of "$cond") "*) ;;
+                *) ablations="$ablations $(ablation_of "$cond")" ;;
+            esac
         done
-        stop_kernel
+        ran=""
+        for ABLATE in $ablations; do
+            group_needed "$model" "$phase" "$ABLATE" || continue
+            phase_mode "$phase"
+            start_kernel "${model}_$phase"
+            for cond in $CONDITIONS; do
+                [ "$(ablation_of "$cond")" = "$ABLATE" ] || continue
+                for method in $(methods_of "$phase"); do
+                    applies "$cond" "$phase" "$method" || continue
+                    run_cell "$model" "$phase" "$method" "$cond" "$provider"
+                done
+            done
+            stop_kernel
+            ran=1
+        done
+        [ -n "$ran" ] || echo "$(date) skip $model $phase"
         check_phase "$model" "$phase"
     done
 done

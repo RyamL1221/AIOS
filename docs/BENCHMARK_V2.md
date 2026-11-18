@@ -675,6 +675,18 @@ check reads the five judge-free probes. It runs these conditions:
   Amendment 4 adds `writer_scoped` and `no_supersession`, in the kernel
   and replicated cells.
 
+  Since Subtask 19 every control but `no_memory` is a kernel ablation
+  switch (`ABLATION.md`, "Aliases"): `no_delete` is `forget_scope:
+  none`, `no_visibility` is `visibility: off`, `writer_scoped` is
+  `forget_scope: writer` and `no_supersession` is `supersession: off`,
+  set in the kernel's `memory.ablate` (which the replicated agents copy)
+  and checked by the pre-flight; the native agents apply theirs in
+  their own code, as before. In the kernel and replicated cells the
+  writers call the user's forget under every control, and the forget
+  deletes nothing (`no_delete`) or only the writer's own rows
+  (`writer_scoped`). The driver runs each control's cells on a fresh
+  kernel with its switch.
+
 DEV_STATUS gets the per-probe pass matrix (locus × backend × condition
 × probe type), with deletion split into echo and non-echo users. The
 check passes when:
@@ -1138,7 +1150,9 @@ value (above, "Metadata on every write").
 **Settings and pre-flight.** v2 runs set `memory.supersession:
 exclude` (`set_memory_mode.py --supersession exclude`). The pre-flight
 checks it per control for a kernel or replicated method (`off` under
-`no_supersession`). For a kernel method it requires a tombstone file
+`no_supersession` until Subtask 19; since then `exclude` under every
+control, `no_supersession` being the ablation `supersession: off`,
+`ABLATION.md`). For a kernel method it requires a tombstone file
 and, on Mem0, refuses a history path that is missing or under
 `~/.mem0`; every cell records the kernel's two paths, the history
 path null where the kernel runs in-house (it keeps no Mem0 history).
