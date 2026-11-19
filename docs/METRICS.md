@@ -144,7 +144,7 @@ answer, profile, task context):
 **Repeats.** Each judge judges each calibration answer 10 times, in one
 session: the primary judge through the kernel at a fixed concurrency,
 the second judge in one Batch submission (custom id
-`<item>:<repeat>`). Ten, not five: the reliability of a median-of-k
+`<item>-<repeat>`). Ten, not five: the reliability of a median-of-k
 score is measured by comparing two medians from disjoint sets of
 repeats, which needs 2k repeats (10 for k = 5); resampling five repeats
 would count a repeat drawn twice as agreement.

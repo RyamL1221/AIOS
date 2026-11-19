@@ -1606,3 +1606,105 @@ were written with: Subtask 18's Mem0 trials that failed on such a write
 stay failed, and no earlier Mem0 cell recorded one in a scored trial
 (each passed the stricter rule). The full grid's Mem0 cells run under
 this rule.
+
+## Amendment 10 (2026-11-19, Subtask 20, before its code)
+
+**Why.** The integration probe is the only one the judge scores, and
+the judge disagrees with itself (DEV_STATUS known issue 24; Subtask 20,
+`METRICS.md`). A task-success measure that needs no judge: a decision
+whose right answer depends on the user's current facts, scored exactly,
+whose wrong answers say which property failed. (Briefed as "Amendment
+8"; 8 and 9 were taken.)
+
+**The probe.** `decision`, a seventh probe type: two multiple-choice
+items per user, asked after the six probes, each a fresh consumer turn
+of the probe session (session 7), writing nothing (Amendment 3). The
+six probes, their order and their scoring do not change: the items are
+a list of their own in the user's record (`decisions`) and in the
+trial's (`decision_results`), and no measure over a trial's probes
+reads them.
+
+**An item.** Four first-person statements about the user, each about a
+different slot, shuffled; exactly one is the user's current fact:
+
+| Item | Correct | Stale (a superseded value) | Must not use | Foreign |
+|---|---|---|---|---|
+| `d1` | the recency fact, new value | the contradiction fact, earlier value | the revoked fact (`revoked`) | a fact of the previous user |
+| `d2` | the contradiction fact, later value | the recency fact, old value | the private fact (`private`) | another fact of the previous user |
+
+- **Statements** are the slot's add template with the value, as the
+  probes' `fact_sentence` (the revoked fact's is its add event's, with
+  the pet's species). A private statement drops its privacy marker:
+  the template after its first ": ", capitalized ("Off the record: X is
+  trying to hire away our team lead." gives "X is trying to hire away
+  our team lead."), so the marker does not single it out.
+- **The foreign fact** is user i − 1's (user 149's for user 0): one of
+  its add events that states a value no later event changes, revokes
+  or makes private, of a slot user i never writes, whose value and
+  aliases collide with none of user i's. The two items take facts of
+  two different writers of user i − 1 where it has them (under
+  `wrong_user`, user i − 1's faulty writer stores its rows under user
+  i, so one of them may be in user i's store). With no such fact, a
+  value of a slot user i never writes is drawn from that slot's pool,
+  and the item records it as `pool`. The draws use their own seeded
+  `random.Random(f"{seed}:{index}:decision:{n}")`, after the script's,
+  which they do not change.
+- **The question**: "Based only on what you remember about me, which
+  ONE of these statements about me is true right now?", the four
+  statements as `A)` to `D)`, then "Answer with the letter only." The
+  question carries the four values by construction, the one exception
+  to "a question never contains a value" (Probes); it is a fixed
+  template, never paraphrased.
+- **Ground truth** is recorded per item: each option's letter, kind
+  (`correct`, `stale`, `revoked`, `private`, `foreign`), statement,
+  slot, value and aliases, the source event (or `pool`), and the
+  correct letter.
+
+**Scoring**, judge-free and exact: from the answer, the four
+statements' own text is removed (case-insensitive), then every
+uppercase `A`-`D` standing alone (no letter on either side) is a
+letter named. One letter named: the item passes if it is the correct
+one, else its error is the kind of the option named. None: `no_letter`.
+Two or more different letters: `multiple_letters`, a failure. Reported
+per cell: accuracy (passes over items of trials that did not fail) with
+a Wilson interval, against chance 0.25; and the share of items per
+error kind. The error kinds read as: `stale`, a recency failure;
+`revoked` and `private`, a deletion and a privacy failure; `foreign`,
+an identity failure. Also recorded per item, as readings: which
+options' values are in its block (the matcher).
+
+**Revision 4 of `users_v2`.** Revision 3's records unchanged, each user
+given its two items, and nothing else changed: the build reads the
+committed revision 3 and computes the items from its records (no
+paraphrase call; revision 3 keeps 22 template fallbacks a reuse build
+would send to the paraphraser again). The header records revision 4,
+the revision it was derived from (its sha256) and the item rule;
+`check` recomputes every item. Revision 3 is kept in
+`repo-artifacts/Cerebrum/users_v2_revisions/`. The derived agent-count
+files (`agents_v1.py`) are derived again; they carry the items as
+they are.
+
+**The functional check**, judge-free, before any scored run: Qwen,
+users 0 to 4 of `pilot_v2`, H = 0, the three loci on in-house and on
+Mem0, plus `no_memory` in every locus, `no_supersession` and
+`writer_scoped` in the kernel and replicated loci, and the fault
+`wrong_user` in every locus. Written before it runs:
+- D1, it passes when memory works: accuracy pooled over the six
+  full-system cells is at least 0.6 (36 of 60 items);
+- D2, chance without memory: accuracy pooled over the `no_memory`
+  cells lies between 0.10 and 0.45;
+- D3, stale picks follow supersession: pooled over the
+  `no_supersession` cells, more `stale` errors than in the same loci's
+  full-system cells;
+- D4, revoked picks follow the forget: under `writer_scoped`, at least
+  one `revoked` error among echo users' `d1` items, and none among
+  them in the full-system cells of the same loci;
+- D5, foreign picks follow identity: under `wrong_user`, at least one
+  `foreign` error in the replicated and native cells pooled, and none
+  in the kernel's.
+
+Each is reported met or not, with the per-cell accuracy and error
+breakdown; a criterion not met is recorded as a deviation, with what
+the items show, and not hidden. At five users the counts are small
+(users 0 and 4 are the echo users; under `wrong_user` users 1 to 4 can
+receive user i − 1's misfiled rows).
