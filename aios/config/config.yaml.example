@@ -148,7 +148,7 @@ memory:
   # /memory/config "pipeline"; scripts/set_memory_mode.py --ablate sets
   # them; the harness's pre-flight compares them with the run's.
   ablate:
-    barrier: "on"            # "off": no write stamped, no read waits
+    barrier: "on"            # "off": no read waits (writes still stamped)
     identity: "session"      # "claim": no session binding or canonicalization
     visibility: "on"         # "off": every row of the user visible to every agent
     supersession: "on"       # "off": no row retired, none excluded

@@ -52,7 +52,7 @@ do not describe this branch.
 | 16 | Graphiti backend and native condition | Done |
 | 17 | A-MEM backend and native condition | Done |
 | 18 | Agent count, concurrency and faulty-agent stress dimensions; event-driven scheduler | Done |
-| 19 | Kernel ablation switches | In progress |
+| 19 | Kernel ablation switches | Done |
 
 ### Subtask 1
 
@@ -3692,6 +3692,133 @@ come from (Jg94; claim C4).
   forget arms no guard). The report's "flood writes accepted" and V4
   `memories_missing` rows, added on the code review, have no test of
   their own; left to the mutation run.
+- **Mutation run** (rule 6, once, on the final code: AIOS `94c2385`,
+  Cerebrum `8953e28`). Four owners wrote 200 mutants of rules the
+  documents state, 50 each:
+  - the memory library's switches (`ablation.py`, `settings.py`, the
+    selector, the forget, the facade);
+  - the kernel's (the executor, the injector's honored pipeline, the
+    manager, `launch.py`, `run_ablation.sh`, Mem0's partial-store
+    rule);
+  - Cerebrum's harness (the flag, `main()`'s pre-flight, the history,
+    the variants, the trial record);
+  - its analysis (`ablation_report.py`, `ablation_figure.py`,
+    `bench_v2_analysis.py`'s Subtask 19 changes).
+
+  Each ran on a scratch copy against its area's tests, with Ollama,
+  behind the loopback-only network guard: 106 killed. Each survivor was
+  then rerun against every suite that loads its file: 1 more killed
+  (the bare `quota` switch's value, by Cerebrum's
+  `test_ablation_harness.py`), none equivalent. Of the 93 left:
+  - 62 now fail a test (Cerebrum `7d19bf4`, AIOS this commit). Each
+    was run against its mutant on a clean copy, the unmutated copy
+    passing:
+    - the report (43, every survivor of its area): f19b's and s19's
+      records, trimmed to the fields the report reads
+      (`tests/agents/fixtures/ablation_runs/`, 79 KB, with the script
+      that makes them), must give the committed `analysis.md` and
+      `contribution.svg` byte for byte and `analysis.json` to a
+      relative 1e-9 (its last digits move with numpy's and scipy's
+      versions). 36 of the 43 changed a number, an interval, a
+      verdict, a row or a bar of f19b's or s19's analysis. Among them:
+      the V2 rule's "every user"; a zero-width interval at 0
+      confirming nothing; the block, budget and threshold rules; seven
+      predicted directions and two primaries; the stale-read,
+      misfiled-row, carrier, flood-row, block-token and budget-bound
+      measures; the paired mean and the interval's upper end; the
+      "flood writes accepted" and V4 `memories_missing` rows the
+      verification pass left here; the figure's one bar per primary
+      measure. The other 7 hold on both runs and have cases of their
+      own: one covered late write; misfiled rows without a cross-user
+      row; a privacy failure without its value in the block; an echo
+      user failing with no carrier left; a quota still rejecting; a
+      `kmem0` phase read as Mem0; `after_threshold` read apart from
+      `after_cap`.
+    - the kernel (16):
+      - the executor handing the chat's `_request_retrieval` to the
+        injector (without it `consumer_config: honor` applies nothing
+        while the harness records V4 as applied);
+      - the honored pipeline keeping the kernel's barrier, resolver,
+        tombstones, usage tag and quota and taking the consumer's
+        budget (without the tombstones the honor cells'
+        `tombstoned_forms` read 0; without the usage tag their
+        embedding tokens go);
+      - Mem0's write that stored some facts after a swallowed failure
+        passing (Amendment 9; a Mem0 cell of the grid would fail);
+      - the driver (9): every cell's condition arguments (the barrier
+        under concurrency, six switches at H = 0, V2, V3, V4, the
+        faults), users 0 to 4, Qwen, `pilot_v2`, and the kernel's
+        recency, barrier timeout, k, budget and supersession. The
+        pre-flight would have refused 4 of these 9 mutants.
+    - the harness (2): `main()` giving the pre-flight the run's
+      `--ablate` switches and an aliased `--control`'s (without
+      either, every ablated or control cell is refused, and one
+      pointed at a full kernel admitted).
+    - the library (1): each bare switch's ablated value, all eleven
+      now (`block_order` bare would have run the full kernel under its
+      ablated name).
+  - 31 hold in the code but no test pins them, so this file claims no
+    more. None changes a reported number:
+    - the library (14):
+      - `changed()` and `effective_threshold` with a threshold of 0
+        (no cell uses 0);
+      - `full` and `ablation_of` (no caller);
+      - `PipelineSettings` filling the block's defaults (every caller
+        passes a full block);
+      - under `visibility: off`, the shared fetch unfiltered and an
+        SDK caller's policy narrowing skipped (no partition exceeds k;
+        no caller narrows), and a read by id still guarded (no v2
+        agent reads by id);
+      - under `supersession: off`, marked rows selected (marks are
+        written only under `exclude`);
+      - a `none` forget's `listed` (nothing reads it); a `writer`
+        forget on a slot with a second writer, or already tombstoned
+        (none in the data);
+      - under `barrier: off`, a forget's and a listing's waits skipped
+        (requests are served one at a time, with `--extract off`).
+
+      `effective_write_quota` has no caller: the write reads
+      `ablation.quota_on`.
+    - the kernel (9):
+      - `/memory/config`'s `write_barrier` gaining `waits: false` under
+        `barrier: off` (the pre-flight reads `timeout_ms`);
+      - the quota bucket's session token at `accept_memory_request`'s
+        call site under `claim` (no condition combines the two);
+      - `/memory/config`'s `identity` reporting the configured rules
+        (nothing reads it);
+      - a token refused without a memory manager;
+      - `_truncate_by_token_budget`'s block format (off the request
+        path);
+      - in the driver: the agent phase's memory-op refusal, an archive
+        refusal's exit status, the replicated store per `RUN_PREFIX`,
+        and a kernel log name per second.
+    - the harness (8):
+      - the native writers and the native consumer reading
+        `forget_scope` and `visibility` only through their aliases, and
+        `run_history_trial` not passing the ablation (no driver passes
+        `--ablate` to a native cell);
+      - `VariantRunner` losing the ablation (only n6v4 honor's
+        `variants_not_applied` record changes; no report reads it);
+      - `TrialResult.ablation`'s default (every v2 trial sets it);
+      - V1 under `honor` recorded as applied (no condition runs it);
+      - Mem0's logger level on the error collector's first install
+        (its test pins it only as the process's first install; only
+        Mem0's INFO lines would go).
+
+  The report was the weakest area: 43 of its 50 mutants survived its
+  tests, 36 of them changing what f19b or s19 reported. No defect in
+  the code. Two owners found one stale comment:
+  `config.yaml(.example)`'s `barrier: "off"` still read "no write
+  stamped" (now "no read waits (writes still stamped)"). The mutants,
+  their results and logs, and the follow-up's checks are in
+  `repo-artifacts/AIOS/mutation19/` (without the repos' copies).
+- **Suites** at the end (AIOS this commit, Cerebrum `7d19bf4`): AIOS
+  904 passed and the 7 known errors (893 before the mutation run, so
+  its 11 tests); Cerebrum 1,373 passed, 4 skipped, the 19 known
+  failures and 2 errors by name, and known issue 35's
+  `test_kernel_shared_delta_is_zero` (1,360 at `8953e28`, so the
+  mutation run's 13 tests; on a run just before the JSON comparison
+  was given its tolerance, the flaky test passed: 1,374).
 
 ## Open decisions
 
@@ -3822,7 +3949,14 @@ These fail on `workshop-postrun` too and are not caused by later work.
   `test_write_barrier_determinism.py::test_determinism_under_latency_permutation`,
   known issue 35) and the write-up review's fixes (Cerebrum `7a149ab`:
   1231 passed, 4 skipped, the 19 failures, one of known issue 35's two
-  and the 2 errors; AIOS unchanged). The names
+  and the 2 errors; AIOS unchanged) and Subtask 19's verification pass
+  (AIOS `94c2385`, Cerebrum `8953e28`: AIOS 893 passed, the 7 errors;
+  Cerebrum 1,360 passed, 4 skipped, the 19 failures and 2 errors, by
+  name, and known issue 35's `test_kernel_shared_delta_is_zero`) and
+  its mutation run's tests (Cerebrum `7d19bf4`: 1,373 passed, 4
+  skipped, the 19 failures and 2 errors, by name, and known issue 35's
+  `test_kernel_shared_delta_is_zero`; AIOS 904 passed, the 7 errors).
+  The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
 

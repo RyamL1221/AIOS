@@ -143,17 +143,33 @@ def test_a_bad_block_fails_the_kernel_at_startup():
         kernel(ablate={"visibility": "partial"})
 
 
-@pytest.mark.parametrize("text, switch", [
+# The ablated value of each bare switch, as docs/ABLATION.md gives it
+# (run_ablation.sh passes the bare switch to the kernel and the harness).
+BARE_SWITCHES = [
     ("barrier", ("barrier", "off")),
     ("identity", ("identity", "claim")),
+    ("visibility", ("visibility", "off")),
+    ("supersession", ("supersession", "off")),
     ("forget_scope", ("forget_scope", "writer")),
-    ("forget_scope=none", ("forget_scope", "none")),
+    ("quota", ("quota", "off")),
+    ("block_format", ("block_format", "legacy")),
+    ("block_order", ("block_order", "similarity")),
+    ("budget", ("budget", "off")),
     ("threshold", ("threshold", 0.3)),
-    ("threshold=0.45", ("threshold", 0.45)),
     ("consumer_config", ("consumer_config", "honor")),
+]
+
+
+@pytest.mark.parametrize("text, switch", BARE_SWITCHES + [
+    ("forget_scope=none", ("forget_scope", "none")),
+    ("threshold=0.45", ("threshold", 0.45)),
 ])
 def test_a_bare_switch_takes_its_ablated_value(text, switch):
     assert parse_switch(text) == switch
+
+
+def test_every_switch_has_its_bare_value_pinned():
+    assert {text for text, _ in BARE_SWITCHES} == set(SWITCHES)
 
 
 def test_parse_switch_refuses_an_unknown_switch_or_value():
@@ -804,3 +820,47 @@ def test_the_handler_carries_a_consumers_retrieval_config():
     body["query_data"].pop("retrieval")
     asyncio.run(handle_query(QueryRequest(**body)))
     assert seen[-1]._request_retrieval is None
+
+
+def test_the_executor_hands_the_consumers_config_to_the_injector():
+    """The handler's rebuilt query carries the config only as
+    ``_request_retrieval``; the executor passes it to the injector, and
+    passes nothing for a chat that sent none."""
+    from unittest.mock import MagicMock
+
+    from aios.syscall.syscall import SyscallExecutor
+
+    executor = SyscallExecutor()
+    executor.context_injector = MagicMock()
+    executor.execute_llm_syscall = MagicMock(
+        return_value={"response": "ok"})
+    for sent in (V4, None):
+        query = LLMQuery(messages=[{"role": "user", "content": "hi"}],
+                         action_type="chat")
+        query._request_retrieval = sent
+        executor.context_injector.inject.return_value = (query, {})
+        executor.execute_request(ASSISTANT, query)
+        kwargs = executor.context_injector.inject.call_args.kwargs
+        assert kwargs.get("consumer_config") == sent
+
+
+def test_honor_keeps_the_kernels_stores_and_takes_the_consumers_budget():
+    """The honored pipeline is the kernel's with the consumer's k,
+    threshold and token budget: the same barrier, resolver, tombstones,
+    usage tag and quota, so the kernel's write ordering, forgets and
+    cost counts apply to it as to its own."""
+    manager, injector = kernel(
+        ablate={"consumer_config": "honor"},
+        write_quota={"enabled": True, "max_writes": 4, "dedupe": True})
+    pipeline = manager.memory_pipeline()
+    own, k, max_tokens = injector._consumer_pipeline(
+        pipeline, V4, injector.max_memories, injector.max_tokens)
+    assert (injector.max_memories, injector.max_tokens) == (30, 300)
+    assert (k, max_tokens) == (5, 1500)
+    assert (own.settings.max_injected_memories,
+            own.settings.relevance_threshold,
+            own.settings.max_memory_tokens) == (5, 0.5, 1500)
+    for store in ("barrier", "resolver", "tombstones", "usage_tag",
+                  "quota"):
+        assert getattr(pipeline, store) is not None, store
+        assert getattr(own, store) is getattr(pipeline, store), store

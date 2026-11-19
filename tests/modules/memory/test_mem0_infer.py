@@ -6,6 +6,7 @@ by a fake that returns fixed facts, so the test sees what Mem0 itself
 stores for each extracted fact.
 """
 import json
+import logging
 
 import pytest
 
@@ -173,6 +174,36 @@ def test_an_empty_write_after_a_swallowed_failure_raises(tmp_path, raises,
     # still returns no id, without error.
     with_llm(provider, [])
     assert provider.add(note("Hello again.")) == ""
+    provider.close()
+
+
+class PartialClient:
+    """Mem0 storing one of a write's two facts: it logs and swallows the
+    failure to insert the other, as ``_add_to_vector_store`` does."""
+
+    def __init__(self):
+        self.vector_store = self
+
+    def get(self, vector_id):
+        return {"id": vector_id}
+
+    def add(self, content, **kwargs):
+        logging.getLogger("mem0.memory.main").error(
+            "Failed to insert memory: disk full")
+        return {"results": [{"id": "fact-1", "memory": "Name is Ana Li",
+                             "event": "ADD"}]}
+
+
+@needs_ollama
+def test_a_write_that_stored_facts_after_a_swallowed_failure_passes(
+        tmp_path, monkeypatch):
+    """BENCHMARK_V2.md, Amendment 9: only a write that stored nothing
+    after a swallowed failure raises; one that stored some of its facts
+    is stored, and returns its first fact's id."""
+    provider = build(tmp_path)
+    monkeypatch.setattr(provider, "_get_client_for_user",
+                        lambda user_id: PartialClient())
+    assert provider.add(note("My name is Ana Li. I prefer Go.")) == "fact-1"
     provider.close()
 
 

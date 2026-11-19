@@ -159,3 +159,38 @@ def test_an_unknown_switch_or_backend_is_refused(tmp_path):
         result = launch(tmp_path, aios, **extra)
         assert result.returncode != 0
     assert not (tmp_path / "harness.log").exists()
+
+
+# Each condition's harness arguments (docs/ABLATION.md, "Conditions").
+CONDITION_ARGS = {
+    "n6conc": "--agents 6 --concurrency concurrent",
+    "n6wrong_user": "--agents 6 --fault wrong_user",
+    "n6flood10": "--agents 6 --fault flood10",
+    "n6flood50": "--agents 6 --fault flood50",
+    "n6v2": "--agents 6 --variants profile_agent=V2",
+    "n6v3": "--agents 6 --variants assistant_agent=V3",
+    "n6v4": "--agents 6 --variants assistant_agent=V4",
+    "n6h0": "--agents 6 --heterogeneity 0",
+}
+
+
+def test_every_cell_runs_its_condition_on_users_0_to_4_with_qwen(tmp_path):
+    """The functional check: users 0 to 4 of pilot_v2's agent-count
+    dataset, Qwen, judge-free, each cell under its row's condition
+    (the barrier under concurrency, six switches at H = 0, and so on),
+    on a kernel with the settings of the full grid."""
+    aios = tree(tmp_path)
+    result = launch(tmp_path, aios)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = lines(tmp_path, "harness.log")
+    assert len(calls) == len(cells(tmp_path))
+    for call in calls:
+        condition = call.split("--run-id ")[1].split()[0].rsplit("-", 1)[1]
+        assert f" {CONDITION_ARGS[condition]} " in f" {call} ", call
+        for want in ("--dataset pilot_v2", "--trials 5",
+                     "--assistant-model qwen2.5:7b:ollama", "--no-judge"):
+            assert want in call, (want, call)
+    for line in lines(tmp_path, "mode.log"):
+        for want in ("--recency session", "--barrier-timeout-ms 60000",
+                     "--k 30", "--budget 300", "--supersession exclude"):
+            assert want in line, (want, line)
