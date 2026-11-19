@@ -1198,7 +1198,8 @@ kernel and replicated cells on both backends:
 - the guard was armed and dropped nothing:
   - every probe reports `after_tombstone`;
   - `tombstoned_forms` is positive in every probe of a user whose
-    forget ran;
+    forget ran (a forget run under an ablated `forget_scope`, which
+    records no tombstone, is not one; Subtask 19);
   - no probe dropped a tombstoned row;
 - every Mem0 forget scrubbed at least one message;
 - Subtask 14's criteria still hold, with the budget's changed below.

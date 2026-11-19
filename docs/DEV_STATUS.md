@@ -3543,7 +3543,7 @@ come from (Jg94; claim C4).
   rules held:
   - barrier: 85 covered late writes over 5 users (17 per user), the full
     kernel none. No stale read or timing miss (the spec predicted a
-    few; s18's replicated cells had 2 stale reads over 30 users), and
+    few; s18's replicated cell had 2 stale reads over 30 users), and
     one late forget: user 4's deletion probe read before its forget ran
     and was lost, the value in the block (user 0's passed, so deletion
     -1 +1).
@@ -3644,7 +3644,7 @@ come from (Jg94; claim C4).
   - `forget_scope: writer` (`n6h0`): carriers left +0.67 [+0.31,
     +1.02] per user: each of the 10 echo users kept 2 carriers and
     failed the deletion probe (Subtask 15's `writer_scoped`: 4 of 4
-    in-house, 6 of 8 with Mem0);
+    in-house, 2 of 4 on Mem0);
     the 20 others passed in both runs; deletion lost 9 (p 0.004). The
     full kernel failed one echo user, user 0, without the value in the
     block: Qwen named Mattermost, as in the functional check and in
@@ -3673,6 +3673,25 @@ come from (Jg94; claim C4).
   (4 of 4 in-house), the figure's "one bar per component" (one per
   primary measure) and the timing misses counted apart from the stale
   reads they are among. No number in a report changed.
+- **Verification pass** (rule 6's second pass, over the code review's
+  fixes and the write-up's corrections): every fix and correction
+  confirmed, no error, so no third pass. Each code fix's new tests were
+  run against the code with the fix reverse-applied on a scratch copy
+  (AIOS 7 failed, Cerebrum 12; one, the quota-bucket test under
+  `claim`, fails by a `NameError` rather than its assertion, but
+  fails). The data behind each corrected sentence was recomputed, the
+  user 0 trace from the kernel log (forget accepted at .084, the reads
+  at .268 to .270 with no drop, drops .319 to .377, the forget logged at
+  .373). Six imprecisions, corrected (this commit): `ABLATION.md`'s
+  figure sentence (one bar per primary measure, now also under
+  "Corrected on review"), the sign rule (a zero-width interval, as
+  before the review; also `confirmed`'s docstring), "three predicted
+  primary intervals", the table's "27 to 34" explained in Results;
+  Subtask 15's `writer_scoped` reference here (2 of 4 on Mem0), s18's
+  one replicated cell; `BENCHMARK_V2.md`'s guard criterion (a scoped
+  forget arms no guard). The report's "flood writes accepted" and V4
+  `memories_missing` rows, added on the code review, have no test of
+  their own; left to the mutation run.
 
 ## Open decisions
 

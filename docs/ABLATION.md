@@ -206,9 +206,9 @@ wait for the full grid.
 **Analysis.** `benchmarks/shared_memory/ablation_report.py` writes one
 row per switch and measurement: the full kernel's value, the ablated
 value, the paired difference with its interval, and the measurement's
-name; and a contribution figure, one horizontal bar per component
-(the paired difference of its primary measure, with the interval), each
-on its own axis since the units differ.
+name; and a contribution figure, one horizontal bar per primary
+measure (switch and condition: the paired difference, with the
+interval), each on its own axis since the units differ.
 
 ## Corrected on review
 
@@ -228,17 +228,19 @@ on the corrected code):
   no measurement here reads either).
 - The full kernel's block diagnostics are unchanged: `block_order` is
   reported only when it is `similarity`.
-- The smoke rule: one pair confirms nothing (an interval needs n >= 2),
-  and a constant difference over two or more pairs, which has no
-  interval, counts by its sign.
+- The smoke rule: one pair confirms nothing (an interval needs n >= 2).
+  A constant difference over two or more pairs has a zero-width
+  interval, so it counts by its sign, as before the review.
+- The figure: one bar per primary measure, not per component (the
+  quota has four: two measures at two levels).
 
 ## Results
 
 The functional check (`f19b`) and the smoke (`s19`): `DEV_STATUS.md`,
 Subtask 19. Every functional-check rule held but the V2 rule below,
 and every smoke primary interval excluded 0 in the predicted direction
-(in the functional check, at n = 5, three primary intervals included
-0). The rules are left as registered; where a result departs from the
+(in the functional check, at n = 5, three predicted primary intervals
+included 0). The rules are left as registered; where a result departs from the
 table, it is recorded:
 - `barrier: off`: in the smoke, more misses than "a few": 7 stale
   reads, 3 timing misses (among the stale reads) and 3 late forgets,
@@ -252,7 +254,9 @@ table, it is recorded:
   +0.85] in the smoke, not about 1: the faulty writer was missing in
   every ablated trial, but already in 5 of 30 on the full kernel, and
   in 5 others the budget let in a writer it had cut on the full
-  kernel.
+  kernel. The table's "27 to 34" took native Mem0's 34: in s18's
+  functional check the replicated cells had 27 in-house (with 88 cross-user rows and +0.80,
+  as the kernel's here) and 32 on Mem0.
 - `supersession: off`: recency passed 0 of 5 (Subtask 15's
   `no_supersession`: 1 of 5); contradiction 3 of 5, as there.
 - `quota: off`: in the functional check the profile facts did not fall
