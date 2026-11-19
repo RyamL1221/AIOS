@@ -1669,7 +1669,14 @@ one, else its error is the kind of the option named. None: `no_letter`.
 Two or more different letters: `multiple_letters`, a failure. Reported
 per cell: accuracy (passes over items of trials that did not fail) with
 a Wilson interval, against chance 0.25; and the share of items per
-error kind. The error kinds read as: `stale`, a recency failure;
+error kind. A turn's error (no answer, a failed block, a consumer that
+raised) is recorded on the item (`turn_error`), which is not scored,
+and never fails the trial; each cell reports how many items had one
+(`turn_errors`). (Stated in Subtask 20's review, before any scored run:
+the first code failed the user on such an error, against "no measure
+over a trial's probes reads them".) A trial's assistant tokens and
+latency include its two decision turns, as its backend and embedding
+usage do (`METRICS.md`, "Cost and latency"). The error kinds read as: `stale`, a recency failure;
 `revoked` and `private`, a deletion and a privacy failure; `foreign`,
 an identity failure. Also recorded per item, as readings: which
 options' values are in its block (the matcher).
@@ -1709,3 +1716,55 @@ breakdown; a criterion not met is recorded as a deviation, with what
 the items show, and not hidden. At five users the counts are small
 (users 0 and 4 are the echo users; under `wrong_user` users 1 to 4 can
 receive user i − 1's misfiled rows).
+
+**The functional check's result** (in-house, 2026-11-19; Mem0's cells
+wait on its Azure deployment): D1 met (23 of 30), D3 met (10 stale of
+20 vs 0 of 20), D4 met (2 of 4 vs 0 of 4), D5 met (6 of 20 vs 0 of 10);
+**D2 not met**: 0 of 30. The three `no_memory` cells gave the same ten
+answers (the consumer sees no memory, and Qwen decodes greedily), so
+the three cells are one sample of ten items; under uniform guessing 0
+of 10 has probability 0.056. Recorded as a deviation (DEV_STATUS,
+Subtask 20).
+
+**The no-memory check over every user** (added after D2 failed, not a
+replacement for it; written before it runs). One `no_memory` cell,
+kernel locus, in-house, Qwen, all 150 users of `users_v2` (300 items),
+judge-free. Reported:
+- accuracy with its 95% Wilson interval, against 0.25;
+- the picks by option kind: `correct`, `stale`, must-not-use
+  (`revoked` on `d1`, `private` on `d2`), `foreign`, each with its share
+  and Wilson interval, per item and pooled;
+- the picks by letter, and the correct letters, with a chi-square test
+  against uniform;
+- `no_letter`, `multiple_letters` and turn errors.
+
+Read as follows, stated now:
+- accuracy whose interval contains 0.25: the items cannot be guessed
+  above chance without memory, and D2's 0 of 10 was the five users'
+  draw;
+- accuracy whose upper bound is below 0.25: the correct option is the
+  least plausible-sounding one without memory. Harmless for paired
+  comparisons (every cell answers the same items) and recorded in
+  `METRICS.md` as a property of the items; above 0.45 (the D2 band's
+  top): the items carry a cue toward the answer, and their accuracy is
+  not read as memory use until they are revised;
+- a kind whose share's interval excludes 0.25 (on either item):
+  options of that kind differ in plausibility, recorded in `METRICS.md`
+  with its direction;
+- a letter preference (chi-square p < 0.05 on the letters picked): a
+  position bias of the model, read against the correct letters'
+  distribution (in revision 4, `d2`'s correct letter is A or C on 94 of
+  150 items).
+
+**The option shuffle**, checked after review (2026-11-19): the options
+are listed in kind order and permuted by `random.Random(f"{seed}:
+{index}:decision:{n}").shuffle` (Fisher-Yates, n = 1 and 2 seeded
+apart); every stored item's correct letter is the rule's (0 of 300
+differ); the rule is uniform over 20,000 indices (`d1` p = 0.79, `d2` p
+= 0.28); `d1`'s and `d2`'s correct letters are independent (p = 0.37).
+Revision 4's correct letters: `d1` A 37, B 37, C 34, D 42 (chi-square
+0.88, p = 0.83); `d2` A 48, B 29, C 46, D 27 (chi-square 9.73, p =
+0.021); pooled 85, 66, 80, 69 (p = 0.36). One p below 0.05 among the
+nine tests of the letters (the correct letter per item and pooled, each
+other kind per item; at least one so low has probability about 0.17 by
+chance): the draw, not the rule, so revision 4 stands.

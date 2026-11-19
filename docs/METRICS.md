@@ -54,7 +54,7 @@ byte-identical before and after the move).
 | Model | `gpt-5.4` on Azure | Claude Sonnet 5.5 (`claude-sonnet-5-5`) |
 | Route | the kernel's `/query`, `chat_with_json_output` (LiteLLM, `azure/gpt-5.4`) | the Anthropic Message Batches API, Anthropic Python SDK, called directly by the harness |
 | Prompt | judge prompt v2 (`judge.py`, sha256 `17f43dd9…`) | the same text: `SYSTEM_PROMPT` as `system`, the filled `USER_PROMPT_TEMPLATE` as the user message |
-| Decoding | greedy (temperature 0.0), seed 20261105 (best effort on Azure), `max_tokens` 1000, `response_format` `json_object` | default sampling (the API accepts no sampling parameter: no temperature, top_p or top_k), thinking off as far as the model allows (`thinking: {type: "between_tools"}`, no tools, so no thinking), a small fixed `max_tokens` |
+| Decoding | greedy (temperature 0.0), seed 20261105 (best effort on Azure), `max_tokens` 1000, `response_format` `json_object` (the harness sends a strict `json_schema`; the kernel's `/query` rebuilds the request without it, and the adapter asks for `json_object`) | default sampling (the API accepts no sampling parameter: no temperature, top_p or top_k), thinking off as far as the model allows (`thinking: {type: "between_tools"}`, no tools, so no thinking), a small fixed `max_tokens` |
 | Credentials | the kernel's Azure deployment | an OAuth bearer token from `ant auth print-credentials --access-token`, fetched at call time and never stored, with `anthropic-beta: oauth-2025-04-20`; billed to the profile's workspace |
 
 The two judges' decoding settings differ, and neither judge is claimed
@@ -66,10 +66,12 @@ is applied to each judge separately.
 
 A judge reply is parsed as JSON (`json.loads`, then the first `{` to the
 last `}`); keys are normalized; each score is clamped to 1-5. A reply
-missing a score is retried (3 attempts); a judgment that still fails
-fails the trial (Subtask 4b). No server-side fallback model is used for
-the second judge: the Batches API refuses it, and a judge must be one
-model.
+missing a score is retried (3 attempts). A primary judgment that still
+fails fails the trial (Subtask 4b); a second judgment that still fails
+is recorded as failed (`failed`, its attempts) and fails nothing, so
+that answer has no second-judge score. No server-side fallback model is
+used for the second judge: the Batches API refuses it, and a judge must
+be one model.
 
 ### The three scores of a judgment
 
@@ -166,8 +168,9 @@ score is constant across repeats; the hybrid is reported beside):
   taking two disjoint sets of k repeats from an answer's 10, the
   two-coder interval alpha between the two sets' medians over all
   answers; the estimate is the mean over those splits (45 for k = 1,
-  2,100 for k = 3, 126 for k = 5); with exact and within-1 agreement of
-  the two medians the same way;
+  2,100 for k = 3, 126 for k = 5; every split, for the ordinal alpha
+  too); with exact and within-1 agreement of the two medians the same
+  way;
 - a 95% interval for each alpha: the percentile bootstrap over answers
   (2,000 resamples, seeded).
 - Ordinal alpha is reported beside interval alpha; the rule uses
@@ -196,7 +199,9 @@ On the calibration set, each judge at its own k (median-of-k LLM
 scores), per dimension:
 - Krippendorff's alpha (interval), the two judges as coders;
 - Spearman's ρ between the two judges' medians;
-- the mean offset (second − primary) with its 95% t interval.
+- the mean offset (second − primary) with its 95% t interval (the
+  report pairs the primary judge first and names the subtraction in its
+  header).
 
 The second judge's self-agreement is measured by the same protocol
 before any of its scores is used.
@@ -231,10 +236,14 @@ Condition (iii) is judge-free and does not change.
 
 ### Recording
 
-Per judgment: the judge (name, model id), prompt version and sha256,
-decoding, the repeat index, the call's timestamp (UTC; for a batch, its
-submission and its end), the LLM scores and reasoning, the attempts, and
-the token usage. Per judged trial: the per-repeat LLM scores, their
+Per judgment in a results file: the judge (name, model id), prompt
+version and sha256, decoding, the repeat index, the call's timestamp
+(UTC; for a batch, its submission and its end), the LLM scores and
+reasoning, the attempts, and the token usage. A calibration row
+(`judge_reliability judge`) carries the judge's name and model, the
+repeat, the scores, the attempts, the times and the tokens; its prompt
+(v2, sha256 `17f43dd9…`) and decoding are the judge's fixed ones, as in
+the table above. Per judged trial: the per-repeat LLM scores, their
 median, the keyword scores, the hybrid, and the judge timestamps. A
 judge's token usage is kept in its own field per judge: it is an
 evaluation cost, not the system's, and stays out of `total_tokens` and
@@ -343,9 +352,9 @@ at the integration probe and no row in its block), `barrier_timeouts`,
 
 | Measure | Scope | Definition | Limits |
 |---|---|---|---|
-| `token_usage`, `writer_tokens`, `backend_llm_tokens`, `embedding_tokens` | trial | tokens of the assistant, the writers, the memory backend's LLM, the embeddings | v2 records no `writer_tokens` |
+| `token_usage`, `writer_tokens`, `backend_llm_tokens`, `embedding_tokens` | trial | tokens of the assistant, the writers, the memory backend's LLM, the embeddings | v2 records no `writer_tokens`. On revision 4 a v2 trial's every field includes its two decision turns (from Subtask 20's fix for the assistant's tokens; the backend and embedding fields always did), so its cost is not comparable with a revision-3 trial's |
 | USD per trial | trial | the tokens at `prices.yaml` | a field with more than one model, or an unpriced model, is not priced |
-| `latency_seconds`, `latency_breakdown` | trial | the consumer's wall time; its stages | v2 sums the probes' latencies |
+| `latency_seconds`, `latency_breakdown` | trial | the consumer's wall time; its stages | v2 sums the probes' latencies, and on revision 4 the decision turns' |
 | `tokens_per_quality` | cell | mean tokens over the mean of the judged means | needs the judge |
 | judge tokens (new) | trial | each judge's tokens, in its own field | an evaluation cost, not in the above |
 
@@ -355,13 +364,17 @@ Per decision item (`decision_results[]`):
 
 | Measure | Definition |
 |---|---|
-| `decision_correct` | the answer names exactly one option letter, the correct one |
-| `decision_choice` | the letter named, or none |
-| `decision_error` | the wrong option's kind: `stale` (a superseded value: a recency failure), `revoked` or `private` (a value the consumer must not use: a deletion or privacy failure), `foreign` (another user's fact: an identity failure); `no_letter` or `multiple_letters` (format) |
+| `passed` | the answer names exactly one option letter, the correct one |
+| `choice` | the letter named, or none |
+| `error` | the wrong option's kind: `stale` (a superseded value: a recency failure), `revoked` or `private` (a value the consumer must not use: a deletion or privacy failure), `foreign` (another user's fact: an identity failure); `no_letter` or `multiple_letters` (format) |
 
-A cell's decision accuracy: correct over items of trials that did not
-fail, with a Wilson interval, against chance 25% (four options); its
-error breakdown: the share of items per error kind. Judge-free.
+A decision turn that errors (no answer, a failed block, a consumer
+that raised) is recorded with `turn_error`, is not scored, and fails
+nothing. A cell's decision accuracy: correct over the scored items of
+trials that did not fail, with a Wilson interval, against chance 25%
+(four options); its error breakdown: each error kind's count and share
+of the scored items (`<error>_share`), and the items with a turn error
+(`turn_errors`). Judge-free.
 
 ## Known limits
 

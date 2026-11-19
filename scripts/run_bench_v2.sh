@@ -53,6 +53,10 @@
 #     (kernel and replicated, _ns phases) and the fault wrong_user (every
 #     cell). Mem0 needs Azure (its extraction): PHASES and METHODS pick
 #     the in-house cells alone.
+#   DATASET (default pilot_v2) names the harness's dataset; TRIALS users
+#     of it run (Amendment 10's no-memory check over every user:
+#     MODE=decision DATASET=users_v2 TRIALS=150 CONDITIONS=no_memory
+#     PHASES=kinh).
 #
 # Code: both repos must have no tracked change; every finished cell must
 # record exactly the current commits (no -dirty) and have no failed
@@ -111,7 +115,7 @@ esac
 LOGS="$CEREBRUM/$OUTROOT/logs"
 [ -z "${ARCHIVE:-}" ] || [ ! -e "$ARCHIVE" ] || {
     echo "$ARCHIVE exists: set a new ARCHIVE" >&2; exit 1; }
-DATASET="pilot_v2"
+DATASET="${DATASET:-pilot_v2}"
 MODELS="${MODELS:-qwen}"
 # Any kernel memory request: none in an agent phase.
 MEMORY_OPS='add_memory: agent=|retrieve_memory result|Injection pipeline|Stored conversation memory|Injected [0-9]+ memories|MEMORY QUERY RECEIVED|forget_memory: agent=|list_memory: agent='

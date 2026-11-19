@@ -430,3 +430,21 @@ def test_the_decision_check_runs_its_cells_in_house(tmp_path):
     assert all("--heterogeneity 0 --fault wrong_user" in c for c in wrong)
     assert all("--no-judge" in c for c in calls)
     assert all("--trials 5" in c for c in calls)
+    assert all("--dataset pilot_v2 " in c for c in calls)
+
+
+def test_the_no_memory_check_runs_every_user_of_users_v2(tmp_path):
+    """Amendment 10's no-memory check over every user: DATASET and
+    TRIALS reach the harness, one kernel in-house no_memory cell."""
+    aios = tree(tmp_path)
+    args = tmp_path / "args.log"
+    result = launch(aios, "kinh", "no_memory", extra={
+        "MODE": "decision", "DATASET": "users_v2", "TRIALS": "150",
+        "SIM_ARGS_LOG": str(args)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    assert sorted(c.name for c in (root / "kinh").iterdir()) == [
+        "no_memory_kernel_shared"]
+    (call,) = args.read_text().splitlines()
+    assert "--dataset users_v2 --trials 150 " in call
+    assert "--no-judge" in call
