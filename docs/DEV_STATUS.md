@@ -53,6 +53,7 @@ do not describe this branch.
 | 17 | A-MEM backend and native condition | Done |
 | 18 | Agent count, concurrency and faulty-agent stress dimensions; event-driven scheduler | Done |
 | 19 | Kernel ablation switches | Done |
+| 20 | Judge reliability, second judge, decision probe, metrics | In progress |
 
 ### Subtask 1
 
@@ -3819,6 +3820,28 @@ come from (Jg94; claim C4).
   `test_kernel_shared_delta_is_zero` (1,360 at `8953e28`, so the
   mutation run's 13 tests; on a run just before the JSON comparison
   was given its tolerance, the flaky test passed: 1,374).
+
+## Notes for the paper
+
+What the paper must say, collected as found (Subtask 20 on; earlier
+notes stay where they were written, listed here):
+
+1. **The judge score was a hybrid** (found in Subtask 20). The workshop
+   paper's "judge score", and every stored score before Subtask 20, is
+   round((keyword + LLM) / 2) per dimension (`METRICS.md`, "The three
+   scores of a judgment"). The main-track paper states the formula or
+   reports the components apart: from Subtask 20 the LLM score (median
+   of k) is the judged metric, the keyword score a judge-free metric of
+   its own, and the hybrid a continuity column only.
+2. **Silent failures**, the motivation's evidence that real memory
+   systems fail quietly: the keyword judge fallback (Subtask 4b), stored
+   writer status payloads (Subtask 9), Mem0 swallowing extraction errors
+   (Subtask 10, Amendment 9), Ollama truncating prompts (known issue
+   29), the library dropping retrieval errors and a listing missing an
+   acknowledged write (Amendment 2), Mem0's clamped search
+   (`NATIVE_USAGE.md`), Mem0 folding a revoked value into another fact
+   (known issue 38).
+3. **`kernel_private`** resolves §4.1's TODO (Subtask 4 notes).
 
 ## Open decisions
 
