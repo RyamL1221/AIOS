@@ -3499,8 +3499,8 @@ come from (Jg94; claim C4).
     `consumer_config`); `benchmarks/shared_memory/ablation_report.py`
     and `ablation_figure.py` (the table, the functional and smoke
     rules, the per-trial record check, the contribution figure: one
-    bar per component on its own axis, an SVG drawn by hand since
-    neither venv has matplotlib).
+    bar per primary measure (switch and condition) on its own axis, an
+    SVG drawn by hand since neither venv has matplotlib).
 - **Code review** (one pass; fixes AIOS `64bbbee`, Cerebrum `bb7e845`;
   `ABLATION.md` "Corrected on review" lists what changed after the
   spec's commit):
@@ -3543,10 +3543,15 @@ come from (Jg94; claim C4).
   rules held:
   - barrier: 85 covered late writes over 5 users (17 per user), the full
     kernel none. No stale read or timing miss (the spec predicted a
-    few; s18's replicated cells had 2 over 30 users).
-  - identity, wrong_user: 27 misfiled rows (the spec: 27 to 34), 88
-    cross-user rows in blocks, `memories_missing` +0.80; the full kernel
-    none.
+    few; s18's replicated cells had 2 stale reads over 30 users), and
+    one late forget: user 4's deletion probe read before its forget ran
+    and was lost, the value in the block (user 0's passed, so deletion
+    -1 +1).
+  - identity, wrong_user: 27 misfiled rows, 88 cross-user rows in
+    blocks, `memories_missing` +0.80; the full kernel none. s18's
+    functional check's replicated in-house cell had the same three
+    numbers (the spec's "27 to 34" took native Mem0's 34; replicated
+    Mem0 had 32).
   - identity, V2: the rule (profile facts in the block 0 for every user)
     did not hold as written: one user's block had 1 of 6 profile facts.
     That fact ("Python") was in the task agent's row; no profile-writer
@@ -3592,19 +3597,23 @@ come from (Jg94; claim C4).
     replicated cell on the same users: 552. Of the 543, 240 were in
     the same probe's block (committed during the search), against
     replicated's 366. Misses: 7 stale reads (+0.23 [-0.00, +0.47] per
-    user), 3 timing misses and 3 late forgets, where replicated had 2
-    stale reads and nothing else; 2 deletion, 3 recency and 3
+    user), 3 timing misses (among the stale reads) and 3 late forgets,
+    10 probes in all, where replicated had 2 stale reads and nothing
+    else; 2 deletion, 3 recency and 3
     contradiction probes lost (p 0.50, 0.25, 0.25; replicated lost 2
     contradiction probes), each with a stale read or a late forget.
     `memories_missing` -0.10 [-0.25, +0.05]. So the kernel without its
     barrier missed more than "a few, as replicated's": more of its late
     writes landed after the search; why was not looked into. The
-    tombstone guard dropped 46 rows in this phase (8 users; none in any
-    other phase): reads that met a forget's rows after it recorded its
-    tombstone and before it deleted them (user 0's trace: tombstone at
-    .084 s, guard drops from .319 to .377, the deletes at .373). Three
-    deletion probes read before their forget began (users 0, 4 and 15;
-    4 and 15 lost the probe, user 0 failed in both runs).
+    tombstone guard dropped 12 rows 46 times in this phase (8 users;
+    none in any other phase): reads that met a forget's rows after it
+    recorded its tombstone and before it deleted them (user 0's trace:
+    the forget accepted at .084 s behind two of the profile writer's
+    writes, its tombstone recorded between .270 and .319, guard drops
+    from .319 to .377, the deletes logged at .373). Three deletion
+    probes read after their forget was accepted (11 to 18 ms before the
+    fetch) and before it ran (users 0, 4 and 15; 4 and 15 lost the
+    probe, user 0 failed in both runs).
   - `identity: claim` (`n6wrong_user`): misfiled rows +4.03 [+3.22,
     +4.85] per user (121; users 0 to 4: 27, as in the functional
     check), where the full kernel overrode 133 faulty requests;
@@ -3618,8 +3627,9 @@ come from (Jg94; claim C4).
     claimed user, so the echo row stayed) and one privacy probe (user
     28: user 27's misfiled calendar row carried the same name); user
     0's deletion probe passed (below). No replicated `wrong_user` cell
-    at 30 users to compare with (s18's functional check: 27 to 34 over
-    5 users).
+    at 30 users to compare with (s18's functional check, replicated: 27
+    misfiled rows in-house, 32 on Mem0, over 5 users; the in-house
+    cell's 27, 88 cross-user rows and +0.80 equal `f19b`'s).
   - `quota: off` (`n6flood10`, `n6flood50`): flood rows in the block
     per probe +4.72 [+4.10, +5.34] (1.71 to 6.43) and +8.21 [+7.50,
     +8.92] (1.82 to 10.03); profile facts -0.23 [-0.38, -0.07] and
@@ -3633,7 +3643,8 @@ come from (Jg94; claim C4).
     levels.
   - `forget_scope: writer` (`n6h0`): carriers left +0.67 [+0.31,
     +1.02] per user: each of the 10 echo users kept 2 carriers and
-    failed the deletion probe (Subtask 15's `writer_scoped`: 6 of 8);
+    failed the deletion probe (Subtask 15's `writer_scoped`: 4 of 4
+    in-house, 6 of 8 with Mem0);
     the 20 others passed in both runs; deletion lost 9 (p 0.004). The
     full kernel failed one echo user, user 0, without the value in the
     block: Qwen named Mattermost, as in the functional check and in

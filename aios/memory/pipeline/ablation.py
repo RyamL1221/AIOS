@@ -9,11 +9,15 @@ the full kernel. The block is a pipeline setting
 ``/memory/config`` (``pipeline.ablate``) and the replicated agents copy
 it. Where a switch acts:
 
-- ``barrier: off``: the kernel's write barrier stamps nothing and no
-  read waits (``MemoryManager``; a replicated agent's own barrier);
+- ``barrier: off``: no agent's read waits; the barrier still stamps
+  every write and read, and the harness's audit and cost reads still
+  wait (``MemoryWriteBarrier``'s ``waits`` and ``required``, built by
+  ``MemoryManager``; a replicated agent's own barrier);
 - ``identity: claim``: the kernel serves a request for the user id the
-  agent claims, verbatim: no session binding, no canonicalization
-  (``MemoryManager``; the library has neither);
+  agent claims: no session binding and no canonicalization rules
+  (surrounding whitespace is still stripped); the session token still
+  keys the write quota's bucket (the kernel only: ``MemoryManager``,
+  ``runtime/launch.py``);
 - ``visibility: off``: every row of the user's partition is visible to
   every agent (``Selector``, ``MemoryPipeline.read``);
 - ``supersession: off``: no write retires a row and selection excludes
