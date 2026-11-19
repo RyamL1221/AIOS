@@ -41,6 +41,7 @@ exit 0
 # file, unless the cell's run id is $SIM_FAIL_RUN, and prints
 # $SIM_HARNESS_LINE to the cell's log.
 HARNESS = """#!/bin/bash
+[ -n "${SIM_ARGS_LOG:-}" ] && echo "$*" >> "$SIM_ARGS_LOG"
 while [ $# -gt 0 ]; do
     case $1 in
         --method) method=$2; shift ;;
@@ -392,3 +393,40 @@ def test_archive_must_be_new(tmp_path):
     assert result.returncode == 1
     assert "set a new ARCHIVE" in result.stderr
     assert "start" not in result.stdout
+
+
+def test_the_decision_check_runs_its_cells_in_house(tmp_path):
+    """MODE=decision (Subtask 20, Amendment 10): no_memory in every
+    cell, writer_scoped and no_supersession in the kernel and
+    replicated cells, wrong_user everywhere, through the harness's
+    ``--fault``; PHASES and METHODS pick the in-house cells."""
+    aios = tree(tmp_path)
+    args = tmp_path / "args.log"
+    result = launch(aios, "kinh agent kinh_ns agent_ns", "", extra={
+        "MODE": "decision", "CONDITIONS": "", "TRIALS": "",
+        "METHODS": "kernel_shared replicated_inhouse native_inhouse",
+        "SIM_ARGS_LOG": str(args)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == [
+        "agent/h0_native_inhouse", "agent/h0_replicated_inhouse",
+        "agent/no_memory_native_inhouse",
+        "agent/no_memory_replicated_inhouse",
+        "agent/writer_scoped_replicated_inhouse",
+        "agent/wrong_user_native_inhouse",
+        "agent/wrong_user_replicated_inhouse",
+        "agent_ns/no_supersession_replicated_inhouse",
+        "kinh/h0_kernel_shared", "kinh/no_memory_kernel_shared",
+        "kinh/writer_scoped_kernel_shared",
+        "kinh/wrong_user_kernel_shared",
+        "kinh_ns/no_supersession_kernel_shared",
+    ]
+    calls = args.read_text().splitlines()
+    wrong = [c for c in calls if "-wrong_user " in c + " "]
+    assert len(wrong) == 3
+    assert all("--heterogeneity 0 --fault wrong_user" in c for c in wrong)
+    assert all("--no-judge" in c for c in calls)
+    assert all("--trials 5" in c for c in calls)

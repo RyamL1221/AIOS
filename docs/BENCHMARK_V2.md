@@ -1647,8 +1647,9 @@ different slot, shuffled; exactly one is the user's current fact:
   i, so one of them may be in user i's store). With no such fact, a
   value of a slot user i never writes is drawn from that slot's pool,
   and the item records it as `pool`. The draws use their own seeded
-  `random.Random(f"{seed}:{index}:decision:{n}")`, after the script's,
-  which they do not change.
+  `random.Random(f"{seed}:{index}:decision:{n}")`: n = 0 for the
+  foreign facts, n = 1 and 2 for the two items' option order. They
+  come after the script's draws, which they do not change.
 - **The question**: "Based only on what you remember about me, which
   ONE of these statements about me is true right now?", the four
   statements as `A)` to `D)`, then "Answer with the letter only." The

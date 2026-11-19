@@ -6,11 +6,17 @@ is the paper's metrics appendix. Written in NeurIPS Subtask 20
 (2026-11-19), before that subtask's code; the judge-reliability rule in
 "The k rule" is fixed here before the reliability study runs.
 
-The judge-free measures are computed by one module, Cerebrum
-`benchmarks/shared_memory/metrics.py` (from Subtask 20); the reports
-import them from there. Where two measures of the same idea exist with
-different rules, both keep their rule and get distinct names below:
-recorded numbers do not change.
+The measures a run records per probe and per trial are computed by the
+run's own modules (`probes.score_probe`, `judge_free.measure`,
+`stress`). Everything the reports derive from the records is computed
+by one module, Cerebrum `benchmarks/shared_memory/metrics.py` (from
+Subtask 20): pass rates, paired outcomes and means, the measures more
+than one report reads, a cell's leak and missing rates, the judge's
+score arithmetic and the decision scoring; the reports import them
+from there. Where two measures of the same idea exist with different
+rules, both keep their rule and get distinct names below: recorded
+numbers do not change (every report's output on the stored runs was
+byte-identical before and after the move).
 
 ## Conventions
 
@@ -202,8 +208,8 @@ again by both judges at their own k, with no new model or kernel run:
   `bench_v2_smoke_amem` (v2, 90 integration probes).
 
 For each run, every paired locus difference it reports: per model,
-backend and H, the per-user paired difference replicated − kernel and
-native − kernel (the pilot's `gap`); the pilot's pooled-over-backends
+backend and H, the per-user paired difference kernel − replicated and
+kernel − native (the pilot's `gap`); the pilot's pooled-over-backends
 differences and its H2 − H0 difference-in-differences; per dimension
 (v1: profile, task, integration; v2: integration). A difference's
 direction is the sign of its mean (zero is its own sign). Reported: how
@@ -321,7 +327,7 @@ at the integration probe and no row in its block), `barrier_timeouts`,
 | Measure | Scope | Definition | Limits |
 |---|---|---|---|
 | `profile_facts_in_block` | trial (one block) | share of the user's profile items (name, language, response style, each tool) found in the block | its own matcher (`judge_free.contains`): whole words, case-insensitive, no accent folding, multi-word items verbatim; v2: the integration block |
-| `profile_facts_in_answer` (new, Subtask 20) | trial (one answer) | share of the user's profile items other than the response style (name, language, each tool) found in the answer, with the same matcher as `profile_facts_in_block`; v1: the answer; v2: the integration probe's answer, against the final profile | a style is shown, not named, so it is not an item; the matcher does not see paraphrases |
+| `profile_facts_in_answer` (new, Subtask 20) | trial (one answer) | share of the user's profile items other than the response style (name, language, each tool) found in the answer, with the same matcher as `profile_facts_in_block`; v1: the answer; v2: the integration probe's answer, against the final profile. Recorded from Subtask 20; for a stored trial, computed from its record (answer and profile). Cell mean: `facts_in_answer` in the pilot report | a style is shown, not named, so it is not an item; the matcher does not see paraphrases |
 | `raw_payload_rows` | trial | block rows that are raw JSON or carry a writer-schema key | |
 
 ### Block and size

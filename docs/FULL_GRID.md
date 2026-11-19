@@ -77,3 +77,58 @@ pass's start, end and failures.
 
 Open: the pass's size and cost (one judge call per judged trial, plus
 retries), the concurrency, and the cell order's seed.
+
+## The two judges (Subtask 20)
+
+Definitions, the reliability protocol and the k rule are in
+`METRICS.md` ("Judged measures"). Fixed here for the grid:
+
+**Decoding differs, and neither judge is claimed to be deterministic.**
+The primary judge, `gpt-5.4` on Azure, decodes greedily (temperature
+0.0) with a best-effort seed (20261105). The second judge, Claude
+Sonnet 5.5, uses default sampling: its API accepts no sampling
+parameter. Repeatability is measured for each judge by the repeat
+protocol (10 judgments of each of 200 calibration answers), and the k
+rule (the smallest k in {1, 3, 5} whose median reaches Krippendorff's
+alpha ≥ 0.80 on Profile and Integration) is applied to each judge
+separately. If the two judges need different k, each is used at its
+own k and both are reported.
+
+| Judge | k | Cost multiplier | Evidence |
+|---|---|---|---|
+| `gpt-5.4` (primary) | open: its calibration waits on the Azure deployment | k calls per judged answer | |
+| Claude Sonnet 5.5 (second) | 1 | 1 call per answer in its subset | median-of-1 alpha: Profile 0.966 [0.951, 0.977], Integration 0.963 [0.947, 0.975] (Cerebrum `results/judge_reliability_s20/`) |
+
+At k > 1 each judged answer is judged k times in the window, and its
+score is the median; every repeat is recorded.
+
+**The second judge's subset**, fixed before the grid runs. The second
+judge scores 30% of the judged answers, at its k, chosen by user, so
+the same users are in the subset in every cell and every paired
+difference of the grid (kernel − other, H2 − H0) also exists on the
+subset:
+- strata: echo users (i mod 9 in {0, 4, 8}, `synth_v2.is_echo_user`)
+  and the other users;
+- order: within each stratum, the indices of users_v2's 150 users in
+  the order `random.Random(20261121).shuffle` gives the stratum's
+  sorted list (echo stratum shuffled first, then the other, from one
+  generator);
+- a cell with users U takes, from each stratum, the first
+  round(0.3 × |U ∩ stratum|) of U's users in that order (at least one
+  when U has a user of the stratum); at 150 users, 15 echo and 30
+  others, 45 in all;
+- the subset never depends on a score: it is fixed by the user index
+  alone.
+
+Code: Cerebrum `judge.second_judge_users(users)`. At 150 users it is
+users 4, 5, 7, 11, 15, 16, 20, 25, 26, 27, 28, 32, 36, 38, 41, 43, 44,
+49, 54, 56, 57, 60, 61, 62, 66, 72, 74, 78, 79, 80, 89, 90, 93, 94,
+96, 97, 105, 106, 115, 120, 130, 134, 138, 140 and 147.
+
+The second judge's answers go in one Batch submission after the
+primary judge's pass has closed. The Batches API orders its work as it
+chooses, so the interleaving of the primary pass does not apply; the
+batch's submission and end bound its window, recorded with every
+judgment. Reported on the subset: inter-judge alpha, Spearman and mean
+offset per dimension, and direction agreement for each of the grid's
+paired differences (`METRICS.md`, "Agreement between the judges").

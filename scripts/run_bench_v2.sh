@@ -47,6 +47,12 @@
 #     replicated) and no_supersession (kernel and replicated, _ns phases).
 #   MODE=smoke: pilot_v2's 30 users, h0, judge v2 on the integration
 #     probe.
+#   MODE=decision (Subtask 20, Amendment 10's functional check of the
+#     decision probe): pilot_v2 users 0-4, no judge, h0 and no_memory in
+#     every cell, writer_scoped (kernel and replicated), no_supersession
+#     (kernel and replicated, _ns phases) and the fault wrong_user (every
+#     cell). Mem0 needs Azure (its extraction): PHASES and METHODS pick
+#     the in-house cells alone.
 #
 # Code: both repos must have no tracked change; every finished cell must
 # record exactly the current commits (no -dirty) and have no failed
@@ -91,7 +97,12 @@ case "$MODE" in
         CONDITIONS="${CONDITIONS:-h0}"
         JUDGE_ARGS=(--judge-model "gpt-5.4:azure")
         PHASES="${PHASES:-kmem0 kinh agent}" ;;
-    *) echo "MODE must be functional or smoke" >&2; exit 1 ;;
+    decision)
+        TRIALS="${TRIALS:-5}"
+        CONDITIONS="${CONDITIONS:-h0 no_memory writer_scoped no_supersession wrong_user}"
+        JUDGE_ARGS=(--no-judge)
+        PHASES="${PHASES:-kmem0 kinh agent kmem0_ns kinh_ns agent_ns}" ;;
+    *) echo "MODE must be functional, smoke or decision" >&2; exit 1 ;;
 esac
 [ -n "${RUN_PREFIX:-}" ] || {
     echo "set RUN_PREFIX, new for every run (known issue 36)" >&2; exit 1; }
@@ -178,7 +189,9 @@ applies() {  # $1 = condition, $2 = phase, $3 = method
         *_ns) [ "$1" = no_supersession ]; return ;;
     esac
     case "$1" in
-        no_memory) [ "$2" = kinh ] ;;
+        # The guessing floor: kernel in-house only, but in every cell
+        # for the decision check (Amendment 10, D2).
+        no_memory) [ "$MODE" = decision ] || [ "$2" = kinh ] ;;
         no_visibility) case "$3" in native_*) true ;; *) false ;; esac ;;
         writer_scoped) case "$3" in native_*) false ;; *) true ;; esac ;;
         no_supersession) false ;;  # its own phases
@@ -191,6 +204,7 @@ condition_args() {  # $1 = condition
         h2) echo "--heterogeneity 2" ;;
         no_memory|no_delete|no_visibility|writer_scoped|no_supersession)
             echo "--heterogeneity 0 --control $1" ;;
+        wrong_user) echo "--heterogeneity 0 --fault wrong_user" ;;
         *) echo "unknown condition $1" >&2; exit 1 ;;
     esac
 }
