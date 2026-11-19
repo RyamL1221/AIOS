@@ -3440,6 +3440,208 @@ flaky (it passed 3 of 3 alone; known issue 35); Cerebrum 1,285 passed,
 35's `test_delta_equals_arithmetic_difference` (1,311 collected; 1,257
 at `7a149ab`, so the mutation run's 54).
 
+### Subtask 19
+
+Kernel ablation switches (`ABLATION.md`): one switch per kernel
+responsibility, each removable alone in the kernel locus and paired with
+the measurement that should move, to answer where the kernel's gains
+come from (Jg94; claim C4).
+
+- **Amendment 9 first** (open decision 7, resolved as (b); AIOS
+  `4a6062d`, Cerebrum `b8b0f9b`). Mem0 2.0.2 logs and swallows four
+  failures of a write (its extraction call, parsing that call's reply,
+  embedding, inserting). Every locus's Mem0 write now collects those
+  lines while it runs (Cerebrum `cerebrum/utils/mem0_errors.py`; the add
+  runs on the caller's thread) and raises when it stored nothing after
+  one, so a Mem0 write that returned and stored nothing found no fact:
+  in v2 it is a lost memory (`writes_without_fact`), as Graphiti's and
+  A-MEM's are, and the trial is scored. Numbered 9: `BENCHMARK_V2.md`
+  already had Amendments 7 and 8. v2 only (corrected on review): a v1
+  kernel writer reads a refused create as an empty one, so v1 keeps
+  Mem0's old rule (`EMPTY_WRITE_IS_LOSS_V1`). Tested against a real Mem0
+  store whose extraction call raises or answers unparseable JSON.
+- **The spec before the code** (AIOS `a5661f6`): the mechanism, the
+  table (component, switch, what it removes, condition, measurement,
+  prediction), the conditions, the functional check's rules and the
+  smoke's.
+- **The mechanism** (AIOS `894ee06`, Cerebrum `440e705`):
+  - `memory.ablate` (`aios/memory/pipeline/ablation.py`): `barrier`,
+    `identity`, `visibility`, `supersession`, `forget_scope`, `quota`,
+    `block_format`, `block_order`, `budget`, `threshold`,
+    `consumer_config`; every one the full kernel by default; unknown
+    keys or values fail startup; YAML's bare on/off read as booleans
+    are accepted. A pipeline setting (`PipelineSettings.ablate`,
+    `/memory/config` `pipeline.ablate`, copied by the replicated
+    agents); a switch never rewrites another setting (the library reads
+    `effective_*` values).
+  - The four controls are aliases (`ALIASES`): `no_visibility` →
+    `visibility: off`, `no_delete` → `forget_scope: none`,
+    `writer_scoped` → `forget_scope: writer`, `no_supersession` →
+    `supersession: off`. Kernel and replicated writers now call the
+    user's forget under every control, and the forget scopes itself;
+    native keeps its own switches. `run_bench_v2.sh` runs each
+    control's cells on a fresh kernel with its switch, in the same
+    phase directories (the analysis reads them unchanged).
+  - Harness: `--ablate SWITCH[=VALUE]` (and an aliased `--control`);
+    the pre-flight requires the kernel's `pipeline.ablate` to equal the
+    run's in every switch, whatever the locus; a switch the locus lacks
+    is refused; every `TrialResult` records `ablation` (`{}` for the
+    full kernel), the run settings too. `--variants AGENT=CODE` gives
+    every user the same variant (an ablation's condition: V2, V3, V4).
+  - `LLMQuery.retrieval` carries a consumer's own k, threshold and
+    budget; the kernel applies them only under `consumer_config:
+    honor`, through a pipeline built as a replicated V4 consumer builds
+    its own; the injection diagnostics record `consumer_config: {sent,
+    applied}`.
+  - `scripts/run_ablation.sh` (each switch against the full kernel on
+    the same users under its row's condition, kernel locus only, one
+    fresh kernel per write-quota setting; the replicated V4 cell for
+    `consumer_config`); `benchmarks/shared_memory/ablation_report.py`
+    and `ablation_figure.py` (the table, the functional and smoke
+    rules, the per-trial record check, the contribution figure: one
+    bar per component on its own axis, an SVG drawn by hand since
+    neither venv has matplotlib).
+- **Code review** (one pass; fixes AIOS `64bbbee`, Cerebrum `bb7e845`;
+  `ABLATION.md` "Corrected on review" lists what changed after the
+  spec's commit):
+  - The v2 analysis's guard criterion ("the guard armed after a
+    forget") would have failed every `no_delete` and `writer_scoped`
+    cell, whose forget now records no tombstone by design: a scoped
+    forget is recorded on the session event, left out of the criterion
+    and counted in a column of its own (`scoped`).
+  - Amendment 9 would have scored a v1 kernel Mem0 write that hit a
+    swallowed failure as a lost memory, though a v1 kernel writer cannot
+    tell a refused create from an empty one: v1 keeps the old rule.
+  - `barrier: off` dropped the barrier's bookkeeping, so every late
+    write (one accepted after the read included) read as covered, and
+    the harness's audit and cost reads stopped waiting. The barrier now
+    keeps its sequences and snapshots and skips only the waits an agent
+    sees (`waits`); the audit and cost reads wait (`required`).
+  - `identity: claim` dropped the session token from the write quota's
+    bucket key; the token keys it again (the binding is what the switch
+    removes). A dead method went.
+  - The full kernel's block diagnostics gained a `block_order` key; it
+    is reported only for `similarity`.
+  - The report: quota's profile facts made a primary measure (as the
+    spec names it); the echo-user split, flood writes accepted and
+    V4's `memories_missing` added; one pair confirms nothing (n >= 2);
+    the threshold rule compares probe by probe; each trial's recorded
+    ablation is checked against its cell's; a cell whose trials all
+    failed is reported, not dropped.
+  - Tests: the identity tests go through the request handler; the
+    kernel-V4-equals-replicated-V4 test compared two empty blocks (no
+    row reached V4's 0.5 threshold) and now uses rows V4's threshold
+    and k both bind, the replicated side built by Cerebrum's own
+    variant code, loaded by path.
+- **Functional check** (judge-free, users 0-4, in-house, N = 6, Qwen;
+  `results/ablation_functional_f19b`, archived to
+  `repo-artifacts/Cerebrum/ablation_functional_f19b`; 22 cells, 110
+  trials, none failed, each trial's recorded ablation its cell's). The
+  first run (`f19`) was stopped after three full-kernel cells when the
+  review changed the code; its partial output is left in
+  `results/ablation_functional_f19` and used nowhere. 13 of the 14
+  rules held:
+  - barrier: 85 covered late writes over 5 users (17 per user), the full
+    kernel none. No stale read or timing miss (the spec predicted a
+    few; s18's replicated cells had 2 over 30 users).
+  - identity, wrong_user: 27 misfiled rows (the spec: 27 to 34), 88
+    cross-user rows in blocks, `memories_missing` +0.80; the full kernel
+    none.
+  - identity, V2: the rule (profile facts in the block 0 for every user)
+    did not hold as written: one user's block had 1 of 6 profile facts.
+    That fact ("Python") was in the task agent's row; no profile-writer
+    row reached any user's block (0 of 5; the full kernel 3 to 4 per
+    user), and `profile_agent` was a missing writer for every user. The
+    mechanism is confirmed; the rule counted a value carried by another
+    writer. Recorded as a deviation; the rule is left as registered.
+  - visibility: the privacy probe failed in 5 of 5 users with its value
+    in the block; the full kernel's never.
+  - supersession: an earlier statement in 10 of 10 recency and
+    contradiction blocks; recency passed 0 of 5 and contradiction 3 of
+    5 (the spec: 1 of 5 and 3 of 5).
+  - forget_scope: echo users 0 and 4 kept 2 carriers each and failed
+    deletion; users 1-3 passed. The full kernel failed one echo user's
+    deletion probe without the value in the block: Qwen listed
+    "Mattermost" among popular chat apps (`forbidden_in_block` false).
+  - quota: no quota rejection; flood rows per probe 1.3 to 6.5 (F = 10)
+    and 9.8 (F = 50); flood writes accepted 18 and 90 per user against
+    1.8; `memories_missing` +0.8 and +1.0. Profile facts did not fall at
+    F = 10 (0.00) and fell 0.37 at F = 50 with an interval across 0
+    (the spec: -0.23 and -0.53); the smoke decides.
+  - block_format, block_order: blocks differ in 30 of 30 probes; legacy
+    adds 3 tokens per probe (the budget binds).
+  - budget off: binds in no probe (4.8 of 6 per user on the full
+    kernel), +73 block tokens per probe. threshold 0.3: after_threshold
+    never above the full kernel's, -0.27 rows per probe.
+  - consumer_config honor: the kernel's V4 block equals the replicated
+    V4 block in 30 of 30 probes; on the full kernel the V4 consumer's
+    block equals the H = 0 block in 30 of 30; under honor, 13.6 to 1.2
+    rows per probe, profile facts 1.0 to 0.0, `memories_missing` +3.6.
+- **Smoke** (`s19`, Cerebrum `results/ablation_smoke_s19`, its
+  `PROVENANCE.md` and `analysis.md`; AIOS `64bbbee`, Cerebrum
+  `bb7e845`): judge-free, Qwen, users 0 to 29, N = 6, in-house; the
+  four non-definitional switches, 10 cells, 300 trials, one attempt,
+  none failed, each trial's recorded ablation its cell's. Paired by
+  trial index (ablated minus the full kernel; a 95% t interval for
+  means, exact McNemar for outcomes). Every primary interval excludes
+  0 in the predicted direction, so the four predictions are confirmed;
+  where a secondary measure departs from the spec it is said below.
+  - `barrier: off` (`n6conc`): covered late writes +18.10 [+16.37,
+    +19.83] per user (543 over 180 probes; the full kernel's probes
+    waited, median 146 ms, at most 373, and read none). s18's
+    replicated cell on the same users: 552. Of the 543, 240 were in
+    the same probe's block (committed during the search), against
+    replicated's 366. Misses: 7 stale reads (+0.23 [-0.00, +0.47] per
+    user), 3 timing misses and 3 late forgets, where replicated had 2
+    stale reads and nothing else; 2 deletion, 3 recency and 3
+    contradiction probes lost (p 0.50, 0.25, 0.25; replicated lost 2
+    contradiction probes), each with a stale read or a late forget.
+    `memories_missing` -0.10 [-0.25, +0.05]. So the kernel without its
+    barrier missed more than "a few, as replicated's": more of its late
+    writes landed after the search; why was not looked into. The
+    tombstone guard dropped 46 rows in this phase (8 users; none in any
+    other phase): reads that met a forget's rows after it recorded its
+    tombstone and before it deleted them (user 0's trace: tombstone at
+    .084 s, guard drops from .319 to .377, the deletes at .373). Three
+    deletion probes read before their forget began (users 0, 4 and 15;
+    4 and 15 lost the probe, user 0 failed in both runs).
+  - `identity: claim` (`n6wrong_user`): misfiled rows +4.03 [+3.22,
+    +4.85] per user (121; users 0 to 4: 27, as in the functional
+    check), where the full kernel overrode 133 faulty requests;
+    cross-user rows in the blocks +12.23 [+8.43, +16.04];
+    `memories_missing` +0.67 [+0.49, +0.85], below the spec's "about
+    1": the faulty writer was missing from its user's block in 30 of
+    30 trials, but already in 5 on the full kernel (the budget), and in
+    5 others the budget let in a writer it had cut. Recall lost 5 (p
+    0.06), recency 6 (p 0.03), contradiction 6 (p 0.03); one deletion
+    probe lost (user 13: the faulty writer's own forget went to the
+    claimed user, so the echo row stayed) and one privacy probe (user
+    28: user 27's misfiled calendar row carried the same name); user
+    0's deletion probe passed (below). No replicated `wrong_user` cell
+    at 30 users to compare with (s18's functional check: 27 to 34 over
+    5 users).
+  - `quota: off` (`n6flood10`, `n6flood50`): flood rows in the block
+    per probe +4.72 [+4.10, +5.34] (1.71 to 6.43) and +8.21 [+7.50,
+    +8.92] (1.82 to 10.03); profile facts -0.23 [-0.38, -0.07] and
+    -0.53 [-0.72, -0.34] (at F = 10 the functional check's 0.00 does
+    not recur); `memories_missing` +0.63 [+0.32, +0.95] and +1.07
+    [+0.68, +1.46]; flood writes accepted 530 and 2,650 (the full
+    kernel 94 and 98). s18's replicated cells on the same users: 6.43
+    and 10 flood rows per probe, profile facts -0.23 and -0.53 with the
+    same intervals, `memories_missing` +0.60 and +1.03, 530 and 2,650
+    accepted. No probe lost; user 0's deletion probe passed at both
+    levels.
+  - `forget_scope: writer` (`n6h0`): carriers left +0.67 [+0.31,
+    +1.02] per user: each of the 10 echo users kept 2 carriers and
+    failed the deletion probe (Subtask 15's `writer_scoped`: 6 of 8);
+    the 20 others passed in both runs; deletion lost 9 (p 0.004). The
+    full kernel failed one echo user, user 0, without the value in the
+    block: Qwen named Mattermost, as in the functional check and in
+    every s18 kernel cell (29 of 30); its answer did not name it under
+    `identity: claim` and `quota: off`.
+  - The figure (`contribution.svg`): one bar per primary measure,
+    seven, each on its own axis with its interval.
+
 ## Open decisions
 
 1. **Native Mem0's install.** The agents run the pinned `mem0ai` 2.0.2

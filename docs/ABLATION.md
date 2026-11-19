@@ -229,6 +229,27 @@ on the corrected code):
 - The full kernel's block diagnostics are unchanged: `block_order` is
   reported only when it is `similarity`.
 
+## Results
+
+The functional check (`f19b`) and the smoke (`s19`): `DEV_STATUS.md`,
+Subtask 19. Every rule and primary interval held in the predicted
+direction but the V2 rule below. The rules are left as registered;
+where a result departs from the table, it is recorded:
+- `barrier: off`: in the smoke, more misses than "a few": 7 stale
+  reads, 3 timing misses and 3 late forgets, 8 probes lost, where s18's
+  replicated cell had 2 stale reads and 2 probes lost; none in the
+  functional check.
+- `identity: claim`: under V2 the profile facts in the block fell to 0
+  in 4 of 5 users; the fifth's one fact was in the task agent's row (no
+  profile-writer row reached any block), so the rule as written did not
+  hold. Under `wrong_user`, `memories_missing` rose +0.67 [+0.49,
+  +0.85] in the smoke, not about 1: the faulty writer was missing in
+  every ablated trial, but already in 5 of 30 on the full kernel.
+- `supersession: off`: recency passed 0 of 5 (Subtask 15's
+  `no_supersession`: 1 of 5); contradiction 3 of 5, as there.
+- `quota: off`: in the functional check the profile facts did not fall
+  at F = 10 (0.00); in the smoke they fell as predicted.
+
 ## What this does not show
 
 - A switch removes a component from the kernel, not from the agents. It
