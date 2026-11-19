@@ -3652,6 +3652,27 @@ come from (Jg94; claim C4).
     `identity: claim` and `quota: off`.
   - The figure (`contribution.svg`): one bar per primary measure,
     seven, each on its own axis with its interval.
+- **Review of the write-up** (the review's second half, over
+  `ABLATION.md`, this section, `BENCHMARK_V2.md` Amendment 9, the runs'
+  provenance and the steering text; corrected in AIOS `81199aa`,
+  Cerebrum `17b4cb9`): 6 errors and 6 imprecisions. The errors: the
+  barrier smoke's trace put the tombstone at the forget's arrival (it
+  was recorded about 0.2 s later, after two queued writes) and said the
+  three late-forget probes read before their forget began (they read
+  11 to 18 ms after it was accepted, before it ran); the functional
+  check's one late forget (user 4, its deletion probe lost) was left
+  out; the guard dropped 12 rows 46 times, not 46 rows; s18's
+  replicated `wrong_user` reference was given as 27 to 34 (34 was
+  native Mem0's); two steering lines, with the ablation module's
+  docstring, still described `barrier: off` and `identity: claim`
+  before the code review. The imprecisions: the identity explanation in
+  `ABLATION.md` (now with the 5 users whose block regained a writer),
+  the Results' summary line (three functional primary intervals
+  included 0 at n = 5), the smoke rule's n >= 2 and sign rule missing
+  from "Corrected on review", Subtask 15's `writer_scoped` reference
+  (4 of 4 in-house), the figure's "one bar per component" (one per
+  primary measure) and the timing misses counted apart from the stale
+  reads they are among. No number in a report changed.
 
 ## Open decisions
 
