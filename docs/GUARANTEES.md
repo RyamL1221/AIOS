@@ -513,8 +513,8 @@ What "accepted" means:
   returns (`conversation_extractor.py:92-96`);
 - `add_agentic_memory`: when its final `add_memory` is submitted, after
   two model calls (`syscall.py:916-932`), not when the request arrived
-  (G9); it is stamped and queued on a request-pool thread, where a
-  read accepted between the two steps overtakes it (G27);
+  (G9); it is stamped and queued on a request-pool thread, and a read
+  accepted between its stamp and its enqueue overtakes it (G27);
 - a retry: when the executor resubmits it, on a request-pool thread
   (`syscall.py:199-211`; G26, G27).
 
@@ -524,7 +524,8 @@ Writes that are stamped (`manager.py:368-379`): an add naming
 conversation turn. Not stamped: `remove_memory` (G8); an add or update
 that names no user (G10).
 
-Reads that wait: R1; R2, R3 and R5 naming `params.user_id`
+Reads that wait: R1 (naming no user, for the agent scope's stamped
+writes only: G10); R2, R3 and R5 naming `params.user_id`
 (`manager.py:380-387`), which an R3 sent through the SDK never does
 (G9); a forget, for the writes through its own sequence − 1
 (`facade.py:566-567`); R6 and R7, for every write accepted before
@@ -1019,8 +1020,8 @@ More checks:
   physically cannot return Bob's vectors", and that any one of three
   layers is sufficient. For ids that sanitize alike, among them every
   id with no ASCII letter or digit, Mem0's users share one collection
-  (G4), and a read by id has only that layer. The
-  section's second layer is `get_all` with a user filter and its third
+  (G4), and a read by id has only that layer. The section's second
+  layer is `get_all` with a user filter and its third
   `context_injector.py` line 360; retrieval now goes through `search`
   (`mem0.py:836-870`) and the selector's partition check
   (`selector.py:259-268`), and `context_injector.py` has 298 lines.
