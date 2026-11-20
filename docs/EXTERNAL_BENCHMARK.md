@@ -25,7 +25,8 @@ uses the backend as its documentation shows); `REPLICATED_LOGIC.md`,
 them. The consumer, `assistant_agent`, answers from the block, the
 memory text injected into its turn. H is how many agents deviate from
 the reference build (`HETEROGENEITY.md`). The matcher is the exact
-rule that scores our probes (`METRICS.md`, "Conventions").
+rule that scores our probes (`METRICS.md`, "Conventions"). "Amendment
+n" is `BENCHMARK_V2.md`'s.
 
 ## Why an outside benchmark
 
@@ -57,10 +58,10 @@ the GitHub API's (`/repos/<owner>/<repo>/commits`).
 | S2 | LoCoMo repository (last commit `3eb6f2c`, 2024-08-13) | https://github.com/snap-research/locomo | `README.MD`, `LICENSE.txt`, `data/locomo10.json`, `task_eval/evaluation.py`, `task_eval/gpt_utils.py`; issues 2, 6, 23, 27 (with its comments), 35, 43, 44 and 45 |
 | S3 | LongMemEval paper (Wu et al.; arXiv v2, 2025-03-04; ICLR 2025) | https://arxiv.org/abs/2410.10813 | abstract page, HTML full text |
 | S4 | LongMemEval repository (last commit `9e0b455`, 2026-05-11) | https://github.com/xiaowu0162/LongMemEval | `README.md`, `LICENSE`, `src/evaluation/evaluate_qa.py`, `src/evaluation/print_qa_metrics.py`, `src/evaluation/print_retrieval_metrics.py`, `src/retrieval/eval_utils.py`, `src/generation/run_generation.py` |
-| S5 | LongMemEval data on the Hugging Face Hub: the cleaned release (revision `98d7416`, 2025-09-19) and the deprecated first release | https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned and https://huggingface.co/datasets/xiaowu0162/longmemeval | both cards; the cleaned release's file list with sizes and sha256 (the Hub API); `longmemeval_oracle.json` and `longmemeval_s_cleaned.json`, downloaded at the revision, each matching its listed sha256 |
+| S5 | LongMemEval data on the Hugging Face Hub: the cleaned release (revision `98d7416`, 2025-09-19) and the deprecated first release | https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned and https://huggingface.co/datasets/xiaowu0162/longmemeval | both cards; the cleaned release's file list with sizes and sha256 (the Hub API); `longmemeval_oracle.json` and `longmemeval_s_cleaned.json`, downloaded, each matching the sha256 the Hub lists at the revision |
 | S6 | LongMemEval-V2 repository (created 2026-05-11; Apache-2.0) | https://github.com/xiaowu0162/LongMemEval-V2 | `README.md` |
 | S7 | Mem0 paper (Chhikara et al.; arXiv v1, 2025-04-28) | https://arxiv.org/abs/2504.19413 | abstract page, HTML full text |
-| S8 | Mem0's 2025 LoCoMo evaluation code, at the commit S12 cites (`2b58775`) | https://github.com/mem0ai/mem0/tree/2b58775c17eb1c1b7532242b7154af6744102280/evaluation | `src/memzero/add.py`, `metrics/llm_judge.py` (each fetched twice at the commit, byte-identical) |
+| S8 | Mem0's 2025 LoCoMo evaluation code, at the commit S12 cites (`2b58775`) | https://github.com/mem0ai/mem0/tree/2b58775c17eb1c1b7532242b7154af6744102280/evaluation | `src/memzero/add.py`, `metrics/llm_judge.py`, fetched at the commit |
 | S9 | Mem0's benchmark repository (last commit `4b61c5d`, 2026-05-13) | https://github.com/mem0ai/memory-benchmarks | `README.md`, `benchmarks/locomo/prompts.py`, `benchmarks/longmemeval/run.py`, `results/platform/locomo_results.json`, `results/platform/longmemeval_results.json`, `results/oss/longmemeval_gpt5.json` |
 | S10 | Zep paper (Rasmussen et al.; arXiv v1, 2025-01-20) | https://arxiv.org/abs/2501.13956 | abstract page, HTML full text |
 | S11 | Zep's blog post on Mem0's paper (2025-05-06, corrected; the page says updated 2026-06-03) | https://www.getzep.com/blog/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/ | the page |
@@ -346,7 +347,7 @@ numbers are its service's; the one outside run, S19's, used "the
 open-source implementation released for the Zep paper" (S19, Appendix
 H).
 
-**Disputes and corrections.**
+**Disputes, corrections and caveats.**
 - **Zep on LoCoMo.** Mem0's paper gave Zep 65.99 (S7). Zep answered
   with 84%, which counted category 5's correct answers over a
   denominator without category 5, as Mem0's CTO reported with a re-run
@@ -481,9 +482,9 @@ with the rule):
 - **Under H > 0 the split decides what a deviating writer takes with
   it.** A single-writer question loses all of its evidence or none. A
   multi-session question can lose part, and a count ("How many ...?")
-  is then wrong. A knowledge-update question whose newer statement is
-  hidden gets the stale value; one whose older statement is hidden
-  gets easier.
+  can then be wrong. A knowledge-update question whose newer
+  statement is hidden gets the stale value; one whose older statement
+  is hidden gets easier.
 - **An abstention question has nothing to lose.** A consumer with no
   memory can answer it correctly. Accuracy on those 30 can rise as
   memory is lost, so they are never pooled with the rest.
@@ -631,13 +632,15 @@ check that the split alone changes no block.
   threshold 0.5) loses the evidence only when it ranks below fifth or
   scores below 0.5. One exception: native with a V3 consumer reads a V1
   or V3 writer's private rows (1 of the 15 users, for `task_agent`).
-  The three writers each hold about a third of the single-writer
-  questions (75, 89 and 77 of the 241 such questions of all six types
-  that are not abstention questions, counted), so replicated and native
-  should lose, for up to about 14 of 45 (0.31) of them, evidence the
-  kernel keeps. This is arithmetic on the schedule, not a measurement.
-  Part of it is the kernel's advantage by definition: it ignores a
-  consumer's own settings (`STRESS_DIMENSIONS.md`, "Why these
+  Not counted: a V1 consumer's legacy block, which is longer and may
+  lose rows to the budget in replicated. The 140 single-writer
+  questions of the four types that are not abstention questions are
+  46, 51 and 43 by writer (counted; 22, 33 and 24 of the subset's 79),
+  so for about 0.18 of them every locus should lose the evidence, and
+  for up to about 0.31 more replicated and native should lose evidence
+  the kernel keeps (computed). This is arithmetic on the schedule, not
+  a measurement. Part of it is the kernel's advantage by definition: it
+  ignores a consumer's own settings (`STRESS_DIMENSIONS.md`, "Why these
   dimensions").
 
 ## What is scored
@@ -751,11 +754,12 @@ which moved between 48 and 131 ms a token within one run
 - Whether the three loci tie at H = 0 on histories and questions we did
   not write, with about 244 rows a user where v2 has 18.
 - Whether kernel − replicated and kernel − native open at H = 2 in the
-  direction our benchmark shows. With 120 paired questions the exact
-  McNemar test (two-sided, at 0.05) finds a gap of 0.12 in accuracy
-  with probability 0.87, one of 0.15 with 0.96 and one of 0.10 with
-  0.76, if 3% of the questions are won by the other cell; if 6% are,
-  0.73, 0.87 and 0.58 (computed). That share is not known on this data.
+  direction `HETEROGENEITY.md` predicts ("The dimension"). With 120
+  paired questions the exact McNemar test (two-sided, at 0.05) finds a
+  gap of 0.12 in accuracy with probability 0.87, one of 0.15 with 0.96
+  and one of 0.10 with 0.76, if 3% of the questions are won by the
+  other cell; if 6% are, 0.73, 0.87 and 0.58 (computed). That share is
+  not known on this data.
 - Which judged difference is a lost row: the evidence recall is
   measured on the same questions without a judge.
 - Per type, a description only: 30 questions give a Wilson interval of
@@ -778,8 +782,9 @@ which moved between 48 and 131 ms a token within one run
 | The four types, whole | 311, with the 24 abstention questions | 10 to 21 | $13.06 and $8.71 |
 
 With the 287 that are not abstention questions the same test finds a
-gap of 0.06 with probability about 0.85 (computed at 311 questions,
-with 3% won by the other cell), and no question is sampled. `gpt-4o`
+gap of 0.06 with probability 0.81 and one of 0.08 with 0.95, with 3%
+won by the other cell (0.63 and 0.84 with 6%; computed), and no
+question is sampled. `gpt-4o`
 as a second consumer would add 840 turns over the same seven cells:
 $2.98 to $6.30, at 700 to 2,200 tokens in (ten rows, or a block at its
 budget) and 180 to 200 out a turn (assumed from v2's measured
@@ -958,13 +963,16 @@ For the user; none is taken here.
 6. **Size.** (a) 120 questions; (b) all 311 of the four types, 10 to 21
    laptop hours and no sampling; (c) all 500, which needs decision 2
    (b) and dates in the rows. Bears on: the smallest gap seen (about
-   0.12 or 0.06) and whether per-type rates can be read.
+   0.12 at 120 questions, 0.06 to 0.08 at 287) and whether per-type
+   rates can be read.
 7. **Judges.** (a) both of ours on every answer, with their prompts, as
    proposed; (b) their judge model on our Azure `gpt-4o` deployment, if
    its version is theirs (not checked), for their metric to the letter;
    (c) both (a) and (b); and whether a label is judged once or k times.
-   Bears on: the claim "their metric", and at most about $22 at the
-   largest size of decision 6 (b).
+   Bears on: the claim "their metric", and the judges' cost at decision
+   6 (b), 2,177 judgments: at most about $22 for (a), about $2.45 for
+   (b) (430 tokens in and 5 out assumed, at `gpt-4o`'s price;
+   computed).
 8. **The consumer.** (a) ours, unchanged, as proposed; (b) their reader
    prompt with the question's date. Bears on: abstention accuracy, and
    whether these cells are comparable with the rest of the paper's.
