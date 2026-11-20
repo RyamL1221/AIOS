@@ -385,7 +385,7 @@ replicated and native lose shared rows, and only native leaks.**
   share is lower because its V3 consumer leaks the private row instead.
 
 **C1.7 On benchmark v2 the kernel and the replicated agents delete a
-revoked fact completely and never serve a superseded value; native does
+revoked fact completely and select no superseded row; native does
 neither.**
 - Numbers (`s15b`: H = 0, 30 users per cell, k = 10; passes, with the
   Wilson interval where it is not 30 of 30, which is 1.00 [0.89, 1.00]).
