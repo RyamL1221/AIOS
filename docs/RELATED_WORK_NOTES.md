@@ -12,17 +12,18 @@ left open.
 ## How to read these notes
 
 - **Access date.** Every URL below was fetched on 2026-11-20, except the
-  OpenReview links marked "not fetched". Each entry repeats the date. A
-  "requested" URL redirected to the "served" one.
+  links marked "not fetched". Each entry repeats the date. A "requested"
+  URL redirected to the "served" one.
 
 - **How a source was read.** arXiv pages were downloaded and read as
   text: the abstract page for the title, authors, versions, comments and
   abstract, and the HTML full text where an entry says so, searched for
-  the passages quoted. GitHub issues, pull requests and the advisory
-  were read through GitHub's public REST API (the issue and its comments
-  as JSON) and are cited by their page URL; one discussion was read as
-  its page, and one repository file through raw.githubusercontent.com.
-  Other pages were downloaded and read as text. A quote is verbatim from
+  the passages quoted. GitHub issues, pull requests and advisories were
+  read through GitHub's public REST API (an issue and its comments as
+  JSON) and are cited by their page URL; one discussion was read as its
+  page, and repository files through raw.githubusercontent.com. Other
+  pages were downloaded and read as text. A translation from Chinese is
+  marked "translated here" and is not a quote. A quote is verbatim from
   that text, with four exceptions: Markdown emphasis and links in an
   issue are dropped, curly quotation marks are written straight, the
   comment markers of a source file are dropped, and "[...]" marks a cut.
@@ -42,6 +43,9 @@ left open.
   recomputed here.
 
 - **Dates.** A work first posted before 2025 is marked "background".
+  Where a page shows no date but its own metadata gives one (schema.org
+  `dateModified`), the entry says "page metadata: modified" and the
+  date.
 
 - **Tags.** Part (a) numbers its entries S (shared or multi-agent
   memory), A (memory access control), O (agent operating systems) and B
@@ -69,7 +73,7 @@ comparisons below use these seven responsibilities:
 |---|---|---|
 | 1 | User partition: no row of one user reaches another user's block | `RETRIEVAL_PATH.md:28`, `BENCHMARK_V2.md:38-44` |
 | 2 | Visibility between agents: an agent sees its own rows and rows marked shared | `RETRIEVAL_PATH.md:29-31`, `SHARED_MEMORY_SYSTEM.md:250-260` |
-| 3 | Session-bound identity: the user comes from the kernel session, not from the agent's claim | `STRESS_DIMENSIONS.md:387-402` |
+| 3 | Session-bound identity: for a request that carries a kernel session token, the user comes from the session; otherwise from the agent's claim, canonicalized | `STRESS_DIMENSIONS.md:387-402`, `aios/memory/manager.py:406-409` |
 | 4 | Write-before-read ordering across writers: one barrier for every agent | `REPLICATED_LOGIC.md:72-79`, `STRESS_DIMENSIONS.md:266-273` |
 | 5 | Deletion with tombstones: a forget removes every carrier of the fact, whoever wrote it, and a tombstone guards later reads | `DELETION_AND_SUPERSESSION.md:102-106`, `:160-182` |
 | 6 | Supersession: a later statement retires the earlier rows of its slot | `DELETION_AND_SUPERSESSION.md:107-109` |
@@ -81,10 +85,16 @@ its documentation says (`NATIVE_USAGE.md:3-10`, `:62-69`).
 
 **What no source below does, as far as read.** None compares one policy
 layer with the same logic replicated in each agent. The nearest are one
-live service measured with no comparand (S1), one architecture argued
-without experiments (O2), and one method compared with a centralized
-baseline, for the currency of plans, not for memory policy (S12). See
-"Not found".
+live service measured with no comparand (S1); one architecture argued
+without experiments (O2); one method compared with a centralized
+baseline, for the currency of plans, not for memory policy (S12); one
+benchmark that varies the topology (a coordinator or peer to peer) and
+the memory regime (private per agent, shared, hybrid), where what is
+shared is the model's judgment under privacy instructions, not a fixed
+rule (B7); one study that compares enforcement outside the model with
+the same rule given to each agent as an instruction, for tools, not
+memory (A17); and one guard between the agent and any backend, compared
+with a filter at the store, for revoked facts (B13). See "Not found".
 
 ## (a) 1. Shared or multi-agent memory
 
@@ -105,12 +115,16 @@ baseline, for the currency of plans, not for memory policy (S12). See
   ArgusFleet. Reported in §8.3: fleet-sibling visibility 117 of 120,
   0.975 [0.929, 0.991]; cross-fleet leaks 0 of 80, 0.000 [0.000, 0.046];
   on 8 dedicated facts under strong write mode, a write-to-visible
-  window of median 0.83 s and at most 1.97 s. Reported in §8.4:
-  supersession in 90 of 90 fact-runs where both contradictory writes
-  were admitted, 1.000 [0.959, 1.000]; detection 98 of 200 overall,
-  because the synchronous dedup gate rejected 206 of 400 writes; stale
-  reads 0 of 200. Three production findings are instances in part (b):
-  conditions 5, 6 and 7.
+  window of median 0.83 s and at most 1.97 s, which S1 reads as one
+  search round-trip: "all 8 facts surfaced on the poller's first search
+  after the write" (§8.3), and the window is "effectively zero [...] not
+  as a post-write read-visibility lag" (§9.4). The cost shows as write
+  latency: p50 1,840 ms, p95 4,861 ms and p99 19,319 ms over the 194
+  writes that completed (§8.4). Reported in §8.4: supersession in 90 of
+  90 fact-runs where both contradictory writes were admitted, 1.000
+  [0.959, 1.000]; detection 98 of 200 overall, because the synchronous
+  dedup gate rejected 206 of 400 writes; stale reads 0 of 200. Three
+  production findings are instances in part (b): conditions 5, 6 and 7.
 
   Differs: one layer between the agents and the store, as ours, scoped
   by tenant, fleet, agent and trust level where ours has a user
@@ -122,7 +136,12 @@ baseline, for the currency of plans, not for memory policy (S12). See
   Each fact runs "a sequential writer pair separated by a small delay,
   and a concurrent pair dispatched simultaneously" (§7.2); as read, the
   counts are not reported apart. The full text has no occurrence of
-  "delet", "forget", "tombstone", "quota" or "flood".
+  "delet", "forget", "tombstone", "quota" or "flood". The service's own
+  repository (caura-ai/caura-memclaw; S1's authors give Caura.ai as
+  their affiliation) documents two differences from our kernel: each
+  agent keeps its own retrieval defaults (`caura_tune`), where our
+  kernel applies its own, and its delete is a soft delete (part (b),
+  conditions 4 and 8).
 
 - **S2. Architecture perspective.** "Multi-Agent Memory from a Computer
   Architecture Perspective: Visions and Challenges Ahead". Zhongming Yu,
@@ -225,8 +244,12 @@ baseline, for the currency of plans, not for memory policy (S12). See
   explicit budgets, so the evidence a question inspects does not grow
   with the history." Reported: "It reaches 91.4% on LoCoMo and 72.6% on
   LongMemEval-S". Differs: "multi-agent" names the memory system's own
-  internal agents. The abstract describes single-user QA benchmarks, not
-  several application agents that share memory.
+  internal agents. The abstract reports QA benchmarks (it names LoCoMo,
+  LongMemEval-S and document QA) and agent-task benchmarks for
+  procedural memory (ALFWorld, WebShop and MetaClaw-Bench, where it
+  "reaches 49.2% on MetaClaw-Bench, against 44.0% for MetaClaw's skill
+  library"); none, as described, has several application agents sharing
+  memory.
 
 - **S8. S-Bus.** "S-Bus: Automatic Read-Set Reconstruction for
   Multi-Agent LLM State Coordination". Sajjad Khan. arXiv:2605.17076, v1
@@ -285,8 +308,9 @@ baseline, for the currency of plans, not for memory policy (S12). See
   abandons a conflicted transaction reaches 9.6 +/- 1.7% unrecoverable
   aborts"; "Every headline metric is measured on real PostgreSQL."
   Differs: a layer outside the agents for writes to shared state and
-  their rollback. It gives no read-after-write guarantee to a consumer
-  and has no users or visibility.
+  their rollback. The abstract claims "per-step serializability" among
+  the writing agents; it does not discuss a reader that is not one of
+  them, users or visibility.
 
 - **S11. Multi-Agent Memory Inconsistency.** "Multi-Agent Memory
   Inconsistency: Where Factual Conflicts Disappear in LLM Agents". Hejia
@@ -303,9 +327,11 @@ baseline, for the currency of plans, not for memory policy (S12). See
   conflict detection falls from 16.2% to 13.2%"; "workers report both
   claims for only 35.2% of retrieved pairs". Differs: "memory" here is
   each worker's context and its handoff to a lead agent inside one task.
-  No persistent store, users or policy layer. It shows a conflict
-  between two statements getting lost between agents, which is what our
-  contradiction probe asks of a store.
+  No persistent store, users or policy layer. It measures whether a
+  conflict between two statements is surfaced across a delegation. Our
+  contradiction probe instead requires the later writer's statement to
+  win (`BENCHMARK_V2.md:237-238`), so the two treat a reported conflict
+  in opposite ways.
 
 - **S12. Planfence.** "Fresh Memory, Stale Plans: Derivation Currency
   for Distributed LLM-Agent Memory". Evan Chen, Shiqiang Wang,
@@ -387,9 +413,10 @@ baseline, for the currency of plans, not for memory policy (S12). See
   older notes is why our forget also deletes notes whose generated text
   carries a forgotten value (`AMEM_BACKEND.md:268-282`).
 
-- **S17. Letta, shared memory blocks (vendor documentation).** Letta
-  Docs, "Shared memory". No date on the page; it covers "Letta's legacy
-  v1 API". Requested
+- **S17. Letta, shared memory: the legacy block design and the current
+  repositories (vendor documentation).** Letta Docs, "Shared memory",
+  the legacy page. No date on the page; it covers "Letta's legacy v1
+  API". Requested
   https://docs.letta.com/guides/agents/multi-agent-shared-memory, served
   at https://docs.letta.com/v1-sdk/memory/shared-memory. Accessed
   2026-11-20. Read: the page.
@@ -401,9 +428,26 @@ baseline, for the currency of plans, not for memory policy (S12). See
   some agents but writable for others." Its table of concurrent edits is
   an instance in part (b), condition 5. The page also says: "Memory
   blocks may be deprecated in the future. We do not recommend building
-  on memory blocks anymore." Differs: sharing is attachment. Every
-  attached agent reads the whole block: no rule per row, no user
-  partition inside a block, no ordering beyond what each edit tool does.
+  on memory blocks anymore. Use shared memory repositories for new work,
+  and make a best effort to migrate agents to MemFS." Differs (legacy
+  blocks): sharing is attachment. Every attached agent reads the whole
+  block: no rule per row, no user partition inside a block, no ordering
+  beyond what each edit tool does.
+
+  The current design, on the page the legacy one links: Letta Docs,
+  "Shared memory", https://docs.letta.com/concepts/shared-memory, read
+  as its page and its `index.md` copy. No date on the page. Accessed
+  2026-11-20. "Each shared memory repository is a Git repository hosted
+  in Letta Cloud and owned by your organization."; "Older Letta API
+  guides use shared memory blocks [...] users should migrate to shared
+  memory repositories instead."; "The agent must commit and push its
+  changes. Other agents can then pull those commits into their own
+  checkouts." Differs (repositories): sharing is a Git repository
+  attached to agents of one organization. Another agent's write reaches
+  a reader after the writer pushes and the reader pulls, so what a read
+  sees rests on each agent's commits and syncs; as read, no rule per row
+  and no user partition inside a repository. An instance in part (b),
+  condition 5.
 
 - **S18. This project's own workshop paper (not independent work).**
   "Kernel-Managed Shared Memory for System-Wide Personalization". Ryan
@@ -421,6 +465,123 @@ baseline, for the currency of plans, not for memory policy (S12). See
   centralized and per-agent memory control; no search was made on names.
   The NeurIPS 2026 AgenticOS workshop page lists it (O9). How the
   main-track paper cites it is an open decision.
+
+- **S19. MAP-Graph.** "MAP-Graph: Provenance-Aware Shared Memory for
+  Multi-Agent Workflows". Yiqi Wang, Zihao Yan, Jiaqi Zhang, Zhangkai
+  Wu, Mingkai Zheng, Zequn Sun, Yanming Zhu, Taotao Cai.
+  arXiv:2608.10509, v1 11 Aug 2026, cs.AI; no venue on the page.
+  https://arxiv.org/abs/2608.10509. Accessed 2026-11-20. Read: abstract.
+
+  Does: "a provenance-aware memory layer that represents agents,
+  sources, memories, claims, and actions in a typed execution graph. It
+  traces ancestry, excludes permission-ineligible records, reranks
+  eligible memories by semantic similarity and multiplicative path
+  trust, and applies a risk-sensitive gate before action execution".
+  Reported on 2,700 synthetic tasks per method across three domains:
+  94.96% overall task success and 72.70% exact decision accuracy;
+  "Ablations isolate the roles of permission filtering, path trust, and
+  action gating". Differs: one layer that drops records an agent may not
+  see before ranking, as our visibility rule does before selection; its
+  permissions follow provenance through derived records such as
+  summaries, where ours read the owner and sharing fields of each row.
+  The abstract names no users, ordering across writers, deletion or
+  quota.
+
+- **S20. MAPLE-Guard.** "MAPLE-Guard: Memory-Aware Link Enforcement
+  Against Memory-Link Poisoning in Multi-Agent Systems". Wenjun Xiong,
+  Yijin Zhou, Jiaqian Wang, Shangding Gu, Bo Tang, Zhiyu Li, Feiyu
+  Xiong, Ying Wen, Muning Wen. arXiv:2608.00426, v1 1 Aug 2026, v2 3 Oct
+  2026, cs.MA; comments: "27 pages, 14 figures, 9 tables. Includes
+  examples that may be misleading or harmful. Code: this https URL".
+  https://arxiv.org/abs/2608.00426. Accessed 2026-11-20. Read: abstract.
+
+  Does: against poisoning, where "a poisoned memory can be written once,
+  continuously retrieved in later tasks, promoted into shared memory,
+  and reused by other agents", it "places gates at write, retrieval,
+  promotion, and cross-agent reuse". Reported: attack success "from
+  38.2% to 0.9% on LongMemEval and from 34.7% to 0.2% on AppWorld".
+  Differs: gates at the points where our layer acts (write, retrieval,
+  sharing between agents), deciding on content risk; ours decide on
+  owner, user, session, write count and forgotten values.
+
+- **S21. Concurrency anomalies.** "Verified Detection and Prevention of
+  Concurrency Anomalies in Multi-Agent Large Language Model Systems".
+  Sajjad Khan (also the author of S8). arXiv:2606.17182, v1 15 Jun 2026,
+  cs.LG; comments: "32 pages, 2 figures, 6 tables. Verus/TLA+
+  verification artifact, reference Rust runtime, and Python harnesses,
+  plus a supplementary appendix (Sections A-F, Tables S1-S6), included
+  as ancillary files". https://arxiv.org/abs/2606.17182 and
+  https://arxiv.org/html/2606.17182v1. Accessed 2026-11-20. Read:
+  abstract; of the full text, §III-A and the deer-flow passages (§I-A,
+  §VI-E).
+
+  Does: "Multi-agent LLM systems share state through memory stores,
+  vector indices, and tool registries." It formalizes "four concurrency
+  anomalies in TLA+: stale-generation, phantom-tool, causal-cascade, and
+  tool-effect reordering" and verifies detectors and runtimes against
+  them; "We reproduce a silent lost update in ByteDance's deer-flow".
+  Its stale-generation anomaly (§III-A, Definition 1, paraphrased: the
+  HTML renders its math badly): agent A reads a cell; while A is
+  generating, agent B writes a new value to the cell; A then commits on
+  the value it read. Differs: anomalies of read-generate-write
+  operations on shared state. Its stale-generation is a read made stale
+  by another agent's write after it; ours is a read that misses a write
+  accepted before it. No users, visibility or deletion in the abstract.
+  The deer-flow lost update is an instance in part (b), condition 5.
+
+- **S22. CAMA.** "Beyond Memory Majority: Latent-Source Reasoning for
+  Multi-Agent Memory Arbitration". Chenchen Lin, Wenhao Yuan, Xuehe
+  Wang, Edith Cheuk Han Ngai. arXiv:2608.19701, v1 20 Aug 2026, cs.AI;
+  no venue on the page. https://arxiv.org/abs/2608.19701. Accessed
+  2026-11-20. Read: abstract.
+
+  Does: "memories written by different agents may inherit the same
+  upstream source or shared bias, causing correlated evidence to be
+  repeatedly counted and creating a false majority" ("Memory Correlation
+  Bias"); CAMA estimates "the effective number of independent evidence
+  sources" and retrieves alternative evidence before deciding. No
+  numbers in the abstract. Differs: how a consumer weighs several
+  agents' memories of one fact, by their sources. Our selector does not
+  weigh agreement; under supersession it keeps the latest statement of a
+  slot (responsibility 6). The same concern as B9.
+
+- **S23. LEGOMem.** "LEGOMem: Modular Procedural Memory for Multi-agent
+  LLM Systems for Workflow Automation". Dongge Han, Camille Couturier,
+  Daniel Madrigal Diaz, Xuchao Zhang, Victor Rühle, Saravan Rajmohan.
+  arXiv:2510.04851, v1 6 Oct 2025, cs.AI; no venue on the page.
+  https://arxiv.org/abs/2510.04851. Accessed 2026-11-20. Read: abstract.
+
+  Does: splits past task trajectories into memory units allocated
+  "across orchestrators and task agents", "examining where memory should
+  be placed, how it should be retrieved, and which agents benefit most";
+  on OfficeBench, "orchestrator memory is critical for effective task
+  decomposition and delegation, while fine-grained agent memory improves
+  execution accuracy". Differs: where procedural memory sits between an
+  orchestrator and its agents, for task success; our placement question
+  is where the policy over a user's memory runs. No users, privacy or
+  deletion in the abstract.
+
+- **S24. CrewAI, crew memory (vendor documentation).** CrewAI Docs,
+  "Memory". Requested https://docs.crewai.com/en/concepts/memory, served
+  at https://docs.crewai.com/v1.15.44/en/concepts/memory; read as its
+  page and its Markdown copy. No date shown; page metadata: modified
+  2026-11-19. Accessed 2026-11-20. Read: the page.
+
+  Does: "All agents in the crew share the crew's memory unless an agent
+  has its own."; "Agents can use the crew's shared memory (default) or
+  receive a scoped view for private context." A memory can be marked
+  private: "Private memories are only visible to recall when the
+  `source` matches", and a recall with `include_private=True` carries
+  the comment "Admin access: see all private records regardless of
+  source". "When you call `remember()` without specifying a scope, the
+  LLM analyzes the content and the existing scope tree, then suggests
+  the best placement." The page offers private memories for "multi-user
+  or enterprise deployments where different users' memories should be
+  isolated." Differs: isolation is keyed on a `source` string the caller
+  passes at recall, and one argument of a recall lifts it; where a
+  memory without a scope goes is an LLM's choice. Ours keys the
+  partition on the user id and visibility on the owner and sharing
+  fields of each row (responsibilities 1 to 3).
 
 ## (a) 2. Memory access control
 
@@ -609,12 +770,16 @@ baseline, for the currency of plans, not for memory policy (S12). See
   memories reach 90 to 100% top-k placement; and "only hard
   post-retrieval ownership gating consistently restores the clean
   baseline (1.00/5)", at a measured overhead of about 1.4 ms per query.
-  Differs: one shared store with and without an ownership gate, not
-  several agents. Its winning mitigation is the check our user partition
-  makes after retrieval. An instance in part (b), condition 7.
+  Differs: several users' personal agents over one shared store
+  ("Personal AI agents in enterprise multi-tenant deployments share a
+  common vector store for long-term memory"), with and without an
+  ownership gate; not several agents of one user, and no rule between
+  agents in the abstract. Its winning mitigation is the check our user
+  partition makes after retrieval. An instance in part (b), condition 7.
 
 - **A10. Mem0, entity-scoped memory (vendor documentation).** Mem0 Docs,
-  "Entity-Scoped Memory". No date on the page.
+  "Entity-Scoped Memory". No date shown; page metadata: modified
+  2026-08-03.
   https://docs.mem0.ai/platform/features/entity-scoped-memory. Accessed
   2026-11-20. Read: the page.
 
@@ -648,20 +813,25 @@ baseline, for the currency of plans, not for memory policy (S12). See
   in part (b), condition 1.
 
 - **A12. LangSmith, per-user store isolation (vendor documentation).**
-  "Isolate store data per user - Docs by LangChain". No date on the
-  page. https://docs.langchain.com/langsmith/store-auth. Accessed
-  2026-11-20. Read: the page.
+  "Isolate store data per user - Docs by LangChain". No date shown; page
+  metadata: modified 2026-11-16.
+  https://docs.langchain.com/langsmith/store-auth. Accessed 2026-11-20.
+  Read: the page.
 
   Does: "By default, store namespaces are shared across all callers."
   "Store isolation requires a @auth.on.store handler." The handler
   "either validates that the namespace starts with that identity, or
   rewrites the namespace to prepend it." Differs: isolation is opt-in,
-  written by the deployer as an authorization hook on the server; ours
-  is on by default. One rule per deployment on the server, as ours, but
-  for users only, not visibility between agents.
+  written by the deployer as an authorization hook on the server. Ours
+  partitions by the claimed user id by default; binding the id to an
+  authenticated session needs the deployment to open kernel sessions
+  (`STRESS_DIMENSIONS.md:387-402`), as LangSmith's isolation needs the
+  deployer's handler. One rule per deployment on the server, as ours,
+  but for users only, not visibility between agents.
 
 - **A13. Graphiti, graph namespacing (vendor documentation).** Zep
-  Documentation, Graphiti, "Graph Namespacing". No date on the page.
+  Documentation, Graphiti, "Graph Namespacing". No date shown; page
+  metadata: modified 2026-09-23.
   https://help.getzep.com/graphiti/core-concepts/graph-namespacing.
   Accessed 2026-11-20. Read: the page.
 
@@ -673,7 +843,92 @@ baseline, for the currency of plans, not for memory policy (S12). See
   replace application authorization." Differs: the backend leaves
   authorization to each caller, the per-agent convention our native
   Graphiti cell follows. Ours derives the user from the kernel session
-  (responsibility 3).
+  when the request carries a session token (responsibility 3).
+
+- **A14. MEXTRA.** "Unveiling Privacy Risks in LLM Agent Memory". Bo
+  Wang, Weiyi He, Shenglai Zeng, Zhen Xiang, Yue Xing, Jiliang Tang,
+  Pengfei He. arXiv:2502.13172, v1 17 Feb 2025, v2 3 Jun 2025, cs.CR;
+  comments: "ACL 2025 (Main Conference)".
+  https://arxiv.org/abs/2502.13172 and
+  https://arxiv.org/html/2502.13172v2. Accessed 2026-11-20. Read:
+  abstract; full text (HTML v2), §2.2 and the Limitation section.
+
+  Does: a black-box Memory EXTRaction Attack on agents that store
+  "private user-agent interactions in the memory module for
+  demonstrations", tested on two agents. The attacker's goal is to
+  extract as many past user queries from memory as possible (§2.2,
+  paraphrased: the passage holds math). Its Limitation section: "the
+  agent framework we consider does not incorporate session control:
+  multiple users may share the same session, causing the memory module
+  to store historical records from all users. Introducing user-level and
+  session-level memory isolation would limit attackers' access to
+  private data and mitigate the impact of memory extraction. However,
+  since there is no standard method for integrating session control into
+  agent frameworks, we leave its exploration for future work." Differs:
+  one agent's memory pooled across users and attacked through queries.
+  The mitigation it names and leaves untested, user-level and
+  session-level isolation, corresponds to our responsibilities 1 and 3.
+  An instance in part (b), condition 7.
+
+- **A15. SPORE.** "Isolated but Exposed: Persistence-Based Memory
+  Extraction Attack on LLM Agents". Xinyu Gao, Wenyu Chen, Xiangtao
+  Meng, Li Wang, Chuanchao Zang, Jianing Wang, Zheng Li, Shanqing Guo.
+  arXiv:2607.23444, v1 26 Jul 2026, cs.CR; no venue on the page.
+  https://arxiv.org/abs/2607.23444. Accessed 2026-11-20. Read: abstract.
+
+  Does: "Production systems mitigate extraction risks through memory
+  isolation, binding each user's LTM to a unique identifier." A
+  malicious tool reads memory that agents "embed [...] in tool
+  invocation parameters", "without violating user-level isolation".
+  Reported: "SPORE achieves an 80.0% record extraction rate with
+  unlimited triggers and 47.0% with only 20 triggers." Its conclusion:
+  "memory isolation alone is insufficient". Differs: the channel, tool
+  parameters, lies outside what our layer controls; the user partition
+  holds and the data leaves through the agent's tool calls.
+
+- **A16. Microsoft Foundry Agent Service, memory scope (vendor
+  documentation).** Microsoft Learn, "Create and use memory in Foundry
+  Agent Service", last updated 2026-10-06,
+  https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/memory-usage;
+  and "What is Memory?", last updated 2026-06-02,
+  https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/what-is-memory.
+  Accessed 2026-11-20. Read: both pages.
+
+  Does: with the memory search tool, "set scope to {{$userId}} to enable
+  per-user memory isolation without hard-coding identifiers". The user
+  then comes from a header or from authentication: "x-memory-user-id
+  request header: If present, the header value is used as the user ID.
+  Use this in proxy or backend scenarios where your service calls the
+  API on behalf of an end user."; "If the header isn't set, the system
+  falls back to the caller's tenant ID (TID) and object ID (OID)."
+  Elsewhere the caller sets it: "For low-level memory APIs, you must set
+  scope explicitly in each request. Automatic scope resolution from the
+  caller's identity is only supported when you use the memory search
+  tool with scope set to {{$userId}}." The best practices say "Use the
+  scope property to partition the memory store by user." Quotas include
+  "Maximum memories per scope: 10,000". Differs: by default the scope
+  comes from authentication, as our session binding; a header the
+  backend sets overrides it, and the low-level APIs take it from the
+  caller, as our claim path does. As read, no rule between agents of one
+  user.
+
+- **A17. Prompts Don't Protect.** "Prompts Don't Protect: Architectural
+  Enforcement via MCP Proxy for LLM Tool Access Control". Rohith Uppala.
+  arXiv:2605.18414, v1 18 May 2026, v3 27 Aug 2026, cs.CR; comments: "7
+  pages, 4 tables, 2 figures. Camera-ready version accepted to the EMNLP
+  2026 Industry Track; adds benign-utility and abstention evaluation,
+  latency percentiles, and revised limitations".
+  https://arxiv.org/abs/2605.18414. Accessed 2026-11-20. Read: abstract.
+
+  Does: "when unauthorized tools are visible in an agent's context,
+  models select them in 48-68% of adversarial scenarios, even when
+  explicitly instructed not to"; "explicit per-tool allowlists reduce
+  violations to as low as 4.0% but never to zero"; a proxy "filters tool
+  registries at discovery time. Because unauthorized tools never reach
+  the model context, UIR is 0% by design". Differs: tools, not memory.
+  It compares enforcement outside the model with the same rule given to
+  each agent as an instruction; ours compares one enforcement point with
+  the same code run in each agent.
 
 ## (a) 3. Agent operating systems
 
@@ -681,17 +936,30 @@ baseline, for the currency of plans, not for memory policy (S12). See
   Mei, Xi Zhu, Wujiang Xu, Wenyue Hua, Mingyu Jin, Zelong Li, Shuyuan
   Xu, Ruosong Ye, Yingqiang Ge, Yongfeng Zhang. arXiv:2403.16971, v1 25
   Mar 2024, v5 12 Aug 2025, cs.OS; comments: "Published as a full paper
-  at COLM 2025". https://arxiv.org/abs/2403.16971. Accessed 2026-11-20.
-  Read: abstract. First posted in 2024: background.
+  at COLM 2025". https://arxiv.org/abs/2403.16971 and
+  https://arxiv.org/html/2403.16971v5. Accessed 2026-11-20. Read:
+  abstract; full text (HTML v5), §3.5, §3.8, A.5 and A.8. First posted
+  in 2024: background.
 
   Does: "isolating resources and LLM-specific services from agent
   applications into an AIOS kernel", which provides "fundamental
   services (e.g., scheduling, context management, memory management,
   storage management, access control)". Reported: "up to 2.1x faster
-  execution for serving agents built by various agent frameworks".
-  Differs: the system ours is built on. Its abstract names memory
-  management and access control as kernel services; it does not describe
-  a shared memory policy between agents.
+  execution for serving agents built by various agent frameworks". Its
+  access manager "assigns each agent to a specific privilege group" and
+  validates requests against it, "ensuring agents can only access
+  resources of other agents within their shared privilege domain"
+  (§3.8); its interface has `check_access(self, sid, tid)`, which
+  "Checks if the source agent is in the target agent's priviledge group"
+  (A.8, the source's spelling). Its memory manager keeps each agent's
+  memory in a memory block and evicts items to storage past a limit, by
+  LRU-K (§3.5, Figure 5), for "transient session-specific data that
+  clears when agent sessions end" (A.5). Differs: the system ours is
+  built on. Its kernel checks access between agents by privilege group,
+  agent to agent and per resource, and keeps a memory block per agent.
+  As read, it has no user partition, no sharing policy per row, no
+  identity binding, no ordering across writers, no deletion of carriers
+  and no write quota (the block limit is a capacity limit).
 
 - **O2. AgentKernel.** "AgentKernel: The Trust-Native Agentic Operating
   System". Zhenhua Zou, Sheng Guo, Qiuyang Zhan, Lepeng Zhao, Shuo Li,
@@ -762,14 +1030,32 @@ baseline, for the currency of plans, not for memory policy (S12). See
   Xi, Chunyu Li, Ding Chen, Boyu Chen and 34 more (39 authors on the
   page). arXiv:2507.03724, v1 4 Jul 2025, v4 3 Dec 2025, cs.CL;
   comments: "36 pages, 10 figures, 5 tables".
-  https://arxiv.org/abs/2507.03724. Accessed 2026-11-20. Read: abstract.
+  https://arxiv.org/abs/2507.03724 and
+  https://arxiv.org/html/2507.03724v4. Accessed 2026-11-20. Read:
+  abstract; full text (HTML v4), §5.4.2 and §5.5.1-5.5.2 read, §6
+  searched.
 
   Does: "we propose MemOS, a memory operating system that treats memory
   as a manageable system resource", unifying plaintext, activation and
   parameter memories; "a MemCube encapsulates both memory content and
-  metadata such as provenance and versioning." Differs: an OS for the
-  kinds of memory one model uses. The abstract does not discuss
-  visibility between agents, users or access control.
+  metadata such as provenance and versioning." A central module,
+  MemGovernance, "establishes a ternary permission model involving the
+  user identity, the memory object, and the calling context, supporting
+  private, shared, and read-only access policies", and "Each memory
+  request undergoes identity authentication and contextual validation to
+  prevent unauthorized access" (§5.5.1). MemVault keeps "namespaces such
+  as user-private stores, expert knowledge bases, industry-shared
+  repositories" (§5.5.2). The scheduler's dispatch is "governed by
+  MemGovernance, which enforces user-role boundaries, rate limits, and
+  lifecycle policies" (§5.4.2). Differs: our placement, one module that
+  every memory request passes, naming visibility, identity
+  authentication and a rate limit. As read, §5 describes these only in
+  the sentences quoted; nothing found on ordering a read after other
+  writers' writes or on a delete that removes every carrier of a fact.
+  §6, the evaluation, has no occurrence of "permission", "access
+  control", "MemGovernance", "governance", "privacy", "private" or
+  "shared": it evaluates none of the governance. Its tracker's deletion
+  bug is an instance in part (b), condition 8.
 
 - **O7. MemoryOS.** "Memory OS of AI Agent". Jiazheng Kang, Mingming Ji,
   Zhe Zhao, Ting Bai. arXiv:2506.06326, v1 30 May 2025, cs.AI; in the
@@ -802,14 +1088,34 @@ baseline, for the currency of plans, not for memory policy (S12). See
   another agent's change, not in a memory store. It is the runtime
   analogue of our concurrency condition.
 
-- **O9. Venues.** Two workshop pages, read for their programs. NeurIPS
+- **O9. Venues.** Three workshop pages, read for their programs. NeurIPS
   2026, "AgenticOS: Co-designing Systems and ML Foundations of an OS
   Layer for Agentic AI", Fri, Dec 11, 2026; it lists S10, A8 and S18.
   https://neurips.cc/virtual/2026/workshop/137493. "AgenticOS @ SOSP
   2026 | 2nd Workshop on OS Design for AI Agents", September 29, 2026,
   Congress Hotel Prague; its program lists O3, O8 and "Isolation in the
   Age of Agents" (Anjali, Michael Swift), which was not read.
-  https://os-for-agent.github.io/. Both accessed 2026-11-20.
+  https://os-for-agent.github.io/. That page names "Previous edition:
+  ASPLOS 2026": "The 1st Workshop on Operating Systems Design for AI
+  Agents", March 23, 2026, Pittsburgh, USA; no paper title on its
+  program is about memory.
+  https://os-for-agent.github.io/asplos-2026.html. All three accessed
+  2026-11-20.
+
+- **O10. Cerebrum, the AIOS SDK (background to our setup).** "Cerebrum
+  (AIOS SDK): A Platform for Agent Development, Deployment,
+  Distribution, and Discovery". Balaji Rama, Kai Mei, Yongfeng Zhang.
+  arXiv:2503.11444, v1 14 Mar 2025, cs.MA; comments: "Accepted to the
+  2025 Annual Conference of the North American Chapter of the
+  Association for Computational Linguistics (NAACL) - System
+  Demonstration Track". https://arxiv.org/abs/2503.11444. Accessed
+  2026-11-20. Read: abstract.
+
+  Does: "a comprehensive SDK featuring a modular four-layer architecture
+  for agent development, encompassing LLM, memory, storage, and tool
+  management", with an Agent Hub and a web interface. Differs: the SDK
+  through which our agents send their memory requests to the kernel; it
+  describes an interface, not a policy over memory several agents share.
 
 ## (a) 4. Memory benchmarks
 
@@ -918,18 +1224,31 @@ baseline, for the currency of plans, not for memory policy (S12). See
   Kumar, Cem Subakan, Spandana Gella, Pierre-André Noël, Perouz
   Taslakian, Eugene Bagdasarian, Valentina Zantedeschi.
   arXiv:2607.05318, v1 6 Jul 2026, v2 19 Oct 2026, cs.MA; no venue on
-  the page. https://arxiv.org/abs/2607.05318. Accessed 2026-11-20. Read:
-  abstract.
+  the page. https://arxiv.org/abs/2607.05318 and
+  https://arxiv.org/html/2607.05318v2. Accessed 2026-11-20. Read:
+  abstract; full text (HTML v2), §1, §4.2 and §5.2.
 
   Does: information may leak "internally across users through
   inter-agent messages, shared memory and user-agent interactions"; each
   item has "dual CI annotations: whether a piece of information is
   appropriate for the task, and which users may legitimately access it".
   Finding: "results are bottlenecked by incorrect LLM judgment calls".
-  No numbers in the abstract. Differs: it measures what models decide to
-  pass on; our layer removes that decision from the model for the user
-  partition and visibility. Close to our privacy probe and
-  `cross_user_rows`.
+  The full text evaluates "three agentic system topologies: a single
+  agent with access to all data, a centralized multi-agent system in
+  which all communication routes through a coordinator, and a
+  decentralized peer-to-peer system", under "three memory regimes:
+  private per-agent memory, shared memory, and hybrid" (§1). Private
+  memory is "readable and writable only by that agent"; shared memory
+  has "universal read and write access"; hybrid tests "whether the
+  backbone can tell what belongs in which" (§4.2). Reported in §5.2
+  (paraphrased, the HTML renders the numbers as math): total visibility
+  violations rise from 14.9 to 28.0% without memory to 35.6 to 50.0%
+  with hybrid memory. Differs: it measures what models decide to pass
+  on, under privacy instructions in the prompt; our layer removes that
+  decision from the model for the user partition and visibility. Its
+  centralized topology routes messages through a coordinator; it does
+  not move a memory policy into one place. Close to our privacy probe
+  and `cross_user_rows`.
 
 - **B8. CoMemBench.** "CoMemBench: Benchmarking Collaborative Memory
   Boundaries across Multi-Agent Workflow Topologies". Sen Zhao, Ruiqi
@@ -1012,6 +1331,113 @@ baseline, for the currency of plans, not for memory policy (S12). See
   2.0%." Differs: carriers in other modalities; ours are text only.
   Single user. An instance in part (b), condition 8.
 
+- **B13. Revocation enforcement.** "Revoked but Still Authoritative: An
+  Empirical Study of Revocation Enforcement in Agent-Memory Systems". Yi
+  Ting Shen, Kentaroh Toyoda, Alex Leung. arXiv:2609.08258, v1 8 Sep
+  2026, cs.AI; comments: "Code is available at this https URL".
+  https://arxiv.org/abs/2609.08258 and
+  https://arxiv.org/html/2609.08258v1. Accessed 2026-11-20. Read:
+  abstract; full text (HTML v1), §1, §3.3, §4.1, §4.2 and §5.2 read, the
+  rest searched.
+
+  Does: loads five memory systems, "Graphiti and Zep [9], which share
+  one engine, mem0 [2], langmem [6] and cognee [13]" (§1), with a
+  revoked policy and its replacement, and measures whether the revoked
+  fact is returned and acted on, over nine scenarios and nine models,
+  under five defense conditions and a no-defense baseline. Abstract: "no
+  system enforces revocation by default: the revoked fact is returned
+  wherever the revocation label is visible to the retrieval layer,
+  outranks its replacement, and leads agents to the unsafe action." §4.1
+  (numbers paraphrased: the HTML sets them as math): on both exposed
+  systems the revoked fact was returned in every scenario, 81 of 81
+  each, and "ranked above the policy that replaced it"; it led agents to
+  the unsafe action in 358 of 810 trials on Graphiti (44.2%) and 341 of
+  810 on "mem0 (exp.)" (42.1%). "mem0 (exp.)" is "mem0 with the
+  expiry-flag override enabled": by default mem0 "filters it at read
+  time", "the shipped filter we disable in mem0 (exp.)" (§4.1). Under
+  "the store-level filter" no unsafe action occurred (0 of 1,620). It
+  proposes "a guard that sits between the agent and any memory backend
+  and withholds records that are revoked or conflict with their
+  replacement"; where the store exposes a mark, the guard "matches the
+  store-level filter" (§5.2). Differs: one user's policy facts, measured
+  on the backends themselves; it places its guard between the agent and
+  any backend, where our selector's supersession stage sits
+  (responsibility 6). It measures Graphiti and Mem0, two of our
+  backends; no version of either is stated as read (no occurrence of
+  "graphiti-core" or "mem0ai"), and we pin mem0ai 2.0.2 and
+  graphiti-core 0.31.2 (`requirements.txt:41`, `:45`). Our Graphiti
+  cells record Graphiti's own invalidations apart from the kernel's
+  supersession and credit them to no locus
+  (`GRAPHITI_BACKEND.md:307-313`). An instance in part (b), condition 8
+  (supersession).
+
+- **B14. AgentLeak.** "AgentLeak: A Benchmark for Internal-Channel
+  Privacy Leakage in Multi-Agent LLM Systems". Faouzi El Yagoubi, Godwin
+  Badu-Marfo, Ranwa Al Mallah. arXiv:2602.11510, v1 12 Feb 2026, v3 15
+  Jun 2026, cs.AI; comments: "19 pages, 9 figures, 16 tables. Code and
+  dataset available at this https URL".
+  https://arxiv.org/abs/2602.11510. Accessed 2026-11-20. Read: abstract.
+
+  Does: "sensitive data may pass through inter-agent messages, shared
+  memory, and tool arguments"; it instruments "seven privacy-relevant
+  communication pathways" over "1,000 scenarios". Reported: "multi-agent
+  configurations reduce final-output leakage (C1: 27.2% vs 43.2% in
+  single-agent mode) compared with single-agent baselines but introduce
+  internal channels that raise total system exposure to 68.9%
+  (aggregated across C1, C2, C5)". Differs: leakage by channel inside
+  one coordinator-worker task, measured on execution traces; not one
+  user's long-term memory shared by agents across sessions, and no
+  policy layer. Shared memory is one of its channels.
+
+- **B15. MemArena.** "MemArena: An Ego-Centric Benchmark for On-Device
+  Agentic Personal Memory Assistants at Scale". Jiadong Zhang, Xiaosong
+  Ma. arXiv:2608.02613, v1 20 May 2026, v2 2 Oct 2026, cs.CL; comments:
+  "Accepted at NeurIPS 2026 (Evaluations & Datasets Track). 53 pages.
+  Code: this https URL data: this https URL".
+  https://arxiv.org/abs/2608.02613. Accessed 2026-11-20. Read: abstract.
+
+  Does: "a single-world conversational benchmark built with its MASim
+  agent simulator, for 50 agents over 15 days", with ground truth over
+  "six recall, reasoning, and trustworthiness evaluation dimensions",
+  and five open-weight readers over "Vanilla context, BM25-RAG, Oracle
+  retrieval, Memobase, and MemSearch as memory backends". Reported:
+  "Permission-aware access fails in two distinct modes: Oracle leaks
+  heavily, while the other backends fail to surface the protected fact."
+  Differs: a personal assistant's memory of its owner's conversations,
+  with permission-aware access scored on answers; no layer between
+  several agents and one store in the abstract.
+
+- **B16. PersonaMem (a single-user analogue).** "Know Me, Respond to Me:
+  Benchmarking LLMs for Dynamic User Profiling and Personalized
+  Responses at Scale". Bowen Jiang, Zhuoqun Hao, Young-Min Cho, Bryan
+  Li, Yuan Yuan, Sihao Chen, Lyle Ungar, Camillo J. Taylor, Dan Roth.
+  arXiv:2504.14225, v1 19 Apr 2025, v2 27 Oct 2025, cs.CL; comments:
+  "The 2025 Conference on Language Modeling (COLM)".
+  https://arxiv.org/abs/2504.14225. Accessed 2026-11-20. Read: abstract.
+
+  Does: "over 180 simulated user-LLM interaction histories, each
+  containing up to 60 sessions of multi-turn conversations across 15
+  real-world tasks"; the model must pick "the most suitable response
+  according to the current state of the user's profile". Reported:
+  frontier models "achieving only around 50% overall accuracy". Differs:
+  one user and one model, with an evolving profile: the single-user
+  analogue of our profile and task-context facts and of our recency
+  probe. No memory shared by agents.
+
+- **B17. PrefEval (a single-user analogue).** "Do LLMs Recognize Your
+  Preferences? Evaluating Personalized Preference Following in LLMs".
+  Siyan Zhao, Mingyi Hong, Yang Liu, Devamanyu Hazarika, Kaixiang Lin.
+  arXiv:2502.09597, v1 13 Feb 2025, cs.LG; comments: "Accepted at ICLR
+  2025 as oral presentation. Code and data at: this https URL".
+  https://arxiv.org/abs/2502.09597. Accessed 2026-11-20. Read: abstract.
+
+  Does: "3,000 manually curated user preference and query pairs spanning
+  20 topics", in conversations of up to 100k tokens. Reported: "in
+  zero-shot settings, preference following accuracy falls below 10% at
+  merely 10 turns (~3k tokens) across most evaluated models." Differs:
+  one user's stated preferences in one long conversation, the
+  single-user analogue of our profile facts; no store shared by agents.
+
 ## (b) Documented instances of the stress conditions
 
 For each condition: ours in brief, with where it is defined; each
@@ -1028,8 +1454,8 @@ are not named. An entry of part (a) is cited by its tag.
 email form `<user_id>@users.example` (V2, `HETEROGENEITY.md:138-163`). A
 writer tags its requests with another user's id (`wrong_user`,
 `STRESS_DIMENSIONS.md:379-432`). The kernel canonicalizes the first
-(`HETEROGENEITY.md:76-104`) and binds the user from the kernel session
-for the second (`STRESS_DIMENSIONS.md:387-402`).
+(`HETEROGENEITY.md:76-104`) and, for the second, binds the user from the
+kernel session that the harness opens (`STRESS_DIMENSIONS.md:387-402`).
 
 - **V. Amazon Bedrock AgentCore, the actor id.** The FGAC page (A11):
   "The primary isolation pattern requires that the actorId on a request
@@ -1048,15 +1474,17 @@ for the second (`STRESS_DIMENSIONS.md:387-402`).
   misses agent-attributed memories", opened 2026-06-03, closed as not
   planned 2026-10-06. "The Mem0 memory provider writes memories with
   both `user_id` and `agent_id`, but reads them back with only
-  `user_id`." The reporter's counts: 153 memories under the user-only
-  filter, 3,379 with an OR filter that adds the agents' scopes. The
-  closing comment: the provider moved into Mem0's own plugin, where
+  `user_id`." The reporter's counts for one user id: 153 memories under
+  the user-only filter; 3,379 with an OR filter that adds one agent's
+  scope (`hermie`), rows that carry three agent ids, and 153 with none.
+  The closing comment: the provider moved into Mem0's own plugin, where
   "reads still filter on `user_id` only, and their code now documents
   that as intentional".
   https://github.com/NousResearch/hermes-agent/issues/38424, accessed
-  2026-11-20. How close: our V2 on the consumer side: a writer and a
-  reader of one deployment key the same user differently, and the reader
-  misses rows. A miss, not a leak, as V2 predicts.
+  2026-11-20. How close: the same user id on both sides; the writer adds
+  an agent scope that the reader's filter leaves out, so the reader
+  misses rows. V2's effect (a miss, not a leak), caused by a scope
+  convention, not a user-id convention.
 
 - **T and V. Mem0, an AND of two identifiers.** mem0ai/mem0 issue #3218,
   "No memories are returned when filtering by both user_id and
@@ -1071,6 +1499,25 @@ for the second (`STRESS_DIMENSIONS.md:387-402`).
   extracted fact) and the reader's (both) disagree, and the read returns
   nothing.
 
+- **T. LlamaIndex and CrewAI, the same AND in two integrations.**
+  run-llama/llama_index issue #20492, "[Bug]: Mem0 integration does not
+  work if both `user_id` and `agent_id` are provided", opened
+  2026-01-16, closed as completed 2026-01-24: "memories from user chat
+  messages are stored with the parameter `user_id`, while assistant chat
+  messages are stored with the parameter `agent_id`. But on search, both
+  these filters are applied and nothing is found." crewAIInc/crewAI
+  issue #3220, "[BUG] Mem0 Memory Save / Search Issue", opened
+  2025-07-25 by a member of the crewAI organization, closed as not
+  planned by a bot after inactivity on 2025-09-04: "All the message
+  which are sent to Mem0 are sent as `assistant` message. There memory
+  will be tagged as `agent_id` only."; "`Agent_id` has been dropped, we
+  don't send agent_id parameter while sending the mem0 search request."
+  https://github.com/run-llama/llama_index/issues/20492 and
+  https://github.com/crewAIInc/crewAI/issues/3220, accessed 2026-11-20.
+  How close: integration reports of the AND of identifiers above: the
+  writer files a turn under one identifier, the reader asks for another
+  or for both, and the read misses rows. Reports, not measurements.
+
 - **T. Mem0, scope set through metadata.** mem0ai/mem0 pull request
   #6656, "fix(memory): stop add() metadata from setting a memory's
   identity scope", merged 2026-08-04. Before it, metadata could carry
@@ -1079,9 +1526,24 @@ for the second (`STRESS_DIMENSIONS.md:387-402`).
   to reads filtered on those scopes. After it: "Passing an entity param
   is unchanged and remains the only way to set scope."
   https://github.com/mem0ai/mem0/pull/6656, accessed 2026-11-20. How
-  close: our `wrong_user`: where a write was filed followed the caller's
-  own claim. The fix closes one channel; scope still comes from the
-  caller's arguments.
+  close: a claim of agent scope decided where the row was filed. In our
+  terms that is the owner field, which the kernel fills from the request
+  (`HETEROGENEITY.md:180`), not the user id; the user-id case is #6278,
+  next. The fix closes one channel; scope still comes from the caller's
+  arguments.
+
+- **T. Mem0, update() metadata that sets the user id.** mem0ai/mem0 pull
+  request #6278 (condition 7): before it, an update's metadata could set
+  the `user_id` under which the memory is filed. How close: our
+  `wrong_user`: the caller's own claim decided which user's scope the
+  row is filed under. A merged fix, 2026-07-21.
+
+- **T. Hermes Agent, one fixed id for every user.**
+  NousResearch/hermes-agent pull request #5895 (condition 7): memory
+  plugins filed every gateway user's memory under one static identifier.
+  How close: the agent tagged memory with a fixed id instead of the
+  user's, though the gateway knew the user (the fix passes
+  `source.user_id`). A merged fix, 2026-04-07.
 
 - **T. n8n with Zep, one user under many ids.** n8n community forum,
   "The N8N and ZEP memoyintegration is not accurately set up", posted
@@ -1094,10 +1556,12 @@ for the second (`STRESS_DIMENSIONS.md:387-402`).
 
 - **Not found.** A measurement of how often agents of one deployment tag
   a request with another user's id, or with another convention for the
-  same user. Searched (2026-11-20): reports of agent memory stored under
-  the wrong user id, or of identity mismatch, for LangGraph, Letta, Zep
-  and Mem0. The search returned vendor posts and forum threads; the
-  primary ones are above.
+  same user. Two merged fixes (Mem0 #6278, Hermes #5895) document the
+  mechanism of a misfiled user id; neither measures it. Searched
+  (2026-11-20): reports of agent memory stored under the wrong user id,
+  or of identity mismatch, for LangGraph, Letta, Zep and Mem0. The
+  search returned vendor posts and forum threads; the primary ones are
+  above.
 
 ## (b) 2. Missing metadata
 
@@ -1154,6 +1618,13 @@ other loci do and is protected only from the leak
 - **Ours, a known limit.** The kernel's documented limitation: "Legacy
   unscoped memories are excluded" (`SHARED_MEMORY_SYSTEM.md:473`).
 
+- **Ours, met at a backend.** The Zep Cloud provider, removed in Subtask
+  16: "Zep stored text only, so the required metadata was lost and its
+  rows failed the user partition and the visibility rule"
+  (`PROVIDER_CONTRACT.md:175-177`). The outcome V3 predicts (rows lost
+  to the partition and the visibility rule), caused by a backend that
+  dropped the fields, not by an agent that omitted them.
+
 - **Not found.** A published measurement of agents that omit ownership
   or sharing metadata. Searched (2026-11-20): agent memory records
   missing a user id or metadata after a write. The papers V3's grounding
@@ -1193,20 +1664,23 @@ block (`HETEROGENEITY.md:114-136`). Every trial records
   under V1.
 
 - **V. Mem0's migration guide.** Mem0 Docs, "Open Source: Migrating to
-  the New Memory Algorithm". No date on the page. Entity ids for
-  `search()` and `get_all()` move inside `filters` ("top-level kwargs
-  now raise ValueError"); defaults change: `top_k` 100 to 20,
-  `threshold` None to 0.1, `rerank` True to False; "The new algorithm
-  collapses this into a single call that only adds."; "Graph memory is
-  removed from OSS." https://docs.mem0.ai/migration/oss-v2-to-v3,
-  accessed 2026-11-20. How close: the documented changes behind the two
-  issues above. Agents on the two sides of it, sharing one store, read
-  with different defaults.
+  the New Memory Algorithm". No date shown; page metadata: modified
+  2026-08-05. Entity ids for `search()` and `get_all()` move inside
+  `filters` ("top-level kwargs now raise ValueError"); defaults change:
+  `top_k` 100 to 20, `threshold` None to 0.1, `rerank` True to False;
+  "The new algorithm collapses this into a single call that only adds.";
+  "Graph memory is removed from OSS."
+  https://docs.mem0.ai/migration/oss-v2-to-v3, accessed 2026-11-20. How
+  close: the documented changes behind the two issues above. Agents on
+  the two sides of it, sharing one store, read with different defaults.
 
 - **T. Mem0 Platform, an undocumented change.** In issue #5224
   (condition 2), a maintainer: "`search()` and `get_all()` now return a
   `400` error if `filters` is omitted entirely. This is a breaking
   change from v2 that isn't documented in the v2 → v3 migration guide."
+  Its link is the Platform guide,
+  https://docs.mem0.ai/migration/platform-v2-to-v3 (not fetched), not
+  the open-source guide above.
   https://github.com/mem0ai/mem0/issues/5224, accessed 2026-11-20.
 
 - **V. Mastra's memory defaults.** Mastra docs, the v1 migration guide
@@ -1259,34 +1733,23 @@ itself shipped (`HETEROGENEITY.md:193-196`). In the kernel the
 consumer's settings have no channel, except under the ablation
 `consumer_config: honor` (`HETEROGENEITY.md:68`, `ABLATION.md:34-48`).
 
-- **T. Mem0, a threshold applied to distances.** mem0ai/mem0 issue
-  #4453, "fix: threshold filtering broken for distance-based vector
-  stores", opened 2026-03-20, labelled "P1-high", closed 2026-06-05 by
-  pull request #5391, whose body says "Closes #4453". "The threshold
-  check assumes scores are similarity (higher = better), but many vector
-  stores return raw distance (lower = better)." The result: "good
-  matches get dropped and bad matches pass through." The fix "normalizes
-  all 11 affected backends to return similarity scores"; before it,
-  "Distances > 1.0 get capped to 1.0 → all scores collapse to identical
-  values, no ranking signal". https://github.com/mem0ai/mem0/issues/4453
-  and https://github.com/mem0ai/mem0/pull/5391, accessed 2026-11-20. How
-  close: one threshold means different things on different backends. V4
-  meets the same problem: native Mem0's scores are "saturated near 1.0"
-  (`HETEROGENEITY.md:205`), so a 0.5 threshold drops nothing there and
-  most rows on in-house.
-
-- **T. Mem0 on MongoDB, k before the user filter.** mem0ai/mem0 issue
-  #7072, "bug(vector_stores/mongodb): search() applies filters after
-  $vectorSearch's top_k limit, so scoped users get too few or zero
-  results", opened 2026-08-22, open. "if the `top_k` vectors nearest the
-  query all belong to user `bob`, then `search(top_k=5,
-  filters={"user_id": "alice"})` returns 0 even when `alice` has many
-  relevant memories". The report says the same class was reported for
-  FAISS (#6998) and Cassandra (#6867), which were not read.
-  https://github.com/mem0ai/mem0/issues/7072, accessed 2026-11-20. How
-  close: a small k applied before the user filter starves one user's
-  reads. What k does depends on the backend, as V4's k 5 does on Mem0
-  (`HETEROGENEITY.md:209`).
+- **V. Caura (MemClaw), per-agent retrieval defaults on a shared
+  store.** The service S1 measures, in its own repository,
+  caura-ai/caura-memclaw: the README (read as
+  https://raw.githubusercontent.com/caura-ai/caura-memclaw/main/README.md)
+  says "MemClaw is now Caura" ("same product, one name") and lists
+  "Per-agent retrieval tuning": "each agent optimizes its own retrieval
+  profile (top_k, min_similarity, graph_max_hops, blend weights) from
+  feedback". The integration guide (`static/docs/integration-guide.md`
+  on main) describes the tool `caura_tune`: "Persist per-agent retrieval
+  defaults (top_k, min_similarity, fts_weight, freshness, recall boost,
+  graph hops, similarity blend) until changed again".
+  https://github.com/caura-ai/caura-memclaw, accessed 2026-11-20; the
+  main branch when read, and S1 does not say which version it measured,
+  as read. How close: our V4 built in by design: agents that share one
+  store each keep their own retrieval settings. Our kernel applies its
+  own (`HETEROGENEITY.md:68`). A documented feature, with no measurement
+  of its effect as read.
 
 - **V. Defaults an agent inherits.** Mem0's migration guide changes
   `top_k` 100 to 20 and `threshold` None to 0.1; Mastra's changes `topK`
@@ -1294,12 +1757,32 @@ consumer's settings have no channel, except under the ablation
   two agents built against different versions get different retrieval
   settings without choosing them.
 
+- **T. Related: Mem0, a threshold applied to distances.** mem0ai/mem0
+  issue #4453, "fix: threshold filtering broken for distance-based
+  vector stores", opened 2026-03-20, labelled "P1-high", closed
+  2026-06-05 by pull request #5391, whose body says "Closes #4453". "The
+  threshold check assumes scores are similarity (higher = better), but
+  many vector stores return raw distance (lower = better)." The result:
+  "good matches get dropped and bad matches pass through." The fix
+  "normalizes all 11 affected backends to return similarity scores";
+  before it, "Distances > 1.0 get capped to 1.0 → all scores collapse to
+  identical values, no ranking signal".
+  https://github.com/mem0ai/mem0/issues/4453 and
+  https://github.com/mem0ai/mem0/pull/5391, accessed 2026-11-20.
+  Related, not an instance: a backend bug that makes one fixed setting
+  mean different things on different backends. V4 meets the same
+  problem: native Mem0's scores are "saturated near 1.0"
+  (`HETEROGENEITY.md:205`), so a 0.5 threshold drops nothing there and
+  most rows on in-house. Mem0 #7072, a k applied before the user filter,
+  is under condition 7.
+
 - **Not found.** A documented incident or measurement in which agents
   that share one store use different retrieval settings and so see
-  different memories. Searched (2026-11-20): changes of a retrieval
-  threshold or top_k default that broke recall, in Mem0, Letta, LangMem
-  and Zep. The instances concern one consumer's settings against a
-  backend.
+  different memories. Caura documents such settings as a feature
+  (above), with no measurement of their effect as read. Searched
+  (2026-11-20): changes of a retrieval threshold or top_k default that
+  broke recall, in Mem0, Letta, LangMem and Zep. The other entries
+  concern inherited defaults and a backend bug.
 
 ## (b) 5. Concurrent writers
 
@@ -1312,9 +1795,10 @@ covers only its own writes (`STRESS_DIMENSIONS.md:264-293`,
 `REPLICATED_LOGIC.md:72-79`). The failure measured is a read that misses
 an accepted write still in flight, not a lost update.
 
-- **V. Letta, concurrent edits of one block.** Letta Docs, "Shared
-  memory" (S17). Its concurrency table marks `memory_rethink` "No
-  (last-writer-wins)", and the page says: "Anti-pattern : Multiple
+- **V. Letta, concurrent edits of one block (the legacy block API).**
+  Letta Docs, "Shared memory", the legacy page (S17). Its concurrency
+  table, which belongs to the legacy block API, marks `memory_rethink`
+  "No (last-writer-wins)", and the page says: "Anti-pattern : Multiple
   agents doing memory_rethink on the same block simultaneously leads to
   lost updates." Its advice: designate one agent as the owner for heavy
   edits and let the others append. Served at
@@ -1323,13 +1807,25 @@ an accepted write still in flight, not a lost update.
   block. A different failure from ours, and the remedy is a convention
   each agent must follow.
 
+- **V. Letta, shared memory repositories: a write is seen after a push
+  and a pull.** Letta Docs, "Shared memory", the current page (S17):
+  "The agent must commit and push its changes. Other agents can then
+  pull those commits into their own checkouts."; "Later synchronization
+  fast-forwards the local checkout from its remote."
+  https://docs.letta.com/concepts/shared-memory, accessed 2026-11-20.
+  How close: our missed read, built into the design: another agent's
+  write reaches a reader only through the writer's push and the reader's
+  pull, so a read before them misses it. The page names no point that
+  orders a read after other agents' writes, as read; each agent's own
+  syncs decide, as in our replicated locus.
+
 - **V. Graphiti, overlapping writes to one graph.** Zep Documentation,
-  Graphiti, "Concurrent Ingestion". No date on the page. "Serial
-  ingestion does not put overlapping calls in order. Await each
-  add_episode call for one graph before you start the next call for that
-  graph." The opt-in concurrent mode runs several episodes at once, and
-  "Each episode then commits in the order of its call"; "The mode is not
-  tested on Neo4j or Amazon Neptune."
+  Graphiti, "Concurrent Ingestion". No date shown; page metadata:
+  modified 2026-11-15. "Serial ingestion does not put overlapping calls
+  in order. Await each add_episode call for one graph before you start
+  the next call for that graph." The opt-in concurrent mode runs several
+  episodes at once, and "Each episode then commits in the order of its
+  call"; "The mode is not tested on Neo4j or Amazon Neptune."
   https://help.getzep.com/graphiti/core-concepts/concurrent-ingestion,
   accessed 2026-11-20. How close: the backend leaves the order of
   concurrent writers to the caller. The page addresses one caller; it
@@ -1384,15 +1880,23 @@ an accepted write still in flight, not a lost update.
   https://arxiv.org/html/2605.17076v2, accessed 2026-11-20. How close:
   lost updates on shared state; ours measures missed reads.
 
-- **P. Governed Shared Memory, the window and the dedup race.** S1,
-  §8.3: under strong write mode, a write-to-visible window of median
-  0.83 s and at most 1.97 s on 8 facts; "its cost is paid in the write
-  latency". §8.4 and §9.2: "concurrent writes race at the dedup gate",
-  and "the synchronous gate can reject a write before the asynchronous
-  detector ever sees it." https://arxiv.org/html/2606.24535v1, accessed
-  2026-11-20. How close: the nearest measurement of a cross-agent
-  read-after-write window in a shared memory service. One service,
-  self-measured, no comparand.
+- **P. Governed Shared Memory, no missed read under strong writes, and
+  the dedup race.** S1, §8.3: on 8 dedicated facts, each polled from
+  write completion, under strong write mode, "all 8 facts surfaced on
+  the poller's first search after the write", with a median
+  time-to-visible of 0.83 s and at most 1.97 s, "itself essentially one
+  search round-trip"; "its cost is paid in the write latency". §9.4:
+  measured "with tight per-fact polling at low contention", the window
+  "is effectively zero", and "the consistency cost is paid in the write
+  latency, not as a post-write read-visibility lag": write latency p50
+  1,840 ms and p99 19,319 ms over the 194 writes that completed (§8.4).
+  §8.4 and §9.2: "concurrent writes race at the dedup gate", and "the
+  synchronous gate can reject a write before the asynchronous detector
+  ever sees it." https://arxiv.org/html/2606.24535v1, accessed
+  2026-11-20. How close: S1 measured no missed read under strong mode,
+  on 8 facts at low contention, with polling that starts when the write
+  returns; a read issued while a write is still in flight, our case, was
+  not measured. One service, self-measured, no comparand.
 
 - **P. AC-Saga, CoAgent and Concord.** S10 and S9 control conflicting
   writers of a database or task state. O8 measures stale observations in
@@ -1400,11 +1904,21 @@ an accepted write still in flight, not a lost update.
   analogue of our missed read, in the context window rather than the
   store.
 
+- **P. deer-flow, a silent lost update.** S21 reproduces "a silent lost
+  update in ByteDance's deer-flow" from the project's open issue #3123:
+  "a todo list is visible during streaming but disappears once the run
+  completes", which the project's regression test attributes to "a
+  downstream node's partial state update with todos=None overwriting the
+  accumulated value under the default last-write-wins channel" (§VI-E).
+  https://arxiv.org/html/2606.17182v1, accessed 2026-11-20. How close: a
+  lost update in an agent application's state, not in a memory store,
+  and not a missed read. Issue #3123 was not read.
+
 - **Not found.** A documented production instance in which one agent
-  read before another agent's accepted memory write was searchable,
-  apart from S1's measurement of the window. Searched (2026-11-20):
-  Mem0's asynchronous add and the Platform's pending status; concurrent
-  writes in Mem0, Letta and Graphiti.
+  read before another agent's accepted memory write was searchable; S1
+  measured none under strong mode. Searched (2026-11-20): Mem0's
+  asynchronous add and the Platform's pending status; concurrent writes
+  in Mem0, Letta and Graphiti.
 
 ## (b) 6. Flooding
 
@@ -1451,9 +1965,29 @@ tested (`STRESS_DIMENSIONS.md:658-660`).
   against a shared namespace because the same daily cap applied to
   both." https://docs.rs/crate/ai-memory/0.7.1/source/src/quotas.rs,
   accessed 2026-11-20. How close: the one per-agent write quota read
-  here. Its key is agent and namespace, per day; ours is writer, user
-  and session (`STRESS_DIMENSIONS.md:477-493`). Its own recorded flaw
-  was a key too coarse for an agent that writes to several scopes.
+  here; AgentCore's limit (next) is the other write limit read with a
+  key finer than the tenant. Its key is agent and namespace, per day;
+  ours is writer, user and session (`STRESS_DIMENSIONS.md:477-493`). Its
+  own recorded flaw was a key too coarse for an agent that writes to
+  several scopes.
+
+- **V. Amazon Bedrock AgentCore, write limits per actor and session.**
+  "Quotas for Amazon Bedrock AgentCore", section "AgentCore Memory
+  Service Quotas". No date on the page. "Maximum CreateEvent requests
+  per actor, per session, including conversational payloads": 5, not
+  adjustable, described as "The maximum number of CreateEvent requests
+  per second, per actor, per session, including conversational
+  payloads"; the same limit without conversational payloads is 10, and
+  IngestData has the same pair.
+  https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html,
+  accessed 2026-11-20. How close: keyed per actor and session, near ours
+  (writer, user and session). Two differences: it limits a rate, not a
+  count, and the actor is the identity the events are stored under, not
+  necessarily the writing agent: the FGAC page (A11) says Memory "stores
+  events and records under the actorId you supply", pairs it with "the
+  authenticated user or agent", and says deployments "often use an
+  internal user id as the actorId". Microsoft Foundry caps the count per
+  scope instead: "Maximum memories per scope: 10,000" (A16).
 
 - **P. Governed Shared Memory, a write ceiling.** S1, §8.2: "The server
   caps writes at 10 per second per tenant".
@@ -1523,6 +2057,32 @@ partition fails closed on a missing `user_id` (`RETRIEVAL_PATH.md:28`).
 Under `wrong_user`, misfiled rows leak into the victim's blocks in the
 replicated and native loci (`STRESS_DIMENSIONS.md:411-419`).
 
+- **T. Mem0, an update that refiles a memory under another user.**
+  mem0ai/mem0 pull request #6278, "fix(memory): don't let update()
+  metadata overwrite user_id/agent_id/run_id", merged 2026-07-21, whose
+  body says "Closes #6277". "Concretely: `m.update(memory_id,
+  metadata={"user_id": "someone_else"})` silently reassigns the memory
+  into another tenant's scope"; "it disappears from the original
+  tenant's `search()`/`get_all()`/`delete_all()` and appears under the
+  new tenant's, without either tenant intending it." The PR reports unit
+  tests that fail on `main` with the reassignment and pass with the fix.
+  https://github.com/mem0ai/mem0/pull/6278, accessed 2026-11-20. How
+  close: the mechanism of our `wrong_user`: a request's own metadata
+  decided which user's scope a row landed in, so the row reached another
+  user's reads. A merged fix; no leak was measured. Whether mem0ai 2.0.2
+  (`requirements.txt:41`) has the behavior was not checked.
+
+- **T. Hermes Agent, every gateway user's memory under one id.**
+  NousResearch/hermes-agent pull request #5895, "fix: thread gateway
+  user_id to memory plugins for per-user scoping", opened and merged
+  2026-04-07 by its author, a collaborator. "Memory plugins (Mem0,
+  Honcho) used static identifiers (`hermes-user`, config `peerName`)
+  meaning all gateway users shared the same memory bucket."
+  https://github.com/NousResearch/hermes-agent/pull/5895, accessed
+  2026-11-20. How close: every user's memory filed under one fixed id,
+  our `wrong_user` misfiling for all users at once, in an integration. A
+  merged fix; the PR gives no count of leaked rows.
+
 - **A. Open WebUI, CVE-2026-29071.** GitHub advisory
   GHSA-w9f8-gxf9-rhvw, "Open WebUI's Insecure Direct Object Reference
   (IDOR) allows access to other users' memories", published 2026-03-27
@@ -1537,6 +2097,36 @@ replicated and native loci (`STRESS_DIMENSIONS.md:411-419`).
   each) and one read path that did not check the owner. Our retrieval
   runs the partition check in one place, `retrieve_for_agent`, for the
   injector and SDK search alike (`RETRIEVAL_PATH.md:11-16`).
+
+- **A. Open WebUI, CVE-2026-44570.** GitHub advisory
+  GHSA-hmjq-crxp-7rjw, "Inconsistent authorization controls within
+  memories API", published by the repository 2026-05-05 and in the
+  GitHub Advisory Database 2026-05-11 (as "Open WebUI has inconsistent
+  authorization controls within memories API"); severity high, CVSS 3.1
+  score 8.3; CWE-639; affects open-webui < 0.6.19, patched in 0.6.19.
+  "Authorization controls surrounding the memories API were
+  inconsistent, resulting in the ability of a standard user to delete,
+  restore, and view the contents of other users' memories."; "a call to
+  `GET /api/v1/memories/` returns `[]` (as expected) but a call to `POST
+  /api/v1/memories/query` reveals memories created by other users."
+  https://github.com/open-webui/open-webui/security/advisories/GHSA-hmjq-crxp-7rjw
+  and https://github.com/advisories/GHSA-hmjq-crxp-7rjw, accessed
+  2026-11-20. How close: the listing filtered by user and a query path
+  did not, the same pattern as CVE-2026-29071. Its restore of deleted
+  memories is under condition 8.
+
+- **A. LibreChat, CVE-2025-54868.** GitHub repository advisory
+  GHSA-p5j8-m4wh-ffmw, "Reading of arbitrary Chats", published
+  2025-08-04; severity high, CVSS 3.1 score 7.5; CWE-285; affects v0.0.6
+  to v0.7.7, patched in v0.7.8. The GitHub Advisory Database's API
+  answered 404 for it when read. "The endpoint `/api/search/test` allows
+  for direct access to stored chats in the Meilisearch engine without
+  proper access control. This results in the ability to read chats from
+  arbitrary users."
+  https://github.com/LibreChat-AI/LibreChat/security/advisories/GHSA-p5j8-m4wh-ffmw,
+  accessed 2026-11-20. How close: a second read path, the search index,
+  with no owner check. Conversation history, not a memory store, as with
+  Cheshire Cat below.
 
 - **T. Cheshire Cat, the episodic memory listing.** cheshire-cat-ai/core
   issue #1136, "Episodic Memory IDOR -- Authenticated Users Can Read Any
@@ -1579,6 +2169,14 @@ replicated and native loci (`STRESS_DIMENSIONS.md:411-419`).
   accessed 2026-11-20. How close: the leak a missing partition causes,
   measured, and our partition's check as the fix.
 
+- **P. MEXTRA, memory pooled across users.** A14: without session
+  control, "multiple users may share the same session, causing the
+  memory module to store historical records from all users", and the
+  attack extracts past user queries through queries of its own.
+  https://arxiv.org/html/2502.13172v2, accessed 2026-11-20. How close:
+  an attack on a store with no user partition; our partition removes
+  other users' rows before the model sees them.
+
 - **P. Unintentional cross-user contamination.** "No Attacker Needed:
   Unintentional Cross-User Contamination in Shared-State LLM Agents".
   Tiankai Yang, Jiate Li, Yi Nian, Shen Dong, Ruiyao Xu, Ryan Rossi,
@@ -1619,9 +2217,28 @@ replicated and native loci (`STRESS_DIMENSIONS.md:411-419`).
   another user, through a cache-client bug, not a memory policy. Before
   2025: background.
 
-- **Not found.** Contamination caused by one agent writing under another
-  user's id (our `wrong_user` leak). The instances are read paths
-  without an owner check, pooled retrieval and intended sharing.
+- **T. Related: Mem0 on MongoDB, k before the user filter.** mem0ai/mem0
+  issue #7072, "bug(vector_stores/mongodb): search() applies filters
+  after $vectorSearch's top_k limit, so scoped users get too few or zero
+  results", opened 2026-08-22, open. "if the `top_k` vectors nearest the
+  query all belong to user `bob`, then `search(top_k=5,
+  filters={"user_id": "alice"})` returns 0 even when `alice` has many
+  relevant memories". The report says the same class was reported for
+  FAISS (#6998) and Cassandra (#6867), which were not read.
+  https://github.com/mem0ai/mem0/issues/7072, accessed 2026-11-20.
+  Related, not an instance: the user partition applied after k, so other
+  users' vectors starve one user's reads (a miss, not a leak). What k
+  does then depends on the backend, as V4's k 5 does on Mem0
+  (`HETEROGENEITY.md:209`).
+
+- **Not found.** No measured incident caused by one agent writing under
+  another user's id (our `wrong_user` leak); two merged fixes document
+  the mechanism (Mem0 #6278, Hermes #5895). The other instances are read
+  paths without an owner check, pooled retrieval and intended sharing.
+  Searched (2026-11-20): agent memory stored under a wrong user id that
+  then appears in another user's memories; the results were blog posts,
+  tutorials and sources already listed here. The two merged fixes were
+  found by this file's review and read for this revision.
 
 ## (b) 8. Incomplete deletion
 
@@ -1644,6 +2261,28 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
   https://github.com/mem0ai/mem0/issues/3245, accessed 2026-11-20. How
   close: a second carrier of the fact survives the delete, our notion of
   a carrier.
+
+- **T. MemOS, a delete that answers success while the memory stays
+  retrievable.** MemTensor/MemOS issue #2331, "删除记忆接口返回成功但记忆未实际删除"
+  (translated here: the delete-memory API returns success, but the
+  memory is not actually deleted), opened 2026-09-02 by an account that
+  the API lists as a collaborator and that also posts the project's
+  automated fix runs; open, labelled `types:bug` and
+  `status:in-progress`, when read. Its body, translated here: after a
+  delete returns success, the memory is still there and retrievable
+  after a page refresh, in three deletes in a row. Two fix pull requests
+  were closed unmerged: #2332 from that account (closed 2026-09-03) and
+  #2533 from an outside contributor (closed 2026-11-09), whose body says
+  "`Neo4jCommunityGraphDB.delete_node_by_prams()` deletes the matching
+  graph nodes but never purges their embeddings from `vec_db`. Retrieval
+  reads the vector store first, so a deleted memory stays retrievable
+  while the delete API still answers success".
+  https://github.com/MemTensor/MemOS/issues/2331,
+  https://github.com/MemTensor/MemOS/pull/2332 and
+  https://github.com/MemTensor/MemOS/pull/2533, accessed 2026-11-20. How
+  close: a second carrier, the vector, survives the delete, as in Mem0
+  #3245, in the system of O6. Not confirmed fixed: no fix was merged as
+  read.
 
 - **T. Mem0, stale links in the entity index.** mem0ai/mem0 issue #7226,
   "Entity-index cleanup is skipped in any process that has not written
@@ -1688,6 +2327,32 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
   https://github.com/getzep/graphiti/pull/2030, accessed 2026-11-20. How
   close: a write path that left nothing for a later delete to find;
   stored data stays affected.
+
+- **A. Open WebUI, a delete undone by a later write.** CVE-2026-44570
+  (condition 7): "The `DELETE /api/v1/memories/{memory_id}` can also be
+  used by any user to delete an existing memory. Deleted memories can
+  then be restored by calling the `POST
+  /api/v1/memories/{memory_id}/update` endpoint again."
+  https://github.com/open-webui/open-webui/security/advisories/GHSA-hmjq-crxp-7rjw,
+  accessed 2026-11-20. How close: a later write brings a deleted memory
+  back, what our deletion forbids ("no later write brings one back",
+  `DELETION_AND_SUPERSESSION.md:102-106`); here through an update path
+  with no owner check.
+
+- **V. Caura (MemClaw), a delete that keeps the row.** The service S1
+  measures; its integration guide (`static/docs/integration-guide.md` on
+  main, https://github.com/caura-ai/caura-memclaw): `caura_manage` with
+  "`op=delete` soft-deletes"; "Soft-deleted rows (`include_deleted=true`
+  on `GET /memories`, `GET /memories/stats`, `caura_list`,
+  `caura_stats`) and `POST /ingest/undo/{run_id}` need level 3 for an
+  agent credential"; a nightly job "Purges": "soft-deleted memories past
+  the tenant's retention window are removed", and "A deployment that
+  does not run `core-operations` runs none of these." Accessed
+  2026-11-20. How close: a deleted row stays in the store, readable by
+  an agent at trust level 3, until a purge after the tenant's retention
+  window; our forget deletes the rows and keeps a tombstone
+  (`DELETION_AND_SUPERSESSION.md:160-182`). A documented design, not a
+  failure report.
 
 - **V. OpenAI, deleting a remembered fact.** OpenAI Help Center, "Memory
   in ChatGPT". Requested
@@ -1735,9 +2400,24 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
   close: not deletion: a stale value kept by design, which our
   supersession (responsibility 6) retires.
 
+- **P. Related, supersession: revoked facts returned first.** B13: on
+  Graphiti by default, and on Mem0 with its shipped read-time filter
+  disabled, the revoked fact was returned in every scenario, 81 of 81
+  each, ranked above its replacement, and agents acted on it in 358 of
+  810 trials on Graphiti and 341 of 810 on Mem0 so configured.
+  https://arxiv.org/html/2609.08258v1, accessed 2026-11-20. How close:
+  not deletion: the stale value our supersession retires (responsibility
+  6), returned by two of our backends used as that study configured
+  them; versions not stated as read (B13).
+
 - **Not found.** An instance in which a deletion asked through one agent
   left the fact in another agent's rows. The instances are one system's
-  own carriers: graph, index, summary, chat.
+  own carriers: graph, index, summary, chat, vector, and rows kept on
+  purpose (soft delete). Searched (2026-11-20): a deletion in one
+  agent's memory that another agent's copy survives; a delete that
+  answers success while the memory stays retrievable. The results were
+  papers and vendor pages about one system's deletion; the leads not
+  already here are under "Not verified".
 
 ## Our docs' own citations, checked
 
@@ -1750,11 +2430,11 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
 - **`HETEROGENEITY.md:172-174`, V3's grounding**, cites "Agents that
   skip access control (the motivation of Collaborative Memory and
   SSGM)". Collaborative Memory's motivation (A1) is that most approaches
-  "assume a monolithic, single-user context", and that an earlier shared
-  pool "still overlooks user-level privacy or access constraints" (§2,
-  Related Work, full text). SSGM's (A5) is "critical concerns regarding
-  memory governance, semantic drift, and privacy vulnerabilities".
-  Neither documents agents that skip access control.
+  "assume a monolithic, single-user context" (abstract), and that an
+  earlier shared pool "still overlooks user-level privacy or access
+  constraints" (§2, Related Work, full text). SSGM's (A5) is "critical
+  concerns regarding memory governance, semantic drift, and privacy
+  vulnerabilities". Neither documents agents that skip access control.
 
 - **`STRESS_DIMENSIONS.md:540-541`** cites AgentPoison (Chen et al.
   2024) for memory poisoning: it matches the paper (condition 6).
@@ -1769,19 +2449,25 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
   search): centralized against per-agent memory access control in
   multi-agent LLM systems, shared-memory comparisons. The nearest: S1
   (one layer, no comparand), O2 (argued, no experiment), S12 (plans, not
-  memory policy).
+  memory policy), B7 (topology and memory regime, with the policy left
+  to the models), A17 (enforcement outside the model against
+  instructions, for tools) and B13 (a guard against a store filter, for
+  revoked facts).
 
 - **Per condition.** Identity mismatch: no measurement of how often
   agents tag the wrong user. Missing metadata: no measurement of agents
   omitting ownership or sharing fields. Version skew: no case of two
   agents on different library versions writing one store. Per-agent
-  tuning: no case of agents sharing a store with different retrieval
-  settings. Concurrent writers: no production report of a cross-agent
-  read that missed an accepted write, beyond S1's window. Flooding: no
-  measurement of a benign flood across agents, and no evaluation of a
-  per-writer quota. Cross-user contamination: no case caused by a write
-  misfiled under another user's id. Incomplete deletion: no case of a
-  deletion through one agent that left another agent's rows.
+  tuning: no incident or measurement of agents sharing a store with
+  different retrieval settings; one service documents them as a feature
+  (Caura). Concurrent writers: no production report of a cross-agent
+  read that missed an accepted write (S1 measured none under strong
+  mode). Flooding: no measurement of a benign flood across agents, and
+  no evaluation of a per-writer quota. Cross-user contamination: no
+  measured case caused by a write misfiled under another user's id; two
+  merged fixes document the mechanism (Mem0 #6278, Hermes #5895).
+  Incomplete deletion: no case of a deletion through one agent that left
+  another agent's rows.
 
 ## Not verified
 
@@ -1803,8 +2489,18 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
   OpenReview pages of S10, A8 and A9 were not fetched.
 
 - **Issues named but not read.** Mem0 #6998 and #6867 (named in #7072);
-  from the earlier attempt's search listings, Mem0 #7598, #7202, #4232,
-  #7715, #4863 and #6531, and Graphiti #1489 and #2165.
+  Mem0 #6277 (closed by #6278); deer-flow #3123 (named in S21); from the
+  earlier attempt's search listings, Mem0 #7598, #7202, #4232, #7715,
+  #4863 and #6531, and Graphiti #1489 and #2165.
+
+- **Leads from this revision's searches for conditions 7 and 8, not
+  read.** "Can Agents Truly Forget? Explore Machine Unlearning for LLM
+  Agents" (arXiv:2610.17659; the title as the search listing gives it)
+  and arXiv:2606.10062 (title not seen), which the search tool's summary
+  connects to deletion residue and tombstone redaction; and Anthropic's
+  API reference for deleting a memory from a memory store, which the
+  summary says does not delete the memory's versions. None was fetched,
+  so none is cited.
 
 - **The Asana MCP server incident of June 2025.** The earlier attempt's
   notes say only secondary coverage was found; it was not searched
@@ -1812,8 +2508,9 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
 
 - **The pinned backends.** Whether mem0ai 2.0.2 (`requirements.txt:41`)
   and graphiti-core 0.31.2 (`requirements.txt:45`) have the behaviors of
-  Mem0 #5160, #6515, #4453 or Graphiti #1837 was not checked. Where a
-  bug is fixed or absent in the pinned version, our runs do not meet it.
+  Mem0 #5160, #6515, #4453 or #6278, of Graphiti #1837, or the
+  revocation results of B13 was not checked. Where a bug is fixed or
+  absent in the pinned version, our runs do not meet it.
 
 - **Issue texts.** What an issue says is its author's report. A behavior
   counts as confirmed here only where a maintainer replied or a fix was
@@ -1835,15 +2532,22 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
 
 3. **Our groundings.** `HETEROGENEITY.md:144-147` and `:172-174` cite
    papers for claims they do not make. Options: keep; reword; replace
-   with part (b) instances (for example Hermes #38424 for V2, Mem0 #5160
-   or mcp-memory-ts for V3). Bears on the heterogeneity section's
-   motivation.
+   with part (b) instances (for example, for V2's effect, Hermes #38424,
+   a scope convention rather than a user-id one, or the n8n with Zep
+   report; for V3, Mem0 #5160, mcp-memory-ts or our own Zep provider).
+   Bears on the heterogeneity section's motivation.
 
 4. **Issue reports as evidence.** Options: cite user-filed issues; cite
    only maintainer-confirmed ones; cite only papers, advisories and
    vendor documents. Bears on how much of part (b) the paper can use.
 
 5. **The pinned backends.** Whether to check mem0ai 2.0.2 and
-   graphiti-core 0.31.2 against the issues of part (b) before citing
-   them as motivation. Bears on whether the paper may say our backends
-   have these failures.
+   graphiti-core 0.31.2 against the issues of part (b) and the
+   revocation results of B13 before citing them as motivation. Bears on
+   whether the paper may say our backends have these failures.
+
+6. **The entries read at abstract level.** Most entries added in this
+   revision (S19, S20, S22, S23, A15, A17, O10 and B14 to B17) were read
+   at abstract level only. Options: cite them as read; read the full
+   text of the ones the paper will cite. Bears on any statement that a
+   work does not do something.
