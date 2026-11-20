@@ -1222,9 +1222,9 @@ For the user; none is taken here.
    question a cell by our prices (A-MEM's about $5.77 at LightMem's).
    Bears on: whether the paper can say anything about Mem0, Graphiti
    or A-MEM on outside data.
-10. **A second model.** `gpt-4o` as consumer: $2.98 to $6.30 for seven
-    cells, and up to $8.40 more for their judging. Bears on: one model
-    or two.
+10. **A second model.** `gpt-4o` as consumer: $2.98 to $6.30 for the
+    seven judged cells, and up to $8.40 more for their judging. Bears
+    on: one model or two.
 11. **The derived records.** (a) a record type of the harness's own,
     without a profile; (b) `users_v2`'s type with placeholder profile,
     task context and follow-up query, which no agent may see. Bears on:
