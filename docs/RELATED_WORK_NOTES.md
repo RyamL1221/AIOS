@@ -11,8 +11,9 @@ left open.
 
 ## How to read these notes
 
-- **Access date.** Every URL below was fetched on 2026-11-20. Each entry
-  repeats the date.
+- **Access date.** Every URL below was fetched on 2026-11-20, except the
+  OpenReview links marked "not fetched". Each entry repeats the date. A
+  "requested" URL redirected to the "served" one.
 
 - **How a source was read.** arXiv pages were downloaded and read as
   text: the abstract page for the title, authors, versions, comments and
