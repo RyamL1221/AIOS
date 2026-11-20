@@ -13,9 +13,9 @@ AIOS `980cbc5` (Subtask 20's last edits); and the runs' own records in
 Cerebrum `results/<run>/` (`PROVENANCE.md` and the stored reports:
 `analysis.md`, `report.md`, `directions.md`, `summary.md`, `cells.csv`),
 as committed at Cerebrum `3b9c923`. `memory-providers.md` and
-`CONTRIBUTE.md` were read and hold no count or interval. No raw results
-file was opened and no code was run: where an entry speaks of code, it
-repeats what a document says of it.
+`CONTRIBUTE.md` were read and hold no count or interval. No project code
+or test was run, and no raw results file was opened: where an entry
+speaks of code, it repeats what a document says of it.
 
 **Subtask 20's last results** (2026-11-20) are committed in both
 repositories: the primary judge's reliability and its k, the agreement
@@ -102,9 +102,9 @@ opens: "It answers a reviewer's question (Jg94; claim C4 in the claims
 document): which of the kernel's responsibilities produce its advantage
 over the replicated and native loci?" `DEV_STATUS.md`, Subtask 19,
 repeats it: "(Jg94; claim C4)". The claims document is in neither
-repository (no tracked file of either has "claim" in its name, and `git
-grep` finds no other mention), and no document names C1, C2 or C3. The
-readings below are therefore this file's, each tied to the text that
+repository (no tracked file of either has "claim" in its name, and
+`git grep` finds no other mention), and no document names C1, C2 or C3.
+The readings below are therefore this file's, each tied to the text that
 states or tests it.
 
 **C1, locus.** Where the memory policy runs decides what the consumer
@@ -155,9 +155,9 @@ grows with the stress level.
   a property holds that only a layer seeing every writer can provide".
   Its measurements are judge-free: "No scored trial runs under these
   dimensions in this subtask: the scored runs wait for the full grid".
-- For agent count the same spec predicts no growth of the effect: "At H
-  > 0, the per-probe effect is flat in N; the number of deviating agents
-  grows."
+- For agent count the same spec predicts no growth of the effect: "At
+  H > 0, the per-probe effect is flat in N; the number of deviating
+  agents grows."
 
 So only heterogeneity has a scored, pre-registered result for C3. The
 other dimensions have judge-free results on 5 or 30 users.
@@ -262,10 +262,11 @@ or the document gives them.
 **C1.1 The replicated agents run the kernel's own code, and on the
 in-house backend the two loci build identical blocks.**
 - Numbers: the equivalence test gives byte-identical prompts and
-  identical diagnostics for 20 seeded users. In the v2 smokes the
-  in-house kernel and replicated blocks are identical in 180 of 180
-  paired probes (`s14b`, `s15b`, `s17`), in `s14b` the answers too. In
-  the functional checks: 30 of 30 probes (`f14c`, `f15a`, `f15b`).
+  identical diagnostics (without timings) for 20 seeded users. In the v2
+  smokes the in-house kernel and replicated blocks are identical in 180
+  of 180 paired probes (`s14b`, `s15b`, `s17`), in `s14b` the answers
+  too. In the functional checks: 30 of 30 probes (`f14c`, `f15a`,
+  `f15b`).
 - Run: AIOS `tests/modules/memory/test_pipeline_library.py` (Subtask 8);
   `s14b` (AIOS `208322c`, Cerebrum `2bb46b8`); `s15b` (AIOS `ef3fdc9`,
   Cerebrum `64da5f7`); `s17` (AIOS `612c989`, Cerebrum `2b9a776`).
@@ -823,7 +824,7 @@ predicted; a gap that grows with N is not tested.**
   that "the kernel is unaffected except cost" holds "for the kernel's
   own path but not for a backend that extracts per writer": 5 of the 60
   trials at N = 12 failed because Mem0 stored nothing for one sentence
-  (M.3).
+  (M.2).
 
 **C3.8 On benchmark v2 at H = 2 the pilot's two mechanisms appear again
 (5 users).**
@@ -1062,7 +1063,7 @@ building the benchmark:
   (the harness patched a name the agents did not use), and
   `memory_counts` was 0 in every trial, the workshop's included.
 - Mem0's `get_all` returns at most 20 rows unless told otherwise, and
-  returns them unranked (L.16).
+  returns them unranked (L.13).
 - Mem0 stored nothing for one vague sentence when its writer had written
   little for the user: 7 of 16 times with twelve agents and 1 of 6 under
   concurrency, never in 54 writes with three or six agents (known issue
@@ -1361,7 +1362,7 @@ that varies.**
   about ±2 injected rows with no change of condition. Mem0's extraction
   prompt holds the UTC date, which it writes into facts. Kernel against
   replicated on Mem0: the blocks differ in all 30 probes of `f14c`, and
-  10, 1 and 6 paired outcomes differ in the three smokes (C1.1). Mem0
+  some paired outcomes differ in each of the three smokes (C1.1). Mem0
   stored a contradiction without its "only" in 7 of 7 cells that sent it
   the utterance, and in `f14c` 15 of the 45 Mem0 update rows that
   reached a block carried the old value. Graphiti: "Azure GPT-4o at
@@ -1515,12 +1516,12 @@ never bound.**
   `76dc9f1` and `99933e4`); the history is the documents' reading of the
   commits.
 - Rests on: 150 generated users × 3 models, and code history.
-- Caveat: the documents give three values for the threshold of that
-  period. `HETEROGENEITY.md`: "`config.yaml.example` shipped
+- Caveat: the documents disagree on the threshold of that period.
+  `HETEROGENEITY.md`: "`config.yaml.example` shipped
   `relevance_threshold: 0.5` from 2026-04-12 to 2026-11-02";
   `SHARED_MEMORY_SYSTEM.md` gives "default 0.3" and describes
   `infer=False` and a provider-side sharing filter, which later subtasks
-  removed; since Subtask 5 the default is 0.0, "rank, drop nothing"
+  removed. Since Subtask 5 the default is 0.0, "rank, drop nothing"
   (`RETRIEVAL_PATH.md`; known issue 1). The workshop recorded no config
   (known issue 2), so which value it ran is not known; under `get_all`
   none acted. `REVALIDATION.md`: the workshop runs "are not cited as
@@ -1552,7 +1553,8 @@ recorded.**
 - Amendment 5 (during the Graphiti functional check): 3 of 720 Graphiti
   writes stored no fact and failed their trials; the rule was changed so
   that such a write is a lost memory and the trial is scored. Amendment
-  9 did the same for Mem0 writes that stored nothing (open decision 7).
+  9 did the same for a Mem0 write that stored nothing when Mem0 logged
+  no failure for it (open decision 7).
 - `f18b`: the load mode's predicted growth of the barrier wait "did not
   hold"; Mem0 stored nothing for one vague sentence when its writer had
   written little (7 of 16 times at N = 12, 1 of 6 under concurrency;
@@ -1613,9 +1615,10 @@ the memory system served.**
   final profile and task context. `BENCHMARK_V2.md`: v2's integration
   score "is not comparable with pilot_v1's integration".
 - Rests on: the definitions.
-- Caveat: so a judged locus difference says the consumer's answer used
-  more of the user's facts, which C1.6 and the block measures tie to
-  what reached the block. From Subtask 20 `profile_facts_in_answer` is
+- Caveat: so a judged locus difference says that the consumer's answer
+  used more of the user's facts. The documents tie the pilot's gap to
+  what reached the block through the judge-free measures of the same
+  trials (C1.6, C3.2). From Subtask 20 `profile_facts_in_answer` is
   recorded (judge-free, its own matcher, no paraphrases).
 
 **L.17 Documents that disagree, or describe an earlier state.**
@@ -1710,9 +1713,8 @@ Subtask 9 every Mem0 locus pays it.**
   instrumentation, not to compare conditions"
   (`cost_check/PROVENANCE.md`). From Subtask 9 the kernel's Mem0
   extracts too (`memory.mem0.infer: true`), and `p9d`'s per-trial costs
-  above are those of all three Mem0 loci. So the documents give no
-  storage-cost advantage for the kernel on Mem0 after Subtask 9; its
-  measured overheads are the selection and the scheduler (K.5).
+  above are those of all three Mem0 loci. So no document states a cost
+  advantage for the kernel on Mem0 after Subtask 9.
 
 **K.2 The pilot's recorded cost was about 16.4 USD for Qwen and 20.1 USD
 for GPT-4o; most of the Qwen cost is Mem0's extraction.**
@@ -1845,14 +1847,14 @@ it names no cell for a benchmark v1 result (`FULL_GRID.md`).
 | 150 users per cell | L.13 (the re-validation: generated users, three models, pre-registered); L.11 (the no-memory decision check: Qwen) | nothing for L.13; per-model `no_memory` cells are proposed (open decision 8) |
 | 30 users, pre-registered (the pilot, `pv1`) | C1.4, C1.6, C2.1, C3.1, C3.2 (3 users per variant and role), C3.3 (the pilot's part), L.1 | not stated |
 | 30 users, benchmark v1, no rule | C1.2, C1.3, C1.5, C1.11 (v1), C2.2, C2.3, K.1 (`p9d`), K.2 | not stated |
-| 30 users, benchmark v2 smokes (Qwen, H = 0) | C1.1 (the smoke counts), C1.7, C1.8 (H = 0), C1.9, C2.5, C2.6, L.6, K.3, K.4 (`s17`) | replaces them; adds native k = 30 on Graphiti |
+| 30 users, benchmark v2 smokes (Qwen, H = 0) | C1.1 (the smoke counts), C1.7, C1.8 (H = 0), C1.9, C2.5, C2.6, L.6, L.8, L.10, K.3, K.4 (`s17`) | replaces them; adds native k = 30 on Graphiti |
 | 30 users, stress and ablation smokes (in-house, Qwen, judge-free) | C3.4, C3.6, C4.1, C4.2, C4.3, C4.4 (in-house), K.6 (concurrency) | the stress cells' "scored runs wait for the grid"; one confirmatory ablation each on Graphiti and A-MEM, its switch open; a 150-user repeat of the in-house ablation cells is not stated |
-| 5 users (functional checks) | C1.8 (H = 2 and the control), C1.10, C1.11 (v2 control), C3.3 (the fault), C3.5, C3.7, C3.8, C4.2 (the match with replicated), C4.4 (Mem0), C4.5, C4.6, C4.7, C4.8, L.12, K.4 (`f19b`), K.6 (Mem0; load 16 users) | replaces them; C4.8's rows are scored there |
+| 5 users (functional checks) | C1.8 (H = 2 and the control), C1.10, C1.11 (v2 control), C3.3 (the fault), C3.5, C3.7, C3.8, C4.2 (the match with replicated), C4.4 (Mem0), C4.5, C4.6, C4.7, C4.8, L.12, K.4 (`f19b`), K.6 and C3.9 (Mem0; load 16 users) | replaces them; C4.8's rows are scored there |
 | 10 trials or 10 users | K.1 (Subtask 7), K.5 | not stated |
 | a calibration set (200 answers) | L.2, L.3 | each judge once per answer; the second judge on 45 of 150 users |
 | stored answers judged again | C2.4, L.1 (the four scores), L.3 | the grid judges in one window |
 | specs, code readings, unit tests | C1.1 (the equivalence test), L.4, L.5, L.7, L.9, L.15, L.16, L.17, M.3, M.4 | none |
-| incident and run records | M.1, M.2, L.14, L.18, K.7, K.8 | none |
+| incident and run records | C2.7, C4.9, M.1, M.2, L.14, L.18, K.7, K.8 | none |
 
 Open: one model carries every benchmark v2, stress, ablation and
 decision result (C2.7); only the grid can add a second.
@@ -1881,10 +1883,12 @@ here.
    either case, the formula, the components, or both. Bears on L.1,
    C1.4, C1.5, C3.1, and every v1 judged number.
 3. **The v2 smokes' judged means.** Every integration mean in C1.9 is a
-   hybrid of one judgment; only `pv1`, `pa17` and `s17a` were judged
-   again. Options: cite them as hybrids with that label; judge the other
-   smokes' stored answers again (no model run, as `s20_rejudge` did); or
-   cite no v2 judged mean before the grid. Bears on C1.9, C2.4.
+   hybrid of one judgment; of the v2 smokes only `s17a` was judged again
+   (`s20_rejudge`), and there the two judges gave kernel − replicated
+   opposite signs. Options: cite them as hybrids with that label; judge
+   the other smokes' stored answers again (no model run, as
+   `s20_rejudge` did); or cite no v2 judged mean before the grid. Bears
+   on C1.9, C2.4.
 4. **Native's place in the locus claim.** Kernel − native was never part
    of a rule; native differs by design in what it stores and retrieves
    (L.4), several of its results hold by construction (L.5), and known
