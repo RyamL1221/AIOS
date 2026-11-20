@@ -231,7 +231,7 @@ is written into `FULL_GRID.md` before the grid runs.
 The pilot's verdict stands as registered (`PILOT.md`, on the hybrid
 scores). As a robustness check it is recomputed, with the same rule, on
 the keyword score (from the stored records) and on the LLM score (from
-the primary judge's re-judge at its k), and all three are reported.
+each judge's re-judge at its k), and all four are reported.
 Condition (iii) is judge-free and does not change.
 
 ### Recording
@@ -371,7 +371,7 @@ Per decision item (`decision_results[]`):
 A decision turn that errors (no answer, a failed block, a consumer
 that raised) is recorded with `turn_error`, is not scored, and fails
 nothing. A cell's decision accuracy: correct over the scored items of
-trials that did not fail, with a Wilson interval, against chance 25%
+trials that did not fail, with a Wilson interval, against chance 0.25
 (four options); its error breakdown: each error kind's count and share
 of the scored items (`<error>_share`), and the items with a turn error
 (`turn_errors`). Judge-free.
@@ -382,6 +382,13 @@ kind and letter"): of the scored items that named one letter, per item
 `must_not_use`: `revoked` on `d1`, `private` on `d2`; `foreign`) with
 its share and Wilson interval; the letters picked and the items'
 correct letters, each with a chi-square test's p against uniform.
+
+In a cell with memory the model picks the options whose values its
+block holds (the correct ones where memory works), and the option
+shuffle set their letters, so there the p of the letters picked tests
+the shuffle, not the model: a 150-user cell that answered every `d2`
+item correctly would show p = 0.021. A model's letter lean shows in a
+`no_memory` cell (`FULL_GRID.md`, "The decision items").
 
 **The items without memory** (revision 4; Amendment 10's no-memory
 check over every user: Qwen, kernel locus, in-house, `no_memory`, 300
@@ -394,15 +401,53 @@ plausible to this model:
 - `d1`'s `stale` option (0.15 [0.10, 0.21]) and `d2`'s `correct` (0.17
   [0.12, 0.24]) and `private` (0.18 [0.13, 0.249]) options are picked
   less than chance;
-- the model leans to B (97 of 300, p = 0.03), the letter that is
-  correct least often (66 of 300).
-Paired comparisons are unaffected: every cell answers the same items.
-Two readings follow. The no-memory floor for this model is 0.18, not
+- the model leans to B (97 of 300, p = 0.03, the two items pooled),
+  the letter that is correct least often (66 of 300). The lean moves
+  the score by under 0.01: letters picked at its shares (A 66, B 97, C
+  72, D 65), whatever the item, would score 0.247 against the correct
+  letters (A 85, B 66, C 80, D 69; the sum over the letters of the
+  share picked times the share correct; 0.25 with even shares). The
+  0.18 is the options' doing, not the letters'.
+Within a model, two cells with the same blocks get the same prompts,
+so none of this makes a difference between them (Qwen answered every
+such pair of the functional check alike); where only one block holds
+both the current and the stale value, all of it can act on that side
+(`FULL_GRID.md`, "The decision items").
+Two readings follow. This model's accuracy without memory is 0.18, not
 0.25. And an error names a failure of the memory system only when the
 picked option's value is in the block (`options_in_block`): without it,
-a `foreign` pick is this lean, not a leak. In the functional check every
-`stale`, `revoked` and `foreign` error of a cell with memory had its
-value in the block (26 of 26).
+a `foreign` pick is the model's preference for that option, not a leak.
+In the functional check every `stale`, `revoked` and `foreign` error of
+an in-house cell with memory had its value in the block (26 of 26), and
+19 of 33 of a Mem0 cell's: native Mem0's blocks held the correct
+option's value on none of its 20 items, and 12 of its 15 errors were of
+a value not in the block.
+
+**What one letter, or the shortest statement, throughout would score**
+(2026-11-20; from `users_v2` revision 4 and the no-memory check's
+record; checks added in reading, not stated before):
+- one letter throughout: 0.22 (B) to 0.28 (A) on the 150 users
+  (correct letters A 85, B 66, C 80, D 69), 0.18 to 0.32 on `d2` (A
+  48, B 29, C 46, D 27), and 0.13 to 0.37 on `pilot_v2`'s 30 users (A
+  22, B 8, C 22, D 8: an uneven draw, p = 0.0045 against uniform; the
+  other 120 users have A 63, B 58, C 58, D 61);
+- the shortest statement (in characters; a tie counted half)
+  throughout: 0.38 (0.33 on `d1`, 0.43 on `d2`). The correct option is
+  alone the shortest of the four on 111 of 300 items and ties for it
+  on 4; `d2`'s private statement, its marker dropped, is alone the
+  longest on 115 of 150. Qwen does not favor the shortest: it picks it
+  on 58 of 300 (a pick blind to length: 73) and a tied shortest on 4
+  (4);
+- what a statement is about: the kinds are tied to slots by
+  construction, so a rule that knew each slot's role would score 0.47,
+  and 0.97 knowing whether the item is `d1` or `d2`. One prompt does
+  not show those roles. Without memory Qwen picks by the subject
+  against them: by the option's slot its picks run from 0 of 31 offers
+  (`lawyer`) to 22 of 27 (`side_business`), which is what its 0.18 is
+  made of.
+So no one figure can be assumed for a model's accuracy without
+memory; how the grid measures it is open (`FULL_GRID.md`, "The
+decision items").
 
 ## Known limits
 
@@ -415,3 +460,6 @@ value in the block (26 of 26).
   memory system served it.
 - GPT-4o answers, Mem0's extraction and both judges vary run to run;
   compare cells paired, judged in one window (`FULL_GRID.md`).
+- Decision accuracy is not comparable between models, or with 0.25,
+  without each model's letters and its accuracy without memory
+  (`FULL_GRID.md`, "The decision items": proposed for the grid).

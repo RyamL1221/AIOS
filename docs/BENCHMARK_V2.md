@@ -1718,7 +1718,7 @@ the items show, and not hidden. At five users the counts are small
 receive user i − 1's misfiled rows).
 
 **The functional check's result** (in-house, 2026-11-19; Mem0's cells
-wait on its Azure deployment): D1 met (23 of 30), D3 met (10 stale of
+ran on 2026-11-20, below): D1 met (23 of 30), D3 met (10 stale of
 20 vs 0 of 20), D4 met (2 of 4 vs 0 of 4), D5 met (6 of 20 vs 0 of 10);
 **D2 not met**: 0 of 30. The three `no_memory` cells gave the same ten
 answers (the consumer sees no memory, and Qwen decodes greedily), so
@@ -1792,3 +1792,57 @@ Revision 4's correct letters: `d1` A 37, B 37, C 34, D 42 (chi-square
 nine tests of the letters (the correct letter per item and pooled, each
 other kind per item; at least one so low has probability about 0.17 by
 chance): the draw, not the rule, so revision 4 stands.
+
+**The functional check's Mem0 cells** (2026-11-20; the 13 cells on Mem0,
+harness `968029a`, kernel `d49afc9`; Cerebrum
+`results/decision_functional_s20`, beside the in-house cells; they
+waited for the Azure deployment, which Mem0's extraction uses). With
+both backends: D1 met (47 of 60 over the six full-system cells); D2 not
+met (0 of 60: the six `no_memory` cells gave the same ten answers, as
+did users 0 to 4 of the 150-user check); D3 met (22 stale of 40 vs 0 of
+40); D4 met (4 of 8 vs 0 of 8); D5 met (10 foreign of 40 vs 0 of 20).
+The kernel's and replicated Mem0 cells score as the in-house ones (10, 9
+and 10 of 10 in the kernel's h0, `writer_scoped` and `wrong_user`; 10
+and 9 in the replicated h0 and `writer_scoped`), but for
+`no_supersession` (4 of 10 on Mem0, 6 stale, against 5 of 10 in-house,
+in both loci) and the replicated `wrong_user` (6 of 10 against 7).
+Native Mem0 scored 4 of 10 at H = 0 and 1 of 10 under `wrong_user`: the
+matcher found the correct option's value in none of its 20 blocks (its
+own search at the native k of 10; the kernel's and replicated Mem0
+blocks held it on every item), so its 5 right answers were guesses, and
+12 of its 15 errors were of a value not in the block: guesses too, by
+`METRICS.md`'s reading, which no item's error kind names as a recency,
+deletion or identity failure. The identity failure is in the blocks all
+the same: under `wrong_user` the blocks of users 1 to 4 held 3 to 7 of
+user i − 1's rows, of 9 or 10. Of the 10 foreign errors that make D5, 8
+had the foreign value in the block. Mem0's extraction (gpt-4o):
+6,982,522 tokens in, 55,668 out, about $18.01.
+
+**The letters' size** (2026-11-20; from `users_v2` revision 4 and
+Cerebrum `results/decision_nomemory150_s20`; checks added in reading,
+not stated before; their script, `letters_reading_20261120.py`, is
+archived with the run's records). The lean to B costs under 0.01 of
+accuracy, and may cost nothing: letters picked at Qwen's shares,
+whatever the item, would score 0.247 against revision 4's correct
+letters (0.244 to 0.250 with the picks resampled, against 0.25). So
+the cost in "the lean costs accuracy" above is negligible and may be
+none, and the 0.18 is the options' doing. One letter throughout scores
+0.22 (B) to 0.28 (A) on the 150 users and 0.13 to 0.37 on `pilot_v2`'s
+30, whose correct letters are an uneven draw (A 22, B 8, C 22, D 8, p
+= 0.0045; the other 120 users: A 63, B 58, C 58, D 61). "Harmless for
+paired comparisons" above holds between two cells whose blocks are the
+same. Where only one cell's block holds both the current and the stale
+value, the letters can act on that side: the earlier of the two is the
+correct one on 0.51 of the 150 users' items (the later: 0.49) and on
+0.62 of `pilot_v2`'s (0.38). In a cell with memory the model picks the
+options whose values its block holds, so the chi-square of the letters
+picked tests a lean in a `no_memory` cell only. Length, in characters:
+the correct option is alone the shortest statement on 111 of 300 items
+and ties for it on 4 (the shortest statement throughout, a tie counted
+half, would score 0.38, and 0.43 on `d2`), and `d2`'s private
+statement, its marker dropped, is still alone the longest on 115 of
+150; Qwen picks the shortest on 58 of 300 and a tied shortest on 4 (a
+pick blind to length: 73 and 4). The kinds are tied to slots by
+construction: a rule that knew each slot's role would score 0.47, and
+0.97 knowing the item; one prompt does not show the roles. The grid's
+rule: `FULL_GRID.md`, "The decision items".

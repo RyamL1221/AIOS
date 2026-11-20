@@ -53,7 +53,7 @@ do not describe this branch.
 | 17 | A-MEM backend and native condition | Done |
 | 18 | Agent count, concurrency and faulty-agent stress dimensions; event-driven scheduler | Done |
 | 19 | Kernel ablation switches | Done |
-| 20 | Judge reliability, second judge, decision probe, metrics | Done but the primary judge's parts (Azure) |
+| 20 | Judge reliability, second judge, decision probe, metrics | Done |
 
 ### Subtask 1
 
@@ -3825,7 +3825,7 @@ come from (Jg94; claim C4).
 
 Judge reliability, a second judge, a judge-free decision probe, and the
 metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
-`FULL_GRID.md` "The two judges").
+`FULL_GRID.md` "The two judges" and "The decision items").
 
 - **Specs before code**: `METRICS.md` (AIOS `433e422`), with the k rule
   written before the reliability study ran; Amendment 10 (AIOS
@@ -3842,10 +3842,10 @@ metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
   integration +0.95 [+0.46, +1.44], gpt4o +1.33 [+0.71, +1.96]); the
   second judge's LLM-only score GO (qwen +0.73 [+0.39, +1.08], DiD
   +0.63 [+0.22, +1.04]; gpt4o +0.97 [+0.48, +1.45], DiD +1.02 [+0.54,
-  +1.49]). Condition (iii) is judge-free and unchanged. The primary
-  judge's LLM-only verdict: open (Azure: an authenticated call still
-  gets 403 "Virtual Network/Firewall rules" at 19:08 EST 2026-11-19,
-  from 187.14.57.161).
+  +1.49]); the primary judge's LLM-only score GO (qwen +0.97 [+0.54,
+  +1.40], DiD +0.93 [+0.47, +1.39]; gpt4o +1.20 [+0.60, +1.80], DiD
+  +1.13 [+0.49, +1.77]). Condition (iii) is judge-free and unchanged.
+  GO on all four scores.
 - **The second judge**: Claude Sonnet 5.5 through the Message Batches
   API, an OAuth token from `ant auth print-credentials` at call time
   (verified: a 1-token call, a 2-request batch submitted and fetched
@@ -3856,15 +3856,41 @@ metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
 - **Reliability** (`calibration_v1`, 200 answers, 10 repeats): the
   second judge's k is 1 by the rule (median-of-1 interval alpha Profile
   0.966 [0.951, 0.977], Integration 0.963 [0.947, 0.975]; exact
-  self-agreement 0.939 on both, within-1 1.000). The primary judge's
-  calibration: open (Azure 403 from this machine since 2026-11-19).
+  self-agreement 0.939 on both, within-1 1.000). The primary judge's k
+  is 1 too (2,000 judgments through the kernel, none failed,
+  2026-11-20: Profile 0.864 [0.827, 0.893], Integration 0.906 [0.876,
+  0.929]; exact self-agreement 0.815 and 0.841, within-1 0.924 and
+  0.960; Task alpha 0.989). It passes with less room: 46 of the 200
+  answers have Profile repeats 2 or more points apart (the second
+  judge: none, on any dimension), and at its first repeat it gives
+  Profile 3 to 6 of the 200 answers (the second judge to 66).
+- **Agreement between the judges** (`calibration_v1`, each at k = 1):
+  alpha Profile 0.498 [0.382, 0.597], Task 0.876 [0.822, 0.911],
+  Integration 0.683 [0.608, 0.741]; Spearman 0.69, 0.76, 0.76; the
+  second judge lower by 0.69 [0.56, 0.81], 0.36 [0.29, 0.43] and 0.34
+  [0.23, 0.46]. Each judge is steady and they rank answers alike, but
+  they do not use the scale alike: where the primary judge gives
+  Profile 4, the second gives 2 or 3 on 89 of 101 answers. So a judged
+  score's level is its judge's ("Notes for the paper" 4).
 - **Re-judge** of `pilot_v1_hetero`, `pilot_v1_amem`,
   `bench_v2_smoke_amem` by the second judge (1,350 answers, one batch,
-  none failed). Direction agreement needs the primary judge's re-judge:
-  open.
-- **Spend on the second judge** (budget $200, this subtask's cap $30):
-  checks and measurement about $0.19, calibration $7.57, re-judge
-  $4.95: about $12.71.
+  none failed) and by the primary judge at its k (1,350 answers
+  through the kernel, none failed, 2026-11-20).
+- **Direction agreement** (Cerebrum
+  `results/s20_rejudge/directions.md`): the two judges give the same
+  direction on 139 of 164 paired differences, and on 116 of 116 where
+  either judge's 95% interval excludes 0. Every difference at H = 1 or
+  2 and every H2 − H0 difference agrees (120 of 120); the 25
+  disagreements are all at H = 0, both intervals including 0 in each.
+- **Spend.** On the second judge, whose budget the user set ($200 for
+  the project, $30 for this subtask): checks and measurement about
+  $0.19, calibration $7.57, re-judge $4.95: about $12.71. On Azure, the
+  kernel's deployment, for which this subtask set no budget (each run's
+  cost stated before it ran): the primary judge about $19.62
+  (measurement $0.28, calibration $11.65, re-judge $7.69; 3,400 calls,
+  none failed; priced at OpenAI's list $2.50 / $15 per million tokens,
+  Azure's own price not read), and the decision check's Mem0 cells about
+  $18.01 of gpt-4o (Mem0's extraction). In all about $50.34.
 - **Metrics in one module** (Cerebrum `metrics.py`): the reports'
   shared measures moved there; the 15 report renderings of 14 stored
   runs (every v2, stress, ablation, heterogeneity and pilot report)
@@ -3888,26 +3914,70 @@ metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
   of 10 has probability 0.056 under uniform guessing), recorded as a
   deviation. Native in-house at H = 0 with no fault: 3 of 10 correct,
   7 stale picks (kernel and replicated 10 of 10): supersession's value,
-  measured without a judge. Mem0's cells: open (Azure).
+  measured without a judge.
+- **The functional check's Mem0 cells** (2026-11-20; harness `968029a`,
+  kernel `d49afc9`; 13 cells, 65 of 65 trials, the driver's checks
+  passed; gpt-4o for Mem0's extraction, about $18.01): with both
+  backends D1 met (47 of 60), D2 not met (0 of 60: six `no_memory`
+  cells, one set of answers), D3 (22 of 40 vs 0 of 40), D4 (4 of 8 vs 0
+  of 8), D5 (10 of 40 vs 0 of 20). The kernel's and replicated Mem0
+  cells score as the in-house ones but for `no_supersession` (4 of 10, 6
+  stale) and replicated `wrong_user` (6 of 10). Native Mem0: 4 of 10 at
+  H = 0, 1 of 10 under `wrong_user`; its search (k 10) put the correct
+  value in none of its 20 blocks, so its right answers and 12 of its 15
+  errors were guesses, which the error kinds do not name (its
+  `wrong_user` blocks did hold user i − 1's rows: Amendment 10, "The
+  functional check's Mem0 cells").
 - **The no-memory check over every user** (Amendment 10, added after
   D2 failed, its reading written before it ran; kernel, in-house, Qwen,
   `no_memory`, 150 users, 300 items, `results/decision_nomemory150_s20`):
   accuracy 0.18 [0.14, 0.23], below chance: the correct option is the
-  least plausible-sounding without memory (harmless for paired
-  comparisons; recorded in `METRICS.md`, "The items without memory"),
-  no cue toward the answer. The `foreign` option is picked most (`d1`
+  least plausible-sounding without memory (recorded in `METRICS.md`,
+  "The items without memory"), and no cue toward the answer by
+  Amendment 10's line (0.45). The `foreign` option is picked most (`d1`
   0.35, `d2` 0.39, intervals above 0.25), at a similar rate at every
   letter; `d1`'s stale and `d2`'s correct and private options less than
-  chance. A lean to B over both items (p = 0.03), the letter correct
-  least often. So the no-memory floor is 0.18 for this model, and an
+  chance. A lean to B, the two items pooled (p = 0.03), the letter
+  correct least often there; it costs under 0.01 of accuracy (the letter
+  rule, below). So this model's accuracy without memory is 0.18, and an
   error names a memory failure only with its value in the block
-  (`options_in_block`; 26 of 26 errors of the functional check's cells
-  with memory had it). No `no_letter`, `multiple_letters` or turn
-  error. Reported by `metrics.decision_picks` and the v2 analysis's
-  "Picks by option kind and letter".
+  (`options_in_block`; 26 of 26 errors of the functional check's
+  in-house cells with memory had it, 19 of 33 of its Mem0 cells'). No
+  `no_letter`, `multiple_letters` or turn error. Reported by
+  `metrics.decision_picks` and the v2 analysis's "Picks by option kind
+  and letter".
 - **The option shuffle**, checked after D2 (prompted by `d2`'s
   correct letters A 48, B 29, C 46, D 27, p = 0.021): fair (Amendment
   10, "The option shuffle"); revision 4 stands.
+- **The grid's letter rule** (decided by the user, 2026-11-20;
+  `FULL_GRID.md`, "The decision items"): in the grid a decision
+  accuracy is reported with its model's letter distribution beside it.
+  The section fixes that and no more. How it is met is proposed there
+  for Subtask 23 (open decision 8): each model's `no_memory` cell, the
+  accuracy by correct letter with the correct letters evened out, the
+  letters of the items an accuracy is computed over, and the share of
+  a `no_memory` cell's picks that are the shortest statement. Readings
+  added for it, from `users_v2` and the no-memory record (checks added
+  in reading; `METRICS.md`, "The items without memory"; Amendment 10,
+  "The letters' size"; the script is archived with the run's records):
+  - Qwen's lean to B costs under 0.01 (its letters alone would score
+    0.247), and 300 items do not settle the sign;
+  - one letter throughout scores 0.22 to 0.28 on the 150 users and
+    0.13 to 0.37 on `pilot_v2`, whose correct letters are an uneven
+    draw (known issue 56);
+  - the correct option is alone the shortest statement on 111 of 300
+    items (the shortest throughout would score 0.38); Qwen does not
+    favor it;
+  - the options' subjects carry their kinds by construction: a rule
+    that knew each slot's role would score 0.47, and 0.97 knowing the
+    item; one prompt does not show the roles;
+  - two sentences were too strong and are now exact: "paired
+    comparisons are unaffected" holds between cells whose blocks are
+    the same, and the p of the letters picked tests a lean in a
+    `no_memory` cell only.
+  Independent readers checked the text twice before it was committed;
+  each check found errors, now fixed. No code changed: the per-model
+  rows and the evened-out accuracy are Subtask 23's.
 - **Review** (one pass, `a24b6ec`, and one verify pass): 9 findings, 8
   confirmed and fixed (Cerebrum `692319c`, AIOS `20f2447`), one (the
   primary judge's `response_format`) refuted, its doc sharpened:
@@ -3947,8 +4017,9 @@ metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
   (the primary judge's json_schema `strict`: the kernel's `/query`
   rebuilds the query without `response_format`, and the adapter asks
   for `json_object`). Of the 81 left:
-  - 78 now fail a test (Cerebrum `6e912d1`, AIOS this commit). Each was run
-    against its mutant on a clean copy, the unmutated copy passing:
+  - 78 now fail a test (Cerebrum `6e912d1`, AIOS `d49afc9`). Each
+    was run against its mutant on a clean copy, the unmutated copy
+    passing:
     - 31 changed a stored rendering (no verdict). Four golden tests now
       regenerate those renderings from the runs' records, trimmed to
       the fields each report reads (`tests/agents/fixtures/`, 486 KB,
@@ -3971,7 +4042,8 @@ metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
         check's LLM scores 1-5.
     - 47 could change a number of a run still to come (the grid,
       Mem0's decision cells, the primary judge's calibration and
-      re-judge) and have cases of their own:
+      re-judge; all but the grid have since run) and have cases of
+      their own:
       - the decision scoring: a letter named twice, a statement in
         another case, a letter beside a letter, an option in the block
         by an alias (519 of `users_v2`'s 1,200 options have one); a
@@ -4005,27 +4077,50 @@ metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
       `calibration_v1` would differ).
 - **Records**: the runs' provenance and analyses are committed (Cerebrum
   `3716e02`: `decision_functional_s20`, `decision_nomemory150_s20`,
-  `judge_reliability_s20`, `s20_rejudge` with `pilot_report/`); their
-  raw records are in `repo-artifacts/Cerebrum/` (key-scanned).
+  `judge_reliability_s20`, `s20_rejudge` with `pilot_report/`;
+  `968029a`: the primary judge's calibration, its re-judge and the
+  direction agreement;
+  `de12cbf`: the functional check's Mem0 cells and its analysis over
+  both backends, the letter readings' record; `3b9c923`: the
+  provenance corrected on the closing check); their raw
+  records are in `repo-artifacts/Cerebrum/` (key-scanned).
 - **Suites**: at Cerebrum `fae6ce1`, AIOS `9f7f109`, Cerebrum
   `tests/agents` 1,448 passed, 4 skipped, the 19 known failures and 2
   errors by name; AIOS 906 passed, the 7 known `test_mem0_provider`
   errors. With the mutation run's tests (Cerebrum `6e912d1`, AIOS
-  this commit): Cerebrum 1,477 passed, 4 skipped, the 19 known failures and
-  2 errors by name, and known issue 35's two Hypothesis deadline
+  `d49afc9`): Cerebrum 1,477 passed, 4 skipped, the 19 known failures
+  and 2 errors by name, and known issue 35's two Hypothesis deadline
   failures (`test_summary_props.py`); AIOS 907 passed, the 7 known
   errors. The AIOS set is `tests/modules/memory` (without
   `test_memory.py`), `tests/modules/syscall`,
   `tests/modules/llm/test_decoding.py`, `tests/environment` and
   `tests/modules/scheduler` (this branch has no
   `test_ollama_context_window.py`).
-- **Open** (Azure answers an authenticated call from this machine with
-  403 "Virtual Network/Firewall rules", through 21:55 EST 2026-11-19):
-  the primary judge's 50-call measurement and calibration, its k, the
-  combined report (both judges, their agreement), its re-judge of the
-  three runs at its k, the direction agreement, Subtask 11's verdict on
-  its LLM score, FULL_GRID's k table; the decision check's Mem0 cells
-  (Azure gpt-4o).
+  At Subtask 20's last commits (Cerebrum `de12cbf`, with the AIOS docs
+  that close it), the same: Cerebrum 1,477 passed, 4 skipped, the 19
+  known failures and 2 errors by name, and known issue 35's two
+  Hypothesis deadline failures; AIOS 907 passed, the 7 known errors.
+- **Closing check** (2026-11-20, before the tag): two readers, one
+  recounting every new figure from the records and one reading the
+  claims against the other documents, found 6 errors, all fixed: the
+  Azure refusals' start (12:38, not 17:20); two sentences left from the
+  in-house half (26 of 26; the 18 and 17 picks of the earlier and the
+  later option); a "floor" the new text calls no bound; a lowest cell
+  that left out the `no_memory` cells; and a note for the paper that
+  settled what is proposed. Also fixed: native Mem0's right answers were
+  guesses too, and its `wrong_user` blocks held user i − 1's rows; the
+  spend's budgets and their scopes; and the smaller points both readers
+  raised (wording and scope; Cerebrum `3b9c923` for the provenance).
+- **The Azure refusals** (2026-11-19 12:38 to 2026-11-20 12:00 EST)
+  were not Azure's rules changing, and not the key or the calls: a
+  second VPN held this machine's default route, so every call left
+  from an address outside the allowed network, while the university
+  tunnel was up and carried nothing. With it off both deployments
+  answered at once. A keyless request gets 401 either way, so the
+  check is one authenticated call and the owner of the address the
+  traffic leaves from.
+- **Open**: each model's `no_memory` cell in the grid (open decision
+  8).
 
 ## Notes for the paper
 
@@ -4048,6 +4143,26 @@ notes stay where they were written, listed here):
    (`NATIVE_USAGE.md`), Mem0 folding a revoked value into another fact
    (known issue 38).
 3. **`kernel_private`** resolves §4.1's TODO (Subtask 4 notes).
+4. **A judged score's level is its judge's** (Subtask 20). Each judge
+   repeats itself well enough for one judgment per answer (k = 1 by
+   the rule, both), and the two give the same direction for every
+   paired difference either can tell from zero (116 of 116). They do
+   not agree on the level: the second judge scores Profile 0.69 and
+   Integration 0.34 lower, with inter-judge alpha 0.50 and 0.68. So
+   a judged claim holds as a paired difference, which both judges can
+   be shown to give one direction, and a judged mean's level is its
+   judge's, not comparable with another paper's.
+5. **A decision accuracy is reported with its model's letters beside
+   it** (the user's rule, 2026-11-20; `FULL_GRID.md`, "The decision
+   items"). Without memory Qwen scores 0.18, not 0.25; one letter
+   throughout scores 0.22 to 0.28 on the 150 users and 0.13 to 0.37 on
+   the pilot's 30; the shortest statement throughout scores 0.38.
+   Reading an accuracy against the model's accuracy without memory, and
+   comparing accuracies within a model, paired, are proposed there (open
+   decision 8). And an error is a recency, deletion or identity failure
+   only with its value in the block: native Mem0's blocks held the
+   correct value on none of its 20 items in the functional check, so its
+   answers there were guesses.
 
 ## Open decisions
 
@@ -4113,6 +4228,17 @@ notes stay where they were written, listed here):
    memory (`writes_without_fact`), not a failed trial. The options were
    (a) keep failing the trial, (b) this, (c) leave N = 12 and
    `concurrent` out of the Mem0 cells.
+8. **Each model's `no_memory` cell in the grid** (Subtask 20;
+   `FULL_GRID.md`, "The decision items"). The user's rule (2026-11-20):
+   a decision accuracy is reported with its model's letter distribution
+   beside it. A model's letters show its lean only where its picks are
+   guesses (a reading there). Options: (a) one `no_memory` cell per
+   model over the grid's users, judge-free (Qwen's exists and took 78
+   minutes; GPT-4o's about $1.30 at Qwen's token counts); (b) no new
+   cell: each cell's
+   own letters and the accuracy with the correct letters evened out,
+   which Subtask 23 would add to the report; (c) both. Recommended:
+   (c).
 
 ## Test baselines
 
@@ -4190,7 +4316,9 @@ These fail on `workshop-postrun` too and are not caused by later work.
   errors, by name) and its mutation run's tests (Cerebrum `6e912d1`:
   1,477 passed, 4 skipped, the 19 failures and 2 errors, by name, and
   known issue 35's two; AIOS 907 passed, the 7 errors; the AIOS set
-  since Subtask 18 adds `tests/modules/scheduler`).
+  since Subtask 18 adds `tests/modules/scheduler`) and
+  Subtask 20's last commits (Cerebrum `de12cbf`, with the AIOS docs that
+  close it: the same counts, known issue 35's two).
   The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.
@@ -4751,6 +4879,25 @@ These fail on `workshop-postrun` too and are not caused by later work.
     waited for that batch before Subtask 18 too (which removed only the
     1 s collection wait); recorded so the load mode's latency is read
     as the model's and the memory thread's.
+55. `rejudge.py`: when the primary judge fails on a v2 trial after its
+    retries, the trial is marked failed and its three top-level scores
+    are cleared, but its integration probe keeps the earlier
+    `judge_scores`, `integration_score` and `judges`. No analysis reads
+    a failed trial's probe, and no judgment failed in Subtask 20's
+    re-judge (0 of 1,350). To fix with the grid's window tooling
+    (`FULL_GRID.md`, "The judge window").
+56. `pilot_v2`'s decision items have an uneven answer key: correct
+    letters A 22, B 8, C 22, D 8 of 60 (`d2`: 13, 3, 12, 2; chi-square
+    p = 0.0045; about 6% of fair shuffles of 60 items have as wide a
+    gap between the most and the least frequent letter), where the
+    other 120 users have 63, 58, 58, 61. One letter throughout scores
+    0.13 to 0.37
+    there, and the earlier of the correct and the stale option is the
+    correct one on 37 of 60 items. So a decision accuracy on the
+    pilot's 30 users (every functional check and smoke) is read with
+    its letters; on the 150 users the range is 0.22 to 0.28. Revision 4
+    stands (Amendment 10, "The option shuffle" and "The letters'
+    size").
 
 ## Fixed
 
