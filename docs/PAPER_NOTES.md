@@ -532,10 +532,12 @@ baseline is at the kernel's level.**
 - Rests on: 30 users (v1); 5 users (v2 control). Grid: not stated for
   v1.
 - Caveat: no paired comparison of a baseline against `kernel_shared` is
-  in the documents. A v1 user has two memories, so the full-context
-  baseline holds what the kernel injects: `BENCHMARK_V2.md` gives this
-  as the reason for v2 ("No pressure": in the pilot's 1,080 trials
-  neither the cap nor the budget ever bound).
+  in the documents. "Notes for the paper" 3: `kernel_private` "resolves
+  §4.1's TODO"; the paper draft it refers to (`paper_v2`) "is in neither
+  repo" (`DEV_STATUS.md`, Subtask 4). A v1 user has two memories, so the
+  full-context baseline holds what the kernel injects: `BENCHMARK_V2.md`
+  gives this as the reason for v2 ("No pressure": in the pilot's 1,080
+  trials neither the cap nor the budget ever bound).
 
 ## C2: generality
 
@@ -1394,9 +1396,11 @@ that varies.**
   and four tools make up most of the tools; 104 distinct queries, one
   asked 17 times: "a limit on any claim about attribute coverage". Every
   `pilot_v1` and `pilot_v2` result is on the first 30 users.
-- v2's users are built on v1's base users. Its writers are scripted and
-  call no LLM; its values are distinctive proper names, so that exact
-  matching suffices; its private facts are written last (C1.8).
+- v2's users are built on v1's base users, with four probed slots and
+  one private fact per user (`BENCHMARK_V2.md`, "What v2 does not
+  show"). Its writers are scripted and call no LLM; its values are
+  distinctive proper names, so that exact matching suffices; its private
+  facts are written last (C1.8).
 - `users_v2` had four revisions. Revision 1's contradictions often did
   not conflict (conference talks 10 of 10, one-on-ones 16 of 19, client
   12 of 26); its smoke was stopped and nothing from it is reported.
@@ -1680,6 +1684,46 @@ the memory system served.**
   when the primary judge fails after its retries; "no judgment failed in
   Subtask 20's re-judge (0 of 1,350)".
 
+**L.19 What the reviews found: bugs on reported paths, claims narrowed,
+one finding refuted.**
+- Subtask 15's verification pass, over the review's 78 findings: 70
+  fixed as made and 6 partly; "2 fixes were wrong, and the fix commits
+  added 2 false sentences and made a third false." "No recorded result
+  changes."
+- Subtask 16's review: native Graphiti's `search()` wrote its
+  `num_results` into the shared recipe Graphiti's ingestion reads, so "a
+  V4 consumer's k 5 stayed for the next users' writes" (the functional
+  check's native H = 2 cell ran with it); "The selector never deduped
+  the own fetch" (a Graphiti control: "12 extra rows in 10 of 30
+  probes"; "no Mem0 or in-house block of the Subtask 15 runs held two
+  rows with one text"); the Graphiti scrub deleted attached facts
+  unreported. The pilot design's Graphiti run, started before the fixes,
+  was stopped in its first cell, "so it runs on the fixed code".
+- Subtask 17's review, 11 findings: the kernel's rows carried A-MEM's
+  derived text, "a path past the visibility rule" (M.2); two claims
+  weakened (A-MEM's caught LLM failures; no A-MEM run measures
+  completeness after a forget, L.7). "No number the functional check
+  reports changes".
+- The write-up reviews of Subtasks 18 and 19: "8 errors and 16
+  imprecisions", and "6 errors and 6 imprecisions", corrected.
+- Subtask 20's review: 9 findings, 8 confirmed and fixed, one (the
+  primary judge's `response_format`) refuted. Among the fixed: "the
+  inter-judge offset's sign: `report()` paired the judges by name, so
+  the offset was primary - second". Its closing check found 6 errors,
+  among them a "floor" the new text calls no bound, and "a note for the
+  paper that settled what is proposed".
+- Mutation runs: the stress measures and report (Subtask 18) and the
+  ablation report (Subtask 19) were the weakest areas, 40 of 50 and 43
+  of 50 mutants surviving their area's tests, 36 of each changing a
+  reported number; both are now pinned by tests that regenerate the
+  reports from the runs' records.
+- Rests on: the review records in `DEV_STATUS.md`.
+- Caveat: rule 6 limits the passes: "at most two review passes per
+  subtask", and "where a claim outruns the tests, weaken the claim
+  rather than add tests, unless the untested rule affects a reported
+  number." So a claim in the documents is as strong as its tests, by
+  rule.
+
 ## Cost
 
 Costs are the harness's records priced at Cerebrum `prices.yaml`
@@ -1854,7 +1898,7 @@ it names no cell for a benchmark v1 result (`FULL_GRID.md`).
 | a calibration set (200 answers) | L.2, L.3 | each judge once per answer; the second judge on 45 of 150 users |
 | stored answers judged again | C2.4, L.1 (the four scores), L.3 | the grid judges in one window |
 | specs, code readings, unit tests | C1.1 (the equivalence test), L.4, L.5, L.7, L.9, L.15, L.16, L.17, M.3, M.4 | none |
-| incident and run records | C2.7, C4.9, M.1, M.2, L.14, L.18, K.7, K.8 | none |
+| incident, run and review records | C2.7, C4.9, M.1, M.2, L.14, L.18, L.19, K.7, K.8 | none |
 
 Open: one model carries every benchmark v2, stress, ablation and
 decision result (C2.7); only the grid can add a second.
