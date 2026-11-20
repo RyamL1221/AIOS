@@ -119,9 +119,9 @@ with a filter at the store, for revoked facts (B13). See "Not found".
   search round-trip: "all 8 facts surfaced on the poller's first search
   after the write" (§8.3), and the window is "effectively zero [...] not
   as a post-write read-visibility lag" (§9.4). The cost shows as write
-  latency: p50 1,840 ms, p95 4,861 ms and p99 19,319 ms over the 194
-  writes that completed (§8.4). Reported in §8.4: supersession in 90 of
-  90 fact-runs where both contradictory writes were admitted, 1.000
+  latency (§8.4): p50 1,840 ms, p95 4,861 ms and p99 19,319 ms over the
+  194 writes that completed. Also reported in §8.4: supersession in 90
+  of 90 fact-runs where both contradictory writes were admitted, 1.000
   [0.959, 1.000]; detection 98 of 200 overall, because the synchronous
   dedup gate rejected 206 of 400 writes; stale reads 0 of 200. Three
   production findings are instances in part (b): conditions 5, 6 and 7.
@@ -580,7 +580,8 @@ with a filter at the store, for revoked facts (B13). See "Not found".
   isolated." Differs: isolation is keyed on a `source` string the caller
   passes at recall, and one argument of a recall lifts it; where a
   memory without a scope goes is an LLM's choice. Ours keys the
-  partition on the user id and visibility on the owner and sharing
+  partition on the user id (taken from the kernel session when the
+  request carries a token) and visibility on the owner and sharing
   fields of each row (responsibilities 1 to 3).
 
 ## (a) 2. Memory access control
@@ -906,11 +907,13 @@ with a filter at the store, for revoked facts (B13). See "Not found".
   caller's identity is only supported when you use the memory search
   tool with scope set to {{$userId}}." The best practices say "Use the
   scope property to partition the memory store by user." Quotas include
-  "Maximum memories per scope: 10,000". Differs: by default the scope
-  comes from authentication, as our session binding; a header the
-  backend sets overrides it, and the low-level APIs take it from the
-  caller, as our claim path does. As read, no rule between agents of one
-  user.
+  "Maximum memories per scope: 10,000". Differs: with `{{$userId}}`, the
+  scope comes from authentication unless the header is set, close to our
+  session binding; a header the backend sets overrides it, and the
+  low-level APIs take the scope from the caller, as our claim path does.
+  The partition by user is a best practice the deployer applies through
+  the scope; ours applies to every request. As read, no rule between
+  agents of one user.
 
 - **A17. Prompts Don't Protect.** "Prompts Don't Protect: Architectural
   Enforcement via MCP Proxy for LLM Tool Access Control". Rohith Uppala.
@@ -1353,21 +1356,23 @@ with a filter at the store, for revoked facts (B13). See "Not found".
   each, and "ranked above the policy that replaced it"; it led agents to
   the unsafe action in 358 of 810 trials on Graphiti (44.2%) and 341 of
   810 on "mem0 (exp.)" (42.1%). "mem0 (exp.)" is "mem0 with the
-  expiry-flag override enabled": by default mem0 "filters it at read
-  time", "the shipped filter we disable in mem0 (exp.)" (§4.1). Under
-  "the store-level filter" no unsafe action occurred (0 of 1,620). It
-  proposes "a guard that sits between the agent and any memory backend
-  and withholds records that are revoked or conflict with their
-  replacement"; where the store exposes a mark, the guard "matches the
-  store-level filter" (§5.2). Differs: one user's policy facts, measured
-  on the backends themselves; it places its guard between the agent and
-  any backend, where our selector's supersession stage sits
-  (responsibility 6). It measures Graphiti and Mem0, two of our
-  backends; no version of either is stated as read (no occurrence of
-  "graphiti-core" or "mem0ai"), and we pin mem0ai 2.0.2 and
-  graphiti-core 0.31.2 (`requirements.txt:41`, `:45`). Our Graphiti
-  cells record Graphiti's own invalidations apart from the kernel's
-  supersession and credit them to no locus
+  expiry-flag override enabled": under direct insertion mem0 "filters it
+  at read time by default, which is the shipped filter we disable in
+  mem0 (exp.)", and under indirect insertion mem0, like cognee and
+  langmem, records "the revocation status in 0 of 9 scenarios while
+  storing both policies" (§4.1). Under "the store-level filter" no
+  unsafe action occurred (0 of 1,620). It proposes "a guard that sits
+  between the agent and any memory backend and withholds records that
+  are revoked or conflict with their replacement"; where the store
+  exposes a mark, the guard "matches the store-level filter" (§5.2).
+  Differs: one user's policy facts, measured on the backends themselves;
+  it places its guard between the agent and any backend, where our
+  selector's supersession stage sits (responsibility 6). It measures
+  Graphiti and Mem0, two of our backends; no version of either is stated
+  as read (no occurrence of "graphiti-core" or "mem0ai"), and we pin
+  mem0ai 2.0.2 and graphiti-core 0.31.2 (`requirements.txt:41`, `:45`).
+  Our Graphiti cells record Graphiti's own invalidations apart from the
+  kernel's supersession and credit them to no locus
   (`GRAPHITI_BACKEND.md:307-313`). An instance in part (b), condition 8
   (supersession).
 
@@ -1476,10 +1481,10 @@ kernel session that the harness opens (`STRESS_DIMENSIONS.md:387-402`).
   both `user_id` and `agent_id`, but reads them back with only
   `user_id`." The reporter's counts for one user id: 153 memories under
   the user-only filter; 3,379 with an OR filter that adds one agent's
-  scope (`hermie`), rows that carry three agent ids, and 153 with none.
-  The closing comment: the provider moved into Mem0's own plugin, where
-  "reads still filter on `user_id` only, and their code now documents
-  that as intentional".
+  scope (`hermie`), of which 2,520 rows carry the agent id `hermie`, 447
+  `gideon`, 259 `hermes` and 153 none. The closing comment: the provider
+  moved into Mem0's own plugin, where "reads still filter on `user_id`
+  only, and their code now documents that as intentional".
   https://github.com/NousResearch/hermes-agent/issues/38424, accessed
   2026-11-20. How close: the same user id on both sides; the writer adds
   an agent scope that the reader's filter leaves out, so the reader
@@ -2498,9 +2503,10 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
   Agents" (arXiv:2610.17659; the title as the search listing gives it)
   and arXiv:2606.10062 (title not seen), which the search tool's summary
   connects to deletion residue and tombstone redaction; and Anthropic's
-  API reference for deleting a memory from a memory store, which the
-  summary says does not delete the memory's versions. None was fetched,
-  so none is cited.
+  API reference for deleting a memory from a memory store
+  (https://platform.claude.com/docs/en/api/http/beta/memory_stores/memories/delete,
+  not fetched), which the summary says does not delete the memory's
+  versions. None was fetched, so none is cited.
 
 - **The Asana MCP server incident of June 2025.** The earlier attempt's
   notes say only secondary coverage was found; it was not searched
