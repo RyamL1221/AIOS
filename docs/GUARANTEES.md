@@ -18,9 +18,10 @@ library, the injector, the extractor, the providers), `aios/syscall/`,
 and `tests/modules/syscall/` were read at `d49afc9`. `aios/storage/`
 and `aios/tool/` were read only to rule them out. Nothing was
 executed: no kernel, provider, model or test. A test named below was
-read, not run, and what it would catch is taken from its text. One
-command computed something: a standard-library replica of two regular
-expressions of the Mem0 provider (gap G4).
+read, not run, and what it would catch is taken from its text: its
+name says it, or a phrase after a colon does. One command computed
+something: a standard-library replica of two regular expressions of
+the Mem0 provider (gap G4).
 
 **Verdicts.** "Holds": on that path the code enforces the statement,
 given the common assumptions below. "Holds under assumption": it also
@@ -142,14 +143,16 @@ stored `owner_agent` is not A is returned only when its stored
 `sharing_policy` is exactly `"shared"`. This holds for every selection
 (R1, R2, R3) and for a read by id (R4). The owner listing (R5) returns
 only A's own rows, and an update or delete by id (W2, W3) changes only
-A's own rows; another agent's row, shared or not, gets the same
-"Memory not found" as a missing one (`manager.py:700-705`, `:834-835`,
-`:894-895`). An SDK `sharing_policy` other than `"shared"` narrows the
-rule further (`selector.py:272`). A row with no `owner_agent` is no
-agent's own: it is returned only if shared, except to a request whose
-agent name is the empty string, which selection takes for its owner
-(`visibility.py:49-53`). Every write through the library names an
-owner (`facade.py:258-259`), so such rows come only from outside it.
+A's own rows. A read by id answers another agent's private row with
+the same "Memory not found" as a missing one (`manager.py:699-705`);
+an update or a delete answers so for any row A does not own, shared or
+not (`:834-835`, `:894-895`). An SDK `sharing_policy` other than
+`"shared"` narrows the rule further (`selector.py:272`). A row with no
+`owner_agent` is no agent's own: it is returned only if shared, except
+to a request whose agent name is the empty string, which selection
+takes for its owner (`visibility.py:49-53`). Every write through the
+library names an owner (`facade.py:258-259`), so such rows come only
+from outside it.
 
 Two operations act on other agents' rows by design, as the user's
 (Decision 1, `DELETION_AND_SUPERSESSION.md:297-302`): a forget deletes
@@ -182,8 +185,7 @@ update and delete (`visibility.py:126-130`; `facade.py:472-476`,
 (`base.py:117-124`). The kernel's conversation turn is written private
 to the assistant (`facade.py:98-103`).
 
-**Pinned by.** Each test is listed under its file; after a colon,
-what it would catch.
+**Pinned by.**
 - `memory/test_retrieve_for_agent.py`:
   `test_sdk_search_without_policy_hides_other_agents_private`,
   `test_injection_hides_other_agents_private`: a selection that
@@ -390,9 +392,11 @@ every write of U with a sequence at or below its snapshot has been
 released, or until `timeout_ms` has passed (`barrier.py:264-365`). A
 write is released when its provider call and its `after_write` (the
 lift, the sweep, the supersession marks) have returned or raised
-(`facade.py:329-332`). So a read of U sees every write of U accepted
-before it, whichever agent wrote it, unless its wait timed out. A
-failed write is released too, and there is nothing of it to see.
+(`facade.py:329-332`). So a read of U that waits sees every stamped
+write of U accepted before it, whichever agent wrote it, unless its
+wait timed out. A failed write is released too, and there is nothing
+of it to see. Which writes are stamped and which reads wait is listed
+below.
 
 What "accepted" means:
 - a memory request over `/query`: when `accept_memory` stamps and
@@ -413,8 +417,8 @@ Writes that are stamped (`manager.py:368-379`): an add naming
 conversation turn. Not stamped: `remove_memory` (G8); an add or update
 that names no user (G10).
 
-Reads that wait: R1; R2 and R5 naming `params.user_id`
-(`manager.py:380-387`); R3; a forget, for the writes through its own
+Reads that wait: R1; R2, R3 and R5 naming `params.user_id`
+(`manager.py:380-387`); a forget, for the writes through its own
 sequence − 1 (`facade.py:566-567`); R6 and R7, for every write
 accepted before them, even under `barrier: off`
 (`manager.py:340-345`, `:950`). Reads that do not wait: R4, which takes
@@ -437,8 +441,8 @@ R7 (as `ABLATION.md:113` says of `barrier: off`).
    synchronously. Only the in-memory test provider does
    (`in_house.py:37`); with it the kernel wires no injector, extractor
    or stamping (`launch.py:35`, `:352-389`), so every read and write
-   goes through the memory thread, except R6, which then does not wait
-   for queued writes.
+   goes through the memory thread, except R6 and R7, which then do not
+   wait for queued writes.
 4. One kernel per process: no `/core/refresh` since startup (G12).
 
 **Enforced by.** `MemoryWriteBarrier` (`barrier.py`); the one stamping
@@ -815,18 +819,24 @@ with no thread left to serve it, so it never returns (by reading).
 That is availability, not one of the seven properties. A4 is out of
 scope ("What every guarantee assumes").
 
-Three more checks:
+Four more checks:
+- **Update against add.** An update is stamped like an add when it
+  names a user, and runs the same sweep, but the quota does not count
+  it (G23) and it retires nothing (`facade.py:397`). It is owner-only,
+  cannot move a row to another owner or user or set a mark
+  (`facade.py:31-36`, `:379-382`), and finds its row by id with no
+  partition re-check (G4, G5).
 - **Malformed metadata.** A request whose `params.metadata` is not a
   dict and whose `params.user_id` is empty fails with HTTP 500 at the
-  handler's log line (`launch.py:1037-1045`). An add with such
-  metadata fails at its stamp, on the event loop, before it is queued
-  (`manager.py:369`). An update with it is answered `success` false
-  with its sequence released (`facade.py:379-382`, `:403-405`;
-  `manager.py:822-833`). With a token, an add's metadata is replaced
-  by a dict first (`manager.py:421-422`). No path found queues a
-  request that `address_request` would then raise on, which would
-  leave it unanswered (`fifo_scheduler.py:153-156`). Holds, by
-  reading.
+  handler's log line (`launch.py:1037-1045`). With `params.user_id`
+  set, an add with such metadata fails at its stamp, on the event
+  loop, before it is queued (`manager.py:369`), and an update with it
+  is answered `success` false with its sequence released
+  (`facade.py:379-382`, `:403-405`; `manager.py:822-833`). With a
+  token, an add's metadata is replaced by a dict first
+  (`manager.py:421-422`). No path found queues a request that
+  `address_request` would then raise on, which would leave it
+  unanswered (`fifo_scheduler.py:153-156`). Holds, by reading.
 - **Unknown and closed tokens.** Refused before anything is queued;
   under `identity: claim` not checked at all (`launch.py:612-622`).
 - **Provider caches.** Mem0 caches one client per exact user id
@@ -846,10 +856,16 @@ Three more checks:
   `context_injector.py` line 360; retrieval now goes through `search`
   (`mem0.py:836-870`) and the selector's partition check
   (`selector.py:259-268`), and `context_injector.py` has 298 lines.
-- `RETRIEVAL_PATH.md:115-117`: "`get_memory` applies the same
-  owner-or-shared rule in `address_request` (`_can_read`)". The rule
-  is the same, in `MemoryPipeline.read` (`facade.py:499-526`); the
-  text does not say that the read checks no partition (G5).
+- `PROVIDER_CONTRACT.md:66`: "a row without `owner_agent` is visible
+  to nobody"; so say `Visibility.can_read`'s docstring ("Fails closed:
+  a memory with no owner is not readable", `visibility.py:118-119`)
+  and `apply_sharing_filter`'s ("never matches any agent",
+  `visibility.py:27`). An ownerless row whose `sharing_policy` is
+  `"shared"` is selected and read by every agent
+  (`visibility.py:53-57`, `:122-123`), and selection takes an
+  ownerless row for the own row of an agent whose name is the empty
+  string (`visibility.py:49-53`). The library names an owner on every
+  write, so this needs a row written outside it (G1).
 - `manager.py:354-355`: `stamp_syscall` includes `add_agentic_memory`
   "because this can run before `execute_request` rewrites it". Over
   `/query` it never does: `accept_memory` sends the request to
@@ -873,7 +889,7 @@ Three more checks:
 | G9 | Read-after-write; quota | W6 | holds with a narrower "accepted": when its final add is submitted, after two model calls | `syscall.py:153-154`, `:916-932`; `manager.py:368` is never reached through `/query`; sub-requests are submitted without the token (`syscall.py:921`, `:932`; `:87-110`); no test of W6 over `/query` | stamp at acceptance and pass the token to the sub-requests; or leave `add_agentic_memory` out of the claim |
 | G10 | Read-after-write | W1, W2, R2, R5 naming no user | not covered, by design: the agent's own scope is not stamped | `manager.py:368-387`; a sequence of 0 acquires nothing (`facade.py:271-274`, `:367-371`) | claim it "for requests that name the user" |
 | G11 | Read-after-write; deletion and supersession for reads during a write | R1, R2, R5, the forget's wait | holds under assumption: each earlier write commits within `timeout_ms`, the barrier is enabled, `barrier: on`, and the provider is not synchronous | fails open after the timeout (`barrier.py:340-359`); default 5,000 ms (`:85-86`); 3 of 90 kernel Mem0 conversation writes took longer than 5 s in the pilot (`BENCHMARK_V2.md:636-640`); bypasses at `barrier.py:124-125`, `:301-302`, `selector.py:94-99`; Mem0's 10 s readability wait (`mem0.py:758-771`) | claim "unless the wait times out", and report every `TIMEOUT` (the diagnostics carry `barrier_waits`) |
-| G12 | Read-after-write; deletion; supersession; quota | A2 | does not hold after a refresh, until a restart (by reading; not executed; no test) | `restart_kernel` assigns `active_components` as a local (`launch.py:425-445`), so the routes keep the first manager, while `initialize_components` points the shared executor's injector, extractor and stamping at a second one (`launch.py:358-376`) and starts a second scheduler (`:403`) on the same global queues (`aios/hooks/stores/_global.py:23`). Two memory threads then serve queued requests at once; a write stamped on the second barrier and served by the first is released on the first; chat snapshots come from the first barrier and are waited on against the second; two quotas; without a tombstone path, two tombstone stores; on A-MEM the second provider starts empty | declare `global active_components` and stop the old scheduler, or refuse `/core/refresh` while memory is served; or claim the properties "for a kernel not refreshed since startup" |
+| G12 | Read-after-write; deletion; supersession; quota | A2 | does not hold after a refresh, until a restart (by reading; not executed; no test) | `restart_kernel` assigns `active_components` as a local (`launch.py:425-445`), so the routes keep the first manager, while `initialize_components` points the shared executor's injector, extractor and stamping at a second one (`launch.py:358-376`) and starts a second scheduler (`:403`) on the same global queues (`aios/hooks/stores/_global.py:23`). Two memory threads then serve queued requests at once; a write stamped on the second barrier and served by the first is released on the first, so the second keeps it pending and every later read of that user there waits out its timeout; chat snapshots come from the first barrier and are compared with the second's sequences; two quotas; without a tombstone path, two tombstone stores; on A-MEM the second provider starts empty | declare `global active_components` and stop the old scheduler, or refuse `/core/refresh` while memory is served; or claim the properties "for a kernel not refreshed since startup" |
 | G13 | Deletion | W4 with W5, or after A2 | holds under assumption: no off-queue write during a forget. A write that commits between the forget's listing and its tombstone is neither deleted nor swept; the guard still hides it, and the store and the audit keep it | `deletion.py:109`, `:151-155`, `:163`; `DELETION_AND_SUPERSESSION.md:179-183`, `:648-650`; in the kernel only W5 runs off the queue, and v2 kernel runs turn it off (`BENCHMARK_V2.md:944-948`); no test | list the partition again after recording the tombstone and delete what the second listing adds |
 | G14 | Deletion | W4 | holds under assumption: writers label each statement | forms come only from the slot's `structured` rows and its tombstones (`deletion.py:134-149`); with none, no tombstone and deletes by `fact_key` only (`:151-155`; `DELETION_AND_SUPERSESSION.md:196-202`) | claim "the fact as its writers labelled it" |
 | G15 | Deletion | W4 and every sweep | holds under assumption: the matcher defines a carrier | lexical matching (`matching.py:28-59`); paraphrases survive (`DELETION_AND_SUPERSESSION.md:637`); Graphiti facts extracted with forgotten text in their context and no form in their sentence survive (`GRAPHITI_BACKEND.md:276-277`) | as stated: "no row whose text carries the value or an alias" |
