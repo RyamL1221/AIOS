@@ -393,18 +393,18 @@ ablation cells.
 - **By model**: Qwen 192 cells and 768 hours, Llama 93 and 351, GPT-4o
   170 and 280; in dollars, to the nearest 10: 5,100, 2,180 and 5,300.
 
-**The laptop's speed.** Qwen's time per completion token moves with
-the laptop's heat and power state (DEV_STATUS known issue 48), and the
-rows above are as measured, on whichever day their run fell. The same
-cell (N = 6, H = 0, kernel, in-house, 30 users, the same tokens) took
-68.8 s a user in `stress_smoke_s18` on 2026-11-17 (69.4 ms per
-completion token) and 102.0 s in `ablation_smoke_s19` on 2026-11-18
+**The laptop's speed.** Qwen's time per completion token moves with the
+laptop's heat and power state (DEV_STATUS known issue 48), and the rows
+above are as measured, on whichever day their run fell. The same cell
+(N = 6, H = 0, kernel, in-house, 30 users; 965 and 969 completion tokens
+a user) took 68.8 s a user in `stress_smoke_s18` on 2026-11-17 (69.4 ms
+per completion token) and 102.0 s in `ablation_smoke_s19` on 2026-11-18
 (102.1 ms). As bounds, every local-model row's model time (its
 consumer's and decision turns, and in v1 the writers' generation) is
-rescaled to the fastest and the slowest speed a stored 30-user Qwen
-cell had, the old scheduler's wait taken out: 40.8 and 75.1 ms per
-completion token in v1 (`pilot_v1_amem` replicated, `pilot_v1_hetero`
-kernel in-house, both H = 0), 49.0 and 115.2 ms in the v2-type cells
+rescaled to the fastest and the slowest speed a stored 30-user Qwen cell
+had, the old scheduler's wait taken out: 40.8 and 75.1 ms per completion
+token in v1 (`pilot_v1_amem` replicated, `pilot_v1_hetero` kernel
+in-house, both H = 0), 49.0 and 115.2 ms in the v2-type cells
 (`bench_v2_smoke_a4` native Mem0, `ablation_smoke_s19` `quota` at
 F = 50). That gives 1,193 and 1,926 hours for the cells: 50.3 and 80.9
 days with the judge's pass. GPT-4o's rows do not move.
