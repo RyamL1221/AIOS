@@ -796,15 +796,17 @@ and native store all of it, and their blocks lose profile facts.**
   `results/stress_smoke_s18/analysis.md`.
 - Rests on: 30 users, in-house, judge-free. The grid replaces it.
 - Caveat: no judge-free probe of replicated was lost at either level;
-  the report shows one deletion probe gained and nothing else. Native's
-  recency passes rose (11 users gained, 1 lost at F = 50, p 0.006): "Not
-  read as the flood helping." So the flood's cost shows in block
-  measures only, and its effect on a judged score is not measured. The
-  replicated result is by construction: "the flooder is the agent that
-  fails to apply it: its pipeline is built without the quota". The flood
-  is benign (restated facts and irrelevant notes): "adversarial rows
-  written to be retrieved (poisoning) are not tested, and the quota is
-  not a defense against them".
+  the report shows one deletion probe gained at each level and nothing
+  else. Native's outcomes moved both ways
+  (`stress_smoke_s18/analysis.md`, "Faults"): at F = 50 recency 1 lost
+  and 11 gained (p 0.0063), "Not read as the flood helping", and
+  contradiction 5 lost and 3 gained (p 0.73). So for replicated the
+  flood's cost shows in block measures only, and its effect on a judged
+  score is not measured. The replicated result is by construction: "the
+  flooder is the agent that fails to apply it: its pipeline is built
+  without the quota". The flood is benign (restated facts and irrelevant
+  notes): "adversarial rows written to be retrieved (poisoning) are not
+  tested, and the quota is not a defense against them".
 
 **C3.7 Agent count: nothing changes with N on in-house at H = 0, as
 predicted; a gap that grows with N is not tested.**
