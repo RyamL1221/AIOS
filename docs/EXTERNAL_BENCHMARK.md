@@ -112,8 +112,9 @@ the GitHub API's (`/repos/<owner>/<repo>/commits`).
   sets no context length (`aios/memory/embedding.py`,
   `Embedder.embed`), so it is Ollama's default for the model, not
   checked here.
-- BEAM, a third benchmark in S9, and the outside statements quoted in
-  LoCoMo's issue comments: seen by name only.
+- BEAM, a third benchmark in S9; the outside statements quoted in
+  LoCoMo's issue comments; and the audit repository that a comment on
+  issue 27 links (`dial481/locomo-audit`): seen by name only.
 
 ## LoCoMo
 
@@ -160,8 +161,8 @@ mapping below only 5 coincides. A-MEM's paper repeats the numbered
 list, while its Table 1's columns follow the file's codes (S15,
 section 4.1 and Table 1). The README names a `category` label and
 does not map it. Issue 6 has asked since 2025-05-02, is open, and has
-no answer from a maintainer (S2). The mapping below is
-the one A-MEM's README and Mem0's 2026 code state (S16; S9,
+no answer from a maintainer (S2). The mapping below is the one A-MEM's
+README and Mem0's 2026 code state (S16; S9,
 `benchmarks/locomo/prompts.py` lines 25 to 31). LoCoMo's own code
 agrees where it says anything: `task_eval/evaluation.py` comments
 category 1 as multi-hop and 5 as adversarial (lines 212 to 217), and
@@ -211,12 +212,9 @@ WRONG and is told to "be generous with your grading" (S8,
   no `answer`, only `adversarial_answer` (counted; issue 2, open since
   2024-08-31), and the released reader code reads `qa['answer']` for
   it (`gpt_utils.py` lines 248 to 252). Mem0 and Zep leave it out (S7,
-  S11). A-MEM's paper scored it, against the trap: its runners took
-  `adversarial_answer`, the wrong option offered in the prompt, as the
-  reference, so picking the trap scored high. A-MEM's repository
-  corrected this on 2026-10-22 and keeps the paper's scoring as
-  `--legacy_c5_reference` (S16, pull request 31, commit `b31a1dd`;
-  issue 29, which reported it, is still open).
+  S11). A-MEM's paper scored it, against the trap option
+  (`adversarial_answer`), which its repository has since corrected
+  ("Disputes" below).
 - Wrong gold answers: issue 27 and its comments, 35 and 44 list them
   (a wrong weekday, a statement credited to the wrong speaker, a book
   title that is in no turn). Issue 43 reports two category 5 questions
@@ -261,10 +259,10 @@ list of turns `{role, content}`; an evidence turn also has
 says the S and M histories are sorted by timestamp. In the cleaned S
 file 211 of the 500 are not, within a day only: every pair of
 adjacent sessions out of date order is on one calendar day (3,167 of
-3,167), so the days are in order and the times of day are not. In 76
-the question's date is before some session's, by less than 24 hours
-(counted). Their reader sorts the sessions it is given by date (S4,
-`src/generation/run_generation.py` lines 224 and 225).
+3,167, counted), so the days are in order and the times of day are
+not. In 76 the question's date is before some session's, by less than
+24 hours (counted). Their reader sorts the sessions it is given by
+date (S4, `src/generation/run_generation.py` lines 224 and 225).
 
 **License.** MIT, for the code (`LICENSE`) and for the data (both
 cards: `license: mit`; S4, S5; the paper planned it, S3). The filler
@@ -405,12 +403,14 @@ memory here, and there is none on LongMemEval.
   now", with no new number (S20). So the 66.88 is the 2025 platform's:
   it depends on what the hosted platform did when it ran, not only on
   the pinned code (S8).
-- **A-MEM's category 5.** A-MEM's paper scored category 5 against
-  `adversarial_answer`, the trap option, so picking the trap scored
-  high. Its repository corrected the scoring on 2026-10-22, saying that
-  "This changes category-5 and overall averages", and keeps the paper's
-  scoring as `--legacy_c5_reference` (S16, pull request 31 and commit
-  `b31a1dd`). The adversarial 50.03 above is the paper's.
+- **A-MEM's category 5.** A-MEM's runners took `adversarial_answer`,
+  the wrong option offered in the prompt, as the reference for category
+  5, so picking the trap scored high. Its repository corrected the
+  scoring on 2026-10-22, saying "This changes category-5 and overall
+  averages", and keeps the earlier scoring, "which is what the paper's
+  numbers used", as `--legacy_c5_reference` (S16, pull request 31 and
+  commit `b31a1dd`; issue 29, which reported it, is still open). The
+  adversarial 50.03 above is the paper's.
 - **Mem0's instructions.** The extraction instructions of Mem0's 2025
   run name personal topics ("Identity and self-acceptance journeys",
   "Family planning and parenting") and give as their example "charity
@@ -480,8 +480,8 @@ file's order (`haystack_sessions`), which the README calls
 chronological and which differs from the dates only within a day
 (above). Session j belongs to `WRITERS[(j - 1) mod 3]`, with
 `WRITERS = (profile_agent, task_agent, calendar_agent)`, v2's three
-writers (`BENCHMARK_V2.md`, "A user"), so that v2's agents, schedule and
-variant channels apply unchanged. The question is asked at session
+writers (`BENCHMARK_V2.md`, "A user"), so that v2's agents, schedule
+and variant channels apply unchanged. The question is asked at session
 S + 1. The rule reads no label (`answer_session_ids`, `has_answer`),
 no text and no model. The derived dataset records each session's
 writer and keeps its date as metadata, which no row prints; a shorter
@@ -497,11 +497,11 @@ S.
   in the 18th of 49 sessions, dated 2023/05/30 22:16, and "six times
   now" in the 33rd, dated the same day at 17:45 (counted). By date the
   stale count would be the newer statement, and the session ages in
-  every block would point away from the gold. Of the questions that
-  are not abstention questions, it is the one of the four types kept
-  below whose evidence sessions the two orders put in a different
-  order; the others are 35 temporal-reasoning questions (counted),
-  whose gold is not checked here.
+  every block would point away from the gold. Among the questions that
+  are not abstention questions, the two orders put the evidence
+  sessions in a different order in this one and in 35
+  temporal-reasoning questions, whose gold is not checked here
+  (counted).
 - **A hash of the session id** (`sha256(session_id) mod 3`). Stable
   without a file, but uneven: within a question the largest and the
   smallest writer's share differ by 6.8 sessions on average and by up
@@ -596,10 +596,10 @@ and the decision items (Amendment 10), and the dimensions around them
 (a faulty agent, concurrent writers); recency and contradiction as v2
 scores them, against a labelled stale value; integration over two
 writers' rows. Neither benchmark has a revoke, a private fact, a
-labelled slot or a second user to be confused with.
-They could be added on top of the text (revoking a single-session fact
-turns its question into an abstention question), but that would be
-our benchmark on their sessions. It is not proposed.
+labelled slot or a second user to be confused with. They could be
+added on top of the text (revoking a single-session fact turns its
+question into an abstention question), but that would be our
+benchmark on their sessions. It is not proposed.
 
 ## How each locus runs it
 
@@ -682,12 +682,12 @@ every other cell of the paper has.
 **Settings.** v1's: k 10, a 2,000-token budget, threshold 0.0, the
 compact block, with ages in sessions on. Not v2's k 30 and 300 tokens
 (Amendment 6), which the v2 pre-flight requires (Risk 12). v2's
-budget was set to bind on one-sentence rows
-(Amendments 3 and 6); a user turn here has 43.5 words on average, 56.6
-estimated tokens (counted on the four types). At 300 tokens the kernel
-and replicated blocks would hold about five rows against native's ten,
-and a multi-session question has up to six flagged turns (counted).
-With v1's settings every locus holds at most ten rows.
+budget was set to bind on one-sentence rows (Amendments 3 and 6); a
+user turn here has 43.5 words on average, 56.6 estimated tokens
+(counted on the four types). At 300 tokens the kernel and replicated
+blocks would hold about five rows against native's ten, and a
+multi-session question has up to six flagged turns (counted). With
+v1's settings every locus holds at most ten rows.
 
 **Backends.** In-house (Chroma, verbatim, cosine) in all three loci.
 The three extracting backends are costed below and are not in the
@@ -698,8 +698,8 @@ proposed subset.
 `assistant_agent` can deviate, `calendar_agent` never does (v2). V5's
 raw payload would be the turn as a JSON object, which needs a change:
 today V5 writes the event's `fact_key`, `value` and type, none of
-which holds a turn's text (Risk 12). A scored run at H > 0 needs
-a committed schedule that names the dataset (`run_evaluation.py
+which holds a turn's text (Risk 12). A scored run at H > 0 needs a
+committed schedule that names the dataset (`run_evaluation.py
 --schedule`), as `pilot_v1_schedule.json` is for the pilot.
 
 **Controls.** `no_memory` (the sessions are skipped): the floor per
@@ -748,16 +748,16 @@ the three-writer kernel cell, unjudged. Both are cells of the subset.
   budget in replicated; and V5 writers (users 0, 1 and 8), whose rows
   would be JSON, which can change their rank in every locus, and which
   kernel and replicated print as fields but native verbatim
-  (`HETEROGENEITY.md`, V5). The
-  141 single-writer questions of the four types that are not
-  abstention questions are 42, 56 and 43 by writer (counted; 19, 37 and
-  23 of the subset's 79). So for about 0.19 of them every locus should
-  lose the evidence; for up to about 0.31 more replicated and native
-  should lose evidence the kernel keeps; and for up to about 0.13 more
-  again native alone, up to about 0.44 in all (computed). This is
-  arithmetic on the schedule, not a measurement. Part of it is the
-  kernel's advantage by definition: it ignores a consumer's own
-  settings (`STRESS_DIMENSIONS.md`, "Why these dimensions").
+  (`HETEROGENEITY.md`, V5). The 141 single-writer questions of the
+  four types that are not abstention questions are 42, 56 and 43 by
+  writer (counted; 19, 37 and 23 of the subset's 79). So for about
+  0.19 of them every locus should lose the evidence; for up to about
+  0.31 more replicated and native should lose evidence the kernel
+  keeps; and for up to about 0.13 more again native alone, up to about
+  0.44 in all (computed). This is arithmetic on the schedule, not a
+  measurement. Part of it is the kernel's advantage by definition: it
+  ignores a consumer's own settings (`STRESS_DIMENSIONS.md`, "Why
+  these dimensions").
 
 ## What is scored
 
@@ -780,20 +780,21 @@ session is reported on its own line for that type.
 (`METRICS.md`, "The judges"). Proposed: each of ours labels each
 distinct (question, answer) text once, with their prompt for the
 question's type, and every cell with that answer gets that label; at
-this size the second judge needs no 30% subset. Cells whose blocks
-are identical should, with greedy decoding, give identical answers
-(the three `no_memory` cells of Amendment 10's functional check gave
-the same ten), and labels judged apart could differ. So the H = 0 tie
-is read judge-free, on block and answer identity. Reported: accuracy
+this size the second judge needs no 30% subset. Two cells that give
+the consumer the same block under the same header give it the same
+prompt, so with greedy decoding they should give the same answer (the
+three `no_memory` cells of Amendment 10's functional check gave the
+same ten), and labels judged apart could differ. So the H = 0 tie is
+read judge-free, on block and answer identity. Reported: accuracy
 per type with a Wilson interval under each judge; the two judges'
 agreement on the label (the share of equal labels and Cohen's kappa);
 every paired difference under each judge, and whether the two give it
 the same direction.
 - It is their prompt with another judge model, so not their metric to
   the letter. Their agreement with human experts (more than 97% on
-  average, 0.90 at worst, on single-session-preference: above) was
-  measured for `gpt-4o-2024-08-06`. single-session-preference is 30 of
-  the subset's 120 questions.
+  average, 0.90 at worst, on single-session-preference and on
+  abstention: above) was measured for `gpt-4o-2024-08-06`.
+  single-session-preference is 30 of the subset's 120 questions.
 - A label is one sample of a judge that is not repeatable (`METRICS.md`,
   "The judges": 5 of 10 identical answers got a different profile
   score within one pass). How repeatable each of ours is on this prompt
@@ -847,10 +848,11 @@ Amendment 7) where their reader is asked for a short phrase.
   sorted question ids after `random.Random(20261120).shuffle` (one
   generator, the types in the order single-session-user,
   single-session-preference, knowledge-update, multi-session):
-  120 questions. single-session-preference has exactly 30. With this
-  rule the evidence of 41 of the 120 lies with two or three writers (18
-  of the 30 knowledge-update and 23 of the 30 multi-session questions),
-  and they hold 29,314 user turns, 244.3 a question (counted).
+  120 questions. single-session-preference has exactly 30. Under the
+  split the evidence of 41 of the 120 lies with two or three writers
+  (18 of the 30 knowledge-update and 23 of the 30 multi-session
+  questions), and they hold 29,314 user turns, 244.3 a question
+  (counted).
 - **Cells**, 8: kernel, replicated and native, in-house, at H = 0 and
   H = 2; the single-writer kernel cell at H = 0, read on block
   identity and not judged; and `no_memory` once. In Amendment 10's
@@ -894,7 +896,9 @@ and 131 ms a token within one run (`BENCHMARK_V2.md`, Amendment 7).
 
 **What it could show.**
 - Whether the three loci tie at H = 0 on histories and questions we did
-  not write, with about 244 rows a user where v2 has 18.
+  not write, with about 244 rows a user where v2 has 18: kernel and
+  replicated on block and answer identity, native on its rows (its
+  header differs).
 - Whether kernel − replicated and kernel − native open at H = 2 in the
   direction `HETEROGENEITY.md` predicts ("The dimension"). The subset
   has one test for each: the exact McNemar test (two-sided, at 0.05)
@@ -912,8 +916,9 @@ and 131 ms a token within one run (`BENCHMARK_V2.md`, Amendment 7).
   the kernel, 4 up and 6 down in replicated, of 30: `BENCHMARK_V2.md`,
   Amendment 7). Nor is the gap predicted: it is the share of questions
   whose evidence one cell loses and the other keeps (up to about 0.31
-  of the single-writer ones, above) times Qwen's accuracy with the
-  evidence minus without it, and neither accuracy is known.
+  of the single-writer ones in replicated and 0.44 in native, above)
+  times Qwen's accuracy with the evidence minus without it, and
+  neither accuracy is known.
 - Which judged difference is a lost row: the evidence recall is
   measured on the same questions without a judge.
 - Per type, a description only: 30 questions give a Wilson interval of
@@ -942,11 +947,11 @@ With the 287 that are not abstention questions the same test finds a
 gap of 0.06 with probability 0.81, 0.63 or 0.47 and one of 0.08 with
 0.95, 0.84 or 0.70, with 3%, 6% or 10% won by the other cell
 (computed), and no question is sampled. `gpt-4o` as a second consumer
-would add 840 turns over the seven judged cells:
-$2.98 to $6.30, at 700 to 2,200 tokens in (ten rows, or a block at its
-budget) and 180 to 200 out a turn (assumed from v2's measured
-answers), at $2.50 and $10 a million; and 840 more judgments by each
-judge, at most $5.04 and $3.36 (computed).
+would add 840 turns over the seven judged cells: $2.98 to $6.30, at
+700 to 2,200 tokens in (ten rows, or a block at its budget) and 180 to
+200 out a turn (assumed from v2's measured answers), at $2.50 and $10
+a million; and at most 840 more judgments by each judge, at most $5.04
+and $3.36 (computed).
 
 **An extracting backend is a different order of cost.** By our
 measured price per v2 user ($0.36 on Mem0, $0.42 on Graphiti and $0.10
@@ -986,17 +991,16 @@ not selection.
 1. **Published numbers are not comparable, with the split or
    without.** The split is the smallest reason: at H = 0 on in-house it
    should change no block (checked by the single-writer cell). The
-   larger ones: we
-   store the user's turns only, cut at 300 words, where Mem0's own run
-   adds both roles' turns (S9); our embedder, our consumer and its
-   prompt; a block of at most ten rows and 2,000 tokens where the
-   published readers get 1.6k to 32k tokens; another judge model; two
-   of six types left out; and the cleaned files, where the 2025 numbers
-   are on the first release. No published number is from a setup we
-   reproduce, the vendors' least of all (hosted services, tuned prompts
-   and instructions). Our numbers must not sit in a table beside
-   theirs. What can be reported: paired differences between our own
-   cells.
+   larger ones: we store the user's turns only, cut at 300 words, where
+   Mem0's own run adds both roles' turns (S9); our embedder, our
+   consumer and its prompt; a block of at most ten rows and 2,000
+   tokens where the published readers get 1.6k to 32k tokens; another
+   judge model; two of six types left out; and the cleaned files, where
+   the 2025 numbers are on the first release. No published number is
+   from a setup we reproduce, the vendors' least of all (hosted
+   services, tuned prompts and instructions). Our numbers must not sit
+   in a table beside theirs. What can be reported: paired differences
+   between our own cells.
 2. **Questions that need one session only.** 100 of the 311 are
    single-session types (176 of all 500 have one evidence session; in
    LoCoMo, 840 of the 841 single-hop questions). With the rule, the
@@ -1074,8 +1078,8 @@ not selection.
     - each writer passes its own memory type to the v2 session handler
       (`MEMORY_TYPE_PROFILE`, `MEMORY_TYPE_TASK_CONTEXT`,
       `MEMORY_TYPE_CALENDAR` in each agent's `agent.py`), so one type
-      for every row needs a writer setting.
-      Without it the kernel and replicated blocks are sorted by type
+      for every row needs a writer setting. Without it the kernel and
+      replicated blocks are sorted by type
       (`aios/memory/pipeline/formatter.py`, `TYPE_ORDER`; the default
       `block_order` "type") and native's are not, which breaks the
       H = 0 predictions and the single-writer check;
@@ -1099,11 +1103,12 @@ not selection.
     crude rule, not a classifier: counted). v2's rows are first-person
     facts ("I live in Tallinn."; `BENCHMARK_V2.md`, "Events"), and the
     consumer's prompt tells it to "explicitly reference" what it knows
-    (Risk 8). A block headed "Known about this user:" that lists ten of
-    the user's earlier requests changes what the consumer reads in
-    every locus, and a 7B consumer may answer them. It bears on every
-    cell's floor and ceiling and on reading a difference in block size.
-    It is the same in every locus at H = 0, so it does not by itself
+    (Risk 8). A block that lists ten of the user's earlier requests, as
+    "Known about this user:" (kernel, replicated) or "Relevant memories
+    about this user:" (native), changes what the consumer reads in every
+    locus, and a 7B consumer may answer them. It bears on every cell's
+    floor and ceiling and on reading a difference in block size. The
+    rows are the same in every locus at H = 0, so it does not by itself
     make the loci differ, and the evidence recall does not depend on
     it.
 14. **LoCoMo, if it were chosen instead.** Ten users: variants are
@@ -1162,15 +1167,15 @@ For the user; none is taken here.
 1. **Which benchmark.** (a) LongMemEval, as recommended; (b) LoCoMo:
    cheaper per question, and judge-free by its own metric only with
    their reader prompt (decision 8 (b)), but ten users, a pair for a
-   user, and known gold errors; (c) both; (d) none,
-   and the paper states that its benchmark is its own. Bears on: what
-   the paper can say about outside data, and a subtask of work.
+   user, and known gold errors; (c) both; (d) none, and the paper
+   states that its benchmark is its own. Bears on: what the paper can
+   say about outside data, and a subtask of work.
 2. **What a writer stores.** (a) the user's turns, as proposed: four
    types, 311 questions; (b) rounds, a user turn with its reply:
    single-session-assistant becomes answerable (temporal-reasoning also
    needs dates in the rows), rows are about seven times longer and the
-   block holds four or five of them; (c) both roles as rows of
-   their own. Bears on: which types are run, the block, the cost, and
+   block holds four or five of them; (c) both roles as rows of their
+   own. Bears on: which types are run, the block, the cost, and
    closeness to Mem0's own run (S9 adds both roles).
 3. **Long turns.** (a) cut at 300 words, as proposed; (b) store them
    whole and report the empty blocks; (c) change the library's budget
@@ -1198,13 +1203,12 @@ For the user; none is taken here.
    0.59 and 0.70 if 10% do) and whether per-type rates can be read.
 7. **Judges.** (a) both of ours on every distinct answer, with their
    prompts, as proposed; (b) their judge model on our Azure `gpt-4o`
-   deployment, if
-   its version is theirs (not checked), for their metric to the letter;
-   (c) both (a) and (b); and whether a label is judged once or k times.
-   Bears on: the claim "their metric", and the judges' cost at decision
-   6 (b), 2,177 judgments: at most about $22 for (a), about $2.45 for
-   (b) (430 tokens in and 5 out assumed, at `gpt-4o`'s price;
-   computed).
+   deployment, if its version is theirs (not checked), for their metric
+   to the letter; (c) both (a) and (b); and whether a label is judged
+   once or k times. Bears on: the claim "their metric", and the judges'
+   cost at decision 6 (b), at most 2,177 judgments: at most about $22
+   for (a), about $2.45 for (b) (430 tokens in and 5 out assumed, at
+   `gpt-4o`'s price; computed).
 8. **The consumer.** (a) ours, unchanged, as proposed; (b) their reader
    prompt with the question's date. Bears on: abstention accuracy, and
    whether these cells are comparable with the rest of the paper's.
