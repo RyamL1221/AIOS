@@ -153,7 +153,7 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
 
   So the 13.3 s a user of GPT-4o's v1 in-house cells become 6.9 s,
   and the 98.9 s of Qwen's v2 in-house kernel cell become 94.8 s.
-- **Users.** Every row but one is measured on 30 users or fewer and
+- **Users.** Every row but one rests on cells of 30 users or fewer,
   scaled to 150 by the user count: an extrapolation ("Not measured"
   below). The one 150-user cell is Qwen's `no_memory`.
 - **Basis.** `M30`, `M16`, `M5`, `M150`: measured on that many users in
@@ -174,16 +174,16 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
   $0.018 to $0.021 by backend. `no_memory`: $0.0085 (1,251 in, 541 out
   over its eight turns, `decision_nomemory150_s20`).
 - **Backend extraction**, on Azure gpt-4o whatever the assistant
-  (`memory.backend_llm`, `MODELS.md`). v1, from
-  the H = 0 cells (agent cells at H > 0 counted fewer calls before
-  Cerebrum `a836d69`): Mem0 $0.065, Graphiti $0.096 and A-MEM $0.0144 a
-  user. v2, from the smokes: Mem0 $0.36 (139,700 tokens in and 1,100
-  out), Graphiti $0.42 (153,600 and 3,500) and A-MEM $0.10 (23,200 and
-  4,400). The decision check's Mem0 cells, at Subtask 20's code, agree:
-  $0.34 to $0.37 a user with memory (6,982,522 tokens in and 55,668 out
-  over its 65 trials, $18.01). Under the floods on Mem0, from the
-  5-user cells of `stress_functional_f18b`: kernel $0.40, replicated
-  and native $0.73 at F = 10 and $2.22 at F = 50.
+  (`memory.backend_llm`, `MODELS.md`). v1, from the H = 0 cells (agent
+  cells at H > 0 counted fewer calls before Cerebrum `a836d69`): Mem0
+  $0.065, Graphiti $0.096 and A-MEM $0.0144 a user. v2, from the
+  smokes: Mem0 $0.36 (139,700 tokens in and 1,100 out), Graphiti $0.42
+  (153,600 and 3,500) and A-MEM $0.10 (23,200 and 4,400). The decision
+  check's Mem0 cells, at Subtask 20's code, agree: $0.34 to $0.37 a
+  user with memory (6,982,522 tokens in and 55,668 out over its 65
+  trials, $18.01). Under the floods on Mem0, from the 5-user cells of
+  `stress_functional_f18b`: kernel $0.40, replicated and native $0.73
+  at F = 10 and $2.22 at F = 50.
 - **Prices**: gpt-4o $2.50 and $10 per million tokens in and out
   (Cerebrum `prices.yaml`, from price aggregators as of 2026-11-03;
   Microsoft's page not checked); GPT-5.4 $2.50 and $15 (OpenAI's model
@@ -245,12 +245,15 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
   Mem0 and the ablation pairs on Graphiti and A-MEM take the seconds
   of the v2 H = 0 cells (N = 4). At 5 users the Mem0 cells at N = 6
   come to 122.3, 114.9 and 128.7 s by the same corrections (kernel,
-  replicated, native; `stress_functional_f18b`), against 132.1, 98.6
-  and 100.9 s here. The decision check's Mem0 cells at H = 0, run at
-  Subtask 20's code (no judge, the new scheduler, the decision turns)
-  and so not corrected, took 108.8, 144.4 and 170.2 s (5 users).
+  replicated, native; `stress_functional_f18b`), against the v2
+  cells' 132.1, 98.6 and 100.9 s used here. The decision check's Mem0
+  cells at H = 0, run at Subtask 20's code (no judge, the new
+  scheduler, the decision turns) and so not corrected, took 108.8,
+  144.4 and 170.2 s (5 users).
 - **R8, ablation cells outside the smoke.** The smoke ran 10 of the 22
-  cells at 30 users. The other 12 take the mean of the ten.
+  cells at 30 users. The other 12 take the mean of the ten. At 5 users
+  (`ablation_functional_f19b`) the 12 took 106.1 s a user on average
+  (63.0 to 141.2), against 103.1 s for the ten.
 - **R9, native at k = 30.** Its k = 10 cell: the harness has no switch
   for the native k yet ("Cells decided so far").
 - **R10, decision turns on Graphiti and A-MEM.** Not measured: 6.6 s a
@@ -565,10 +568,10 @@ What that would need, from the code as it stands:
   or the cells that call Azure stay here: all but the 106 in-house
   local-model cells.
 - **Secrets on shared storage**: the Azure variables and the Neo4j
-  credentials, which the drivers export from `AIOS/.env` (DEV_STATUS,
-  Subtasks 6 and 16). The second judge's token is
-  fetched on this machine at call time, and both judges need only the
-  stored answers, so the judging can stay here.
+  credentials, kept in `AIOS/.env` (DEV_STATUS, Subtasks 6 and 16).
+  The second judge's token is fetched on this machine at call time,
+  and both judges need only the stored answers, so the judging can
+  stay here.
 - **Neo4j** 5.26.33 for the Graphiti cells: a Docker container here.
 - **One kind of machine per comparison.** Qwen and Llama repeat their
   answers on this laptop under the fixed decoding (`MODELS.md`); across
