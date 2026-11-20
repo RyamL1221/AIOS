@@ -437,11 +437,11 @@ memory here, and there is none on LongMemEval.
   above.
 
 **What the numbers share.** Under one reader and one judge, the choice
-among these three systems moves a number by up to about 26 points:
-Zep − A-MEM is 25.63 on LoCoMo (S19, Table 4, Qwen3.5-9B), and
-A-MEM − Mem0 is 25.69 on LongMemEval-S (S18, Table 2, Qwen3-30B). By
-the same sources' figures, three other things move it by 11 to 37
-points.
+among these three systems moves an overall score by up to about 29
+points: Zep − A-MEM is 29.25 on LoCoMo with Qwen3.5-27B and 25.63 with
+Qwen3.5-9B (S19, Table 4, judge GPT-5.4-mini), and A-MEM − Mem0 is
+25.69 on LongMemEval-S (S18, Table 2, Qwen3-30B). By the same sources'
+figures, three other things move it by 11 to 37 points.
 - **The reader's context.** A-MEM goes from 52.0 to 88.6 on
   LongMemEval as its budget goes from 4k to 32k tokens (S17); Zep from
   69.62 to 80.32 on LoCoMo as its context goes from 347 to 1,997
@@ -740,22 +740,24 @@ the three-writer kernel cell, unjudged. Both are cells of the subset.
   Native alone can lose more: it fetches k rows and applies visibility
   afterwards, so another writer's private rows take its slots
   (`BENCHMARK_V2.md`, "Loci and backends"), where kernel and replicated
-  fetch 4k shared rows before they filter. That is up to 4 more users
-  for `calendar_agent`'s evidence (users 2, 5, 10 and 14 of the cycle;
-  in user 2 about two thirds of the store is private) and 1 each for
-  `profile_agent`'s (user 5) and `task_agent`'s (user 10), leaving out
-  user 12, whose V3 consumer applies no filter. Not counted: a V1
-  consumer's legacy block, which is longer and may lose rows to the
-  budget in replicated; and V5 writers (users 0, 1 and 8), whose rows
-  would be JSON, which can change their rank in every locus, and which
-  kernel and replicated print as fields but native verbatim
+  fetch 4k shared rows before they filter. That is up to 5 more users
+  for `calendar_agent`'s evidence (users 2, 5, 10, 12 and 14 of the
+  cycle; in user 2 about two thirds of the store is private), 2 for
+  `profile_agent`'s (users 5 and 12) and 1 for `task_agent`'s (user
+  10). In user 12 the V3 consumer shows `task_agent`'s private rows,
+  which take its slots all the same (`HETEROGENEITY.md`, V3; Cerebrum
+  `cerebrum/example/agents/native/agents.py`, `_select`). Not counted:
+  a V1 consumer's legacy block, which is longer and may lose rows to
+  the budget in replicated; and V5 writers (users 0, 1 and 8), whose
+  rows would be JSON, which can change their rank in every locus, and
+  which kernel and replicated print as fields but native verbatim
   (`HETEROGENEITY.md`, V5). The 141 single-writer questions of the
   four types that are not abstention questions are 42, 56 and 43 by
   writer (counted; 19, 37 and 23 of the subset's 79). So for about
   0.19 of them every locus should lose the evidence; for up to about
   0.31 more replicated and native should lose evidence the kernel
-  keeps; and for up to about 0.13 more again native alone, up to about
-  0.44 in all (computed). This is arithmetic on the schedule, not a
+  keeps; and for up to about 0.17 more again native alone, up to about
+  0.48 in all (computed). This is arithmetic on the schedule, not a
   measurement. Part of it is the kernel's advantage by definition: it
   ignores a consumer's own settings (`STRESS_DIMENSIONS.md`, "Why
   these dimensions").
@@ -917,7 +919,7 @@ and 131 ms a token within one run (`BENCHMARK_V2.md`, Amendment 7).
   the kernel, 4 up and 6 down in replicated, of 30: `BENCHMARK_V2.md`,
   Amendment 7). Nor is the gap predicted: it is the share of questions
   whose evidence one cell loses and the other keeps (up to about 0.31
-  of the single-writer ones in replicated and 0.44 in native, above)
+  of the single-writer ones in replicated and 0.48 in native, above)
   times Qwen's accuracy with the evidence minus without it, and
   neither accuracy is known.
 - Which judged difference is a lost row: the evidence recall is
