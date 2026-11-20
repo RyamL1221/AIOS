@@ -376,6 +376,34 @@ trials that did not fail, with a Wilson interval, against chance 25%
 of the scored items (`<error>_share`), and the items with a turn error
 (`turn_errors`). Judge-free.
 
+A cell's picks (`metrics.decision_picks`, the report's "Picks by option
+kind and letter"): of the scored items that named one letter, per item
+(`d1`, `d2`) and pooled, each kind's picks (`correct`, `stale`,
+`must_not_use`: `revoked` on `d1`, `private` on `d2`; `foreign`) with
+its share and Wilson interval; the letters picked and the items'
+correct letters, each with a chi-square test's p against uniform.
+
+**The items without memory** (revision 4; Amendment 10's no-memory
+check over every user: Qwen, kernel locus, in-house, `no_memory`, 300
+items, 2026-11-19). Without memory the four options are not equally
+plausible to this model:
+- accuracy 0.18 [0.14, 0.23], below chance: the correct option is the
+  least plausible-sounding;
+- the `foreign` option is picked most, on both items (`d1` 0.35 [0.28,
+  0.43], `d2` 0.39 [0.32, 0.47]), at a similar rate whatever its letter;
+- `d1`'s `stale` option (0.15 [0.10, 0.21]) and `d2`'s `correct` (0.17
+  [0.12, 0.24]) and `private` (0.18 [0.13, 0.249]) options are picked
+  less than chance;
+- the model leans to B (97 of 300, p = 0.03), the letter that is
+  correct least often (66 of 300).
+Paired comparisons are unaffected: every cell answers the same items.
+Two readings follow. The no-memory floor for this model is 0.18, not
+0.25. And an error names a failure of the memory system only when the
+picked option's value is in the block (`options_in_block`): without it,
+a `foreign` pick is this lean, not a leak. In the functional check every
+`stale`, `revoked` and `foreign` error of a cell with memory had its
+value in the block (26 of 26).
+
 ## Known limits
 
 - Exact matching misses paraphrases; the semantic score on probes is a

@@ -1756,6 +1756,30 @@ Read as follows, stated now:
   distribution (in revision 4, `d2`'s correct letter is A or C on 94 of
   150 items).
 
+**The no-memory check's result** (2026-11-19; Cerebrum `692319c`,
+kernel `20f2447`; Cerebrum `results/decision_nomemory150_s20`). 300 of
+300 items scored: no `no_letter`, no `multiple_letters`, no turn error.
+- Accuracy 54 of 300, 0.18 [0.14, 0.23]: the upper bound is below 0.25,
+  so the correct option is the least plausible-sounding one without
+  memory, recorded in `METRICS.md` ("The items without memory"). Far
+  from 0.45: no cue toward the answer.
+- Kinds whose interval excludes 0.25: `foreign` above, on both items
+  (`d1` 53 of 150, 0.35 [0.28, 0.43]; `d2` 59, 0.39 [0.32, 0.47]);
+  `d1`'s `stale` below (22, 0.15 [0.10, 0.21]); `d2`'s `correct` (26,
+  0.17 [0.12, 0.24]) and `private` (27, 0.18 [0.13, 0.249]) below.
+  Recorded in `METRICS.md` with their direction. `d1`'s `correct` (28,
+  [0.13, 0.26]), `revoked` (47, [0.245, 0.39]) and `d2`'s `stale` (38,
+  [0.19, 0.33]) include 0.25.
+- Letters picked: `d1` p = 0.39, `d2` p = 0.09; pooled A 66, B 97, C 72,
+  D 65 (p = 0.03): a lean to B. Read against the correct letters, B is
+  the correct one least often (66 of 300), so the lean costs accuracy;
+  it does not make the kinds' lean, since `foreign` is picked at a
+  similar rate at each letter (A 0.39, B 0.42, C 0.39, D 0.29; a check
+  added in reading, not stated before).
+- D2: 0.18 lies in D2's band, and 0 of 10 at 0.18 has probability
+  0.14, so the functional check's 0 of 10 fits the five users' draw. D2
+  stays recorded as not met; this check does not replace it.
+
 **The option shuffle**, checked after review (2026-11-19): the options
 are listed in kind order and permuted by `random.Random(f"{seed}:
 {index}:decision:{n}").shuffle` (Fisher-Yates, n = 1 and 2 seeded
