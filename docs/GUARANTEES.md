@@ -649,11 +649,12 @@ From the moment the tombstone is recorded:
    returns a row of U that carries a tombstoned form. Each drops it
    with a WARNING (`selector.py:315-339`; `facade.py:515-525`,
    `:477-490`), and the listing reports its id as `withheld`;
-5. every later successful add or update for U (W1, W2, W5, W6's add)
-   deletes every carrier of a tombstoned form in U's partition, of any
-   owner, before its barrier sequence is released, and a write whose
-   own rows were all deleted is reported `suppressed`
-   (`deletion.py:327-371`; `facade.py:314-332`, `:388-401`);
+5. every later add or update for U (W1, W2, W5, W6's add) whose
+   provider call and `after_write` complete (G20) deletes every
+   carrier of a tombstoned form in U's partition, of any owner, before
+   its barrier sequence is released, and a write whose own rows were
+   all deleted is reported `suppressed` (`deletion.py:327-371`;
+   `facade.py:314-332`, `:388-401`);
 6. until a write or update labelled as a new statement of k, with the
    value or an alias as its `structured` value and a
    `provenance_event` that is not among k's forgotten statements,
@@ -980,9 +981,9 @@ More checks:
   (`facade.py:302-328`), or in a later listing or selection. Updates,
   deletes and forgets are queued, so one accepted before R4 is served
   before it; a retry of one (G26) serves it again, after its first
-  service. Off the queue run only W5's turns, which set no mark and
-  whose sweep R4's guard backs up (`facade.py:515-525`). Holds, by
-  reading.
+  service. Off the queue the only writes are W5's turns, which set no
+  mark and whose sweep R4's guard backs up (`facade.py:515-525`).
+  Holds, by reading.
 - **Update against add.** An update is stamped like an add when it
   names a user, and runs the same sweep, but the quota does not count
   it (G23) and it retires nothing (`facade.py:397`). It is owner-only,
