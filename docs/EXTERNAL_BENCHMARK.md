@@ -476,8 +476,8 @@ cross-agent path of `BENCHMARK_V2.md`, on their data. In the original,
 the assistant that answers is the one that held every session.
 
 **The rule.** For each question, number its sessions 1 to S in the
-file's order (`haystack_sessions`), which the README calls
-chronological and which differs from the dates only within a day
+file's order (`haystack_sessions`), which the README says is sorted
+by timestamp and which differs from the dates only within a day
 (above). Session j belongs to `WRITERS[(j - 1) mod 3]`, with
 `WRITERS = (profile_agent, task_agent, calendar_agent)`, v2's three
 writers (`BENCHMARK_V2.md`, "A user"), so that v2's agents, schedule
@@ -727,15 +727,16 @@ the three-writer kernel cell, unjudged. Both are cells of the subset.
   and so its label, can differ even on the same rows.
 - **H = 2.** Re-derived here from the schedule's code (Cerebrum
   `cerebrum/example/agents/variants/schedule.py`, seed 20261106), over
-  one cycle of 15 users: evidence that `profile_agent` or `task_agent`
-  holds is hidden from every locus for 4 of the 15 (V1 or V3 on that
-  writer: its rows are private), and lost outside the kernel only for
-  up to 5 more (V2 on that writer, or a V2 or V4 consumer). Evidence
-  that `calendar_agent` holds is lost outside the kernel only, for up
-  to 4 (the consumer's V2 or V4). "Up to": a V4 consumer (k 5,
-  threshold 0.5) loses the evidence only when it ranks below fifth or
-  scores below 0.5. One exception: native with a V3 consumer reads a V1
-  or V3 writer's private rows (1 of the 15 users, for `task_agent`).
+  one cycle of 15 users (users 0 to 14, by trial index): evidence that
+  `profile_agent` or `task_agent` holds is hidden from every locus for
+  4 of the 15 (V1 or V3 on that writer: its rows are private), and
+  lost outside the kernel only for up to 5 more (V2 on that writer, or
+  a V2 or V4 consumer). Evidence that `calendar_agent` holds is lost
+  outside the kernel only, for up to 4 (the consumer's V2 or V4). "Up
+  to": a V4 consumer (k 5, threshold 0.5) loses the evidence only when
+  it ranks below fifth or scores below 0.5. One exception: native with
+  a V3 consumer reads a V1 or V3 writer's private rows (1 of the 15
+  users, for `task_agent`).
   Native alone can lose more: it fetches k rows and applies visibility
   afterwards, so another writer's private rows take its slots
   (`BENCHMARK_V2.md`, "Loci and backends"), where kernel and replicated
@@ -1071,15 +1072,17 @@ not selection.
     - a v2 user requires a profile, a task context and a follow-up
       query (`models.py`, `V2UserData`), which an outside record does
       not have;
-    - every writer refuses an event without a `fact_key` (Cerebrum
-      `cerebrum/example/agents/shared_memory_utils.py`,
+    - every writer, in every locus, runs a session through
+      `run_v2_session`, which refuses an event without a `fact_key`
+      (Cerebrum `cerebrum/example/agents/shared_memory_utils.py`,
       `_event_problem`), hence a key per event, and every write then
       lists the user's partition (above);
-    - each writer passes its own memory type to the v2 session handler
+    - each writer passes its own memory type to `run_v2_session`
       (`MEMORY_TYPE_PROFILE`, `MEMORY_TYPE_TASK_CONTEXT`,
-      `MEMORY_TYPE_CALENDAR` in each agent's `agent.py`), so one type
-      for every row needs a writer setting. Without it the kernel and
-      replicated blocks are sorted by type
+      `MEMORY_TYPE_CALENDAR`: in each kernel agent's `agent.py`, and as
+      the `memory_type` of the replicated and native agent classes), so
+      one type for every row needs a writer setting. Without it the
+      kernel and replicated blocks are sorted by type
       (`aios/memory/pipeline/formatter.py`, `TYPE_ORDER`; the default
       `block_order` "type") and native's are not, which breaks the
       H = 0 predictions and the single-writer check;
