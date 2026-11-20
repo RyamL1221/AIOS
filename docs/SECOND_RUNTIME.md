@@ -121,8 +121,9 @@ later and `langgraph-checkpoint` from 4.3.0 to below 5.0.0 (P1).
 checkpointers and the store and their in-memory forms, `InMemorySaver`
 and `InMemoryStore` (D4:343; R18:136); `SqliteSaver` and the Postgres
 saver and store are packages of their own, installed separately
-(D4:344-345; D15:38, :52). The repository's tag `1.2.24` carries both
-versions (R17). `langchain`, which holds `create_agent` and its
+(D4:344-345; D15:38, :52). The repository's tag `1.2.24` carries
+`langgraph` 1.2.24 and `langgraph-checkpoint` 4.3.2 (R17).
+`langchain`, which holds `create_agent` and its
 middleware, is 1.5.2; it needs Python 3.11 or later and `langgraph`
 from 1.2.12 to below 1.3.0 (P2). `langchain-core` is 1.8.4 (Python
 3.11 or later, P4) and `langchain-ollama` 1.1.0 (P5). The model
@@ -271,8 +272,8 @@ So the answer is construction and checks, not a wall:
    not leave through it. The node's wrapper puts the reply, its
    diagnostics and its usage in a record that the harness's adapter
    owns, keyed by a turn id the run's context carries, and returns to
-   state the reply message only. A test checks that no channel of a
-   finished run holds a block's text.
+   state the reply message only. A test checks that neither a finished
+   run's output state nor the updates it streams hold a block's text.
 3. **Import checks.** A scan of each agent module's own import
    statements, in the form of
    `tests/modules/memory/test_pipeline_imports.py:24-77`, with a
@@ -285,9 +286,10 @@ So the answer is construction and checks, not a wall:
    `langgraph.store`. That scan reads a file's own statements only
    (`test_pipeline_imports.py:12-14`), so a fresh interpreter also
    imports the agents' modules, builds each agent over a stub handle
-   and runs one turn of each, with no layer, then lists the loaded
-   modules, as `tests/modules/memory/test_pipeline_library.py:391-417`
-   does: none of the list may be loaded. `langchain.agents` is on the
+   whose calls return fixed replies, runs one turn of each, with no
+   layer, and lists the loaded modules, as
+   `tests/modules/memory/test_pipeline_library.py:391-417` does: none
+   of the list may be loaded. `langchain.agents` is on the
    list because `create_agent` also takes its model as a string and
    then builds the client itself (R15:74, :828, :1050-1051), as the
    docs' first agent example does (D11:26). Under open decision 2(b)
@@ -295,13 +297,16 @@ So the answer is construction and checks, not a wall:
    list, each agent is built with the layer's placeholder model, and
    the layer's hook fails the cell when a request's model is not that
    placeholder. The kernel agents' modules import the SDK's clients
-   (Cerebrum `cerebrum/example/agents/profile_agent/agent.py:6-17`), so
-   the LangGraph agents do not import them. Their system prompts are
-   the agents' `config.json` descriptions (`profile_agent/agent.py:169`;
-   `assistant_agent/agent.py:63`), read as data; their response
-   formats are code (`profile_agent/agent.py:175-200`) and move to a
-   module that imports no SDK client. `shared_memory_utils.py` imports
-   the standard library only (`:9`, `:131-133`, `:331`).
+   (Cerebrum `cerebrum/example/agents/profile_agent/agent.py:6-17`,
+   `task_agent/agent.py:6-17`), so the LangGraph agents do not import
+   them. Their system prompts are the agents' `config.json`
+   descriptions (`profile_agent/agent.py:169`,
+   `task_agent/agent.py:169`, `assistant_agent/agent.py:63`), read as
+   data; the writers' response formats are code
+   (`profile_agent/agent.py:175-200`, `task_agent/agent.py` from
+   `:175`) and move to a module that imports no SDK client.
+   `shared_memory_utils.py` imports the standard library only (`:9`,
+   `:131-133`, `:331`).
 4. **A runtime count.** A shared cell constructs one provider client
    and one chat model, both inside the layer, and the layer counts
    every call it makes to each. Each trial records those counts beside
@@ -536,12 +541,13 @@ them: `casefold` and `email_domains: ["users.example"]`).
    set, and releases the barrier under it (`facade.py:252-255`, `:267`,
    `:329-332`); its `user_id` argument is only a fallback, and the
    kernel passes none (`manager.py:651-653`). A layer that passed the
-   session's user there and stamped under it would store the row under
-   the claim (the misfile option B measures), release under the claim
-   and still record `identity_overridden`. Its stamp would stay
-   pending, since a release with no pending entry only logs at debug
-   (`barrier.py:181-193`), and the user's later reads would wait until
-   `timeout_ms` (60,000 in v2 runs, `BENCHMARK_V2.md:640-641`).
+   session's user as that argument, and stamped under it, would store
+   the row under the claim (the misfile option B measures), release
+   under the claim and still record `identity_overridden`. Its stamp
+   would stay pending, since a release with no pending entry only logs
+   at debug (`barrier.py:181-193`), and the user's later reads would
+   wait until `timeout_ms` (60,000 in v2 runs,
+   `BENCHMARK_V2.md:640-641`).
 5. An unknown or closed token is refused. A request with no token is
    served for the id it claims, canonicalized.
 6. The token also keys the write quota's bucket, as the kernel passes
@@ -582,8 +588,9 @@ In AIOS a replicated agent still calls the model through the kernel
 the harness checks (`REPLICATED_LOGIC.md`, "The condition",
 "Inference"; `replicated/agents.py:423-429`). On LangGraph each agent
 calls its model client itself: the same class, model and decoding as
-the layer's, built from the same settings. A replicated cell builds no
-`MemoryLayer`.
+the layer's, built from the same settings. Its result leaves the run
+as in the shared locus, through the adapter's record ("What stops an
+agent", item 2). A replicated cell builds no `MemoryLayer`.
 
 **The three differences, on LangGraph.** They are those of
 `REPLICATED_LOGIC.md`:
@@ -675,7 +682,7 @@ imports neither.
 | `facade.py:17-18`, `selector.py:21`, `deletion.py:20` | Relative imports of `..note` and `..providers.base`: the package imports only as `aios.memory.pipeline`, inside the `aios` package of an AIOS checkout. Importing it runs `aios/memory/providers/__init__.py:44-50`, which imports every backend | Nothing for a run from the Cerebrum checkout: its loader puts `AIOS_ROOT` first (Cerebrum `replicated/library.py:15-40`), because Cerebrum's own `aios/` stub would shadow the package. A package of its own would need the contract, `note.py` and the library split from the backends |
 | `__init__.py:17-22` | Importing the library still loads `cerebrum.utils.usage`, through the Mem0 provider: the SDK must be installed, even for an in-house store | Lazy backend imports, or the helpers moved beside the providers. Not needed while the app lives beside the SDK |
 | `__init__.py:74-88` | `PIPELINE_VERSION` hashes the package's own modules. It covers neither `providers/`, `note.py` and `embedding.py` nor any host code (the kernel's `MemoryManager`, a LangGraph layer) | The harness records the host's and the providers' hashes beside it, or the hash is widened |
-| `facade.py:47-56`, `:185-189`; `selector.py:52-57` | The usage tag is the host's to pass. The kernel and the replicated agents pass `cerebrum.utils.usage.tagged` (`manager.py:309`; Cerebrum `replicated/agents.py:155-158`); without one nothing is counted | Nothing: the layer passes the same tag. The cost records then still come from the SDK's accumulator (Cerebrum `cerebrum/utils/usage.py:25-99`) |
+| `facade.py:47-56`, `:185-189`; `selector.py:52-57` | The usage tag is the host's to pass. The kernel and the replicated agents pass `cerebrum.utils.usage.tagged` (`manager.py:309`; Cerebrum `replicated/agents.py:155-158`); without one nothing is counted | Nothing: the layer passes the same tag, and installs the SDK's LiteLLM logger as the kernel does at start (`launch.py:329-330`). The cost records then still come from the SDK's accumulator (Cerebrum `cerebrum/utils/usage.py:25-99`) |
 | `settings.py:82-118` | Settings come as a `memory:` block or a `/memory/config` `pipeline` report: a dict, never a file. Error texts name `memory.<key>` (`settings.py:66-80`, `quota.py:42-62`, `ablation.py:84-134`, `identity.py:42`) | Nothing: the layer passes the same block |
 | `barrier.py:74-86` | The barrier reads a `memory.write_barrier` dict (`enabled`, `timeout_ms`, `waits`) | Nothing |
 | `barrier.py:27`, `memory_formatter.py:20` | Loggers named `aios.memory.write_barrier` and `aios.memory.memory_formatter`, "so the kernel's log lines keep their logger". The other modules log as `aios.memory.pipeline.<module>` (`facade.py:29`, `selector.py:28`, `deletion.py:26`, `formatter.py:28`, `identity.py:17`) | Nothing needed: the app puts a handler on `aios.memory`. A name argument would be optional |
@@ -945,7 +952,8 @@ diagnostics the library gives in AIOS:
   `private_rows_from_others`, `profile_facts_in_block`,
   `profile_facts_in_answer`, `raw_payload_rows`, the keyword score,
   `variants_applied` and `variants_not_applied` (`HETEROGENEITY.md`,
-  "Schedule"), the block; later the judged LLM score.
+  "Schedule"; recorded, though they cannot show that a variant reached
+  an agent, risk 8), the block; later the judged LLM score.
 - v2: the six probes' outcomes with their block checks; for deletion,
   the split by echo user, `revoked_value_rows`, each revoke's path and
   report, the guard's stages and each failure's carrier; the decision
@@ -959,14 +967,14 @@ diagnostics the library gives in AIOS:
   included (`STRESS_DIMENSIONS.md:349-351`), and the queue sets the
   order in which writes, sweeps and supersession marks land; in the
   layer concurrent calls commit at once. The core cells are
-  sequential. Under option C the outcomes do not depend on that order:
-  no event of a v2 session depends on another of the same session
-  (`STRESS_DIMENSIONS.md:235-238`), and in users 0 to 29 of `users_v2`
-  and of `agents_n6` none of the 10 echoes shares a session with a
-  revoke (counted at Cerebrum `968029a`). Its timing measures
-  (`barrier_wait_ms`, `late_writes`, `uncovered_writes`) are set
-  beside AIOS's only if the layer serializes its memory calls (open
-  decision 11).
+  sequential. Under option C the outcomes should not depend on that
+  order: no event of a v2 session depends on another of the same
+  session (`STRESS_DIMENSIONS.md:235-238`), and in users 0 to 29 of
+  `users_v2` and of `agents_n6` none of the 10 echoes shares a session
+  with a revoke (counted at Cerebrum `968029a`). Option C's timing
+  measures (`barrier_wait_ms`, `late_writes`, `uncovered_writes`) are
+  set beside AIOS's only if the layer serializes its memory calls
+  (open decision 11).
 
 **Runs and calls.** One trial is one user. Counts per cell of 30
 users:
@@ -1274,7 +1282,7 @@ agent that attacks the layer.
    kernel's memory half.
 8. **The form of concurrency**, if option C runs.
    (a) The harness's threads, one graph run per event: comparable with
-   AIOS's cells.
+   AIOS's cells in outcomes, and in timing under open decision 11(b).
    (b) One run that fans out with `Send`: the race inside a super-step,
    which only LangGraph has.
    (c) Both.
