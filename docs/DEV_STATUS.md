@@ -53,7 +53,7 @@ do not describe this branch.
 | 17 | A-MEM backend and native condition | Done |
 | 18 | Agent count, concurrency and faulty-agent stress dimensions; event-driven scheduler | Done |
 | 19 | Kernel ablation switches | Done |
-| 20 | Judge reliability, second judge, decision probe, metrics | In progress |
+| 20 | Judge reliability, second judge, decision probe, metrics | Done but the primary judge's parts (Azure) |
 
 ### Subtask 1
 
@@ -3821,6 +3821,212 @@ come from (Jg94; claim C4).
   mutation run's 13 tests; on a run just before the JSON comparison
   was given its tolerance, the flaky test passed: 1,374).
 
+### Subtask 20
+
+Judge reliability, a second judge, a judge-free decision probe, and the
+metrics in one module (`METRICS.md`, `BENCHMARK_V2.md` Amendment 10,
+`FULL_GRID.md` "The two judges").
+
+- **Specs before code**: `METRICS.md` (AIOS `433e422`), with the k rule
+  written before the reliability study ran; Amendment 10 (AIOS
+  `ed9d955`) before the decision probe's code.
+- **The hybrid** (found here; "Notes for the paper" 1): every stored
+  judge score before this subtask is round((keyword + LLM) / 2), and the
+  stored results keep neither half. From here the LLM score (median of
+  k) is the judged metric, the keyword score a judge-free metric of its
+  own, the hybrid a continuity column (`METRICS.md`, with the formula).
+  The keyword score was recomputed from the records: 3,240 of 3,240
+  stored scores are consistent with it.
+- **Subtask 11's verdict on each score** (the registered verdict
+  stands): hybrid GO (as registered); keyword-only GO (qwen H2
+  integration +0.95 [+0.46, +1.44], gpt4o +1.33 [+0.71, +1.96]); the
+  second judge's LLM-only score GO (qwen +0.73 [+0.39, +1.08], DiD
+  +0.63 [+0.22, +1.04]; gpt4o +0.97 [+0.48, +1.45], DiD +1.02 [+0.54,
+  +1.49]). Condition (iii) is judge-free and unchanged. The primary
+  judge's LLM-only verdict: open (Azure: an authenticated call still
+  gets 403 "Virtual Network/Firewall rules" at 19:08 EST 2026-11-19,
+  from 187.14.57.161).
+- **The second judge**: Claude Sonnet 5.5 through the Message Batches
+  API, an OAuth token from `ant auth print-credentials` at call time
+  (verified: a 1-token call, a 2-request batch submitted and fetched
+  with fresh tokens; billed to the profile's workspace). Default
+  sampling (the API takes no sampling parameter), thinking
+  `between_tools`, `max_tokens` 1024. Neither judge is claimed
+  deterministic; each judge's k comes from its own repeats.
+- **Reliability** (`calibration_v1`, 200 answers, 10 repeats): the
+  second judge's k is 1 by the rule (median-of-1 interval alpha Profile
+  0.966 [0.951, 0.977], Integration 0.963 [0.947, 0.975]; exact
+  self-agreement 0.939 on both, within-1 1.000). The primary judge's
+  calibration: open (Azure 403 from this machine since 2026-11-19).
+- **Re-judge** of `pilot_v1_hetero`, `pilot_v1_amem`,
+  `bench_v2_smoke_amem` by the second judge (1,350 answers, one batch,
+  none failed). Direction agreement needs the primary judge's re-judge:
+  open.
+- **Spend on the second judge** (budget $200, this subtask's cap $30):
+  checks and measurement about $0.19, calibration $7.57, re-judge
+  $4.95: about $12.71.
+- **Metrics in one module** (Cerebrum `metrics.py`): the reports'
+  shared measures moved there; the 15 report renderings of 14 stored
+  runs (every v2, stress, ablation, heterogeneity and pilot report)
+  byte-identical before and after; `profile_facts_in_answer` recorded
+  (`judge_free.measure`) and reported (pilot report, `facts_in_answer`,
+  recomputed from the record for stored runs).
+- **Harness**: `--judge`, `--judge-repeats k` (median, every repeat
+  recorded), a judgment's model, timestamps and tokens recorded;
+  `rejudge.py` for both judges, repeats and v2 probes;
+  `judge_reliability.py`; `pilot_analysis --score`.
+- **The second judge's grid subset** (`FULL_GRID.md`): 30% of users by
+  index and echo status, fixed now (45 users at 150).
+- **The decision probe** (Amendment 10): revision 4 of `users_v2`
+  (Cerebrum `87e5aa0`, from revision 3 with no LLM call, check 0
+  problems; revision 3 in `repo-artifacts`); `agents_n*` derived again.
+- **Functional check** (Amendment 10, in-house, Qwen, users 0-4, 13
+  cells, judge-free; `results/decision_functional_s20`): D1 met (23 of
+  30), D3 (10 stale of 20 vs 0 of 20), D4 (2 of 4 vs 0 of 4), D5 (6
+  foreign of 20 vs 0 of 10); **D2 not met** (0 of 30: the three
+  no_memory cells gave the same ten answers, one sample of ten items; 0
+  of 10 has probability 0.056 under uniform guessing), recorded as a
+  deviation. Native in-house at H = 0 with no fault: 3 of 10 correct,
+  7 stale picks (kernel and replicated 10 of 10): supersession's value,
+  measured without a judge. Mem0's cells: open (Azure).
+- **The no-memory check over every user** (Amendment 10, added after
+  D2 failed, its reading written before it ran; kernel, in-house, Qwen,
+  `no_memory`, 150 users, 300 items, `results/decision_nomemory150_s20`):
+  accuracy 0.18 [0.14, 0.23], below chance: the correct option is the
+  least plausible-sounding without memory (harmless for paired
+  comparisons; recorded in `METRICS.md`, "The items without memory"),
+  no cue toward the answer. The `foreign` option is picked most (`d1`
+  0.35, `d2` 0.39, intervals above 0.25), at a similar rate at every
+  letter; `d1`'s stale and `d2`'s correct and private options less than
+  chance. A lean to B over both items (p = 0.03), the letter correct
+  least often. So the no-memory floor is 0.18 for this model, and an
+  error names a memory failure only with its value in the block
+  (`options_in_block`; 26 of 26 errors of the functional check's cells
+  with memory had it). No `no_letter`, `multiple_letters` or turn
+  error. Reported by `metrics.decision_picks` and the v2 analysis's
+  "Picks by option kind and letter".
+- **The option shuffle**, checked after D2 (prompted by `d2`'s
+  correct letters A 48, B 29, C 46, D 27, p = 0.021): fair (Amendment
+  10, "The option shuffle"); revision 4 stands.
+- **Review** (one pass, `a24b6ec`, and one verify pass): 9 findings, 8
+  confirmed and fixed (Cerebrum `692319c`, AIOS `20f2447`), one (the
+  primary judge's `response_format`) refuted, its doc sharpened:
+  1. the inter-judge offset's sign: `report()` paired the judges by
+     name, so the offset was primary - second (fixed: primary first);
+  2. a decision turn's error failed the user (now recorded, fails
+     nothing; no stored run had one);
+  3. a v2 trial's assistant tokens and latency left out its decision
+     turns (now included, the scope of its backend usage);
+  4. the ordinal median-of-k alpha averaged a subsample of the splits
+     (now all; the second judge's JSON moved by at most 0.0006, its k
+     unchanged);
+  5. the decision fields' names and error shares in the docs; 6. a
+     failed second judgment and the calibration rows' recording in the
+     docs; 7. `directions`' usage line, and nothing checked each
+     root's k (now recorded and checked); 8. a resumed second-judge
+     calibration's discarded judgments (docstring limit).
+  The same 15 renderings are byte-identical after the fixes.
+- **Mutation run** (rule 6, once, on the final code: AIOS `9f7f109`,
+  Cerebrum `fae6ce1`). Three owners wrote 148 mutants of rules the
+  documents state:
+  - the judges (`judge.py`, `rejudge.py`, `judge_reliability.py`,
+    `pilot_analysis.py`'s scores);
+  - the decision probe (`synth_v2.py`'s items, the history's decision
+    turns, their scoring and analysis, the driver's decision mode);
+  - the metrics module and the reports moved onto it.
+
+  Each ran on a scratch copy against its area's tests, with Ollama,
+  behind the loopback-only network guard: 62 killed, 6 of them only by
+  `users_v2`'s generator hash (one of those equivalent; no test of its
+  own pins the other five: the foreign candidates' and the pool's
+  collision filters, `decision_problems`' collision check, `check`
+  reading the items, `revised_from`'s hash; no stored item changes
+  under any). Each survivor was then rerun against every suite that
+  loads its file (Cerebrum `tests/agents`, and `tests/integration` for
+  the judges; no AIOS test loads these): 4 more killed, 1 equivalent
+  (the primary judge's json_schema `strict`: the kernel's `/query`
+  rebuilds the query without `response_format`, and the adapter asks
+  for `json_object`). Of the 81 left:
+  - 78 now fail a test (Cerebrum `6e912d1`, AIOS this commit). Each was run
+    against its mutant on a clean copy, the unmutated copy passing:
+    - 31 changed a stored rendering (no verdict). Four golden tests now
+      regenerate those renderings from the runs' records, trimmed to
+      the fields each report reads (`tests/agents/fixtures/`, 486 KB,
+      with the scripts that make them): the functional check's and the
+      no-memory check's v2 analyses; Subtask 11's pilot on each score
+      (`results/s20_rejudge/pilot_report/`, now committed); and the
+      second judge's reliability report. Each must match byte for byte,
+      the JSON to a relative 1e-9. The 31, each failing a golden test:
+      - the decision probe (9): accuracy's interval (of the passes, low
+        then high); the chi-square's degrees of freedom; the `private`
+        and `turn_errors` columns; a pick's interval; D2's lower bound;
+        D3's and D4's same loci;
+      - the metrics (12): the pass matrix's rate; a missing block size
+        counted as 0; eight of the keyword score's rules; a private row
+        of another agent as a leak; the pilot's facts_in_answer column;
+      - the judges (10): the study's seed; bootstrap percentiles and
+        resamples; the median-of-k alpha over every split; exact and
+        within-1 agreement; the repeats' ordinal alpha; calls with
+        failed attempts; the interval's printed upper end; the keyword
+        check's LLM scores 1-5.
+    - 47 could change a number of a run still to come (the grid,
+      Mem0's decision cells, the primary judge's calibration and
+      re-judge) and have cases of their own:
+      - the decision scoring: a letter named twice, a statement in
+        another case, a letter beside a letter, an option in the block
+        by an alias (519 of `users_v2`'s 1,200 options have one); a
+        kind's interval over the items that named one letter;
+      - D1-D5 at their edges;
+      - the decision turns' backend usage, a write, latency, any
+        exception, `options_in_block` and block ages; the driver's
+        default phases;
+      - the keyword score's name parts and no-keyword cases; the shared
+        measures' None rules (an unscored outcome, a missing value
+        left out); a write without a row; `profile_facts_in_answer`
+        recorded on v1 and v2 trials;
+      - the second judge's request (`max_tokens` 1024, thinking
+        `between_tools`); a collected batch's id on its first round
+        only; the grid's 45-user subset (`FULL_GRID.md`'s list);
+        `rejudge`'s batch path; another judge's record kept; a
+        re-judged file with a failed trial incomplete; a judged v2
+        trial's record, on the trial and its probe;
+      - agreement at each judge's median of k; the directions' pooled
+        backends, H2 − H0, a zero mean's sign, either interval
+        deciding; the pilot report's defaults (the hybrid, the primary
+        judge).
+  - 3 hold in the code but no test pins them, so this file claims no
+    more. None changes a reported number:
+    - an answer with some, not all, repeats failed is not returned
+      as failed: at the second judge's k (1) it cannot happen, and at
+      k > 1 the re-judge raises;
+    - a failed second judgment's record on a v2 probe (no report
+      reads it);
+    - `build`'s seeded cell order (only a rebuild of the committed
+      `calibration_v1` would differ).
+- **Records**: the runs' provenance and analyses are committed (Cerebrum
+  `3716e02`: `decision_functional_s20`, `decision_nomemory150_s20`,
+  `judge_reliability_s20`, `s20_rejudge` with `pilot_report/`); their
+  raw records are in `repo-artifacts/Cerebrum/` (key-scanned).
+- **Suites**: at Cerebrum `fae6ce1`, AIOS `9f7f109`, Cerebrum
+  `tests/agents` 1,448 passed, 4 skipped, the 19 known failures and 2
+  errors by name; AIOS 906 passed, the 7 known `test_mem0_provider`
+  errors. With the mutation run's tests (Cerebrum `6e912d1`, AIOS
+  this commit): Cerebrum 1,477 passed, 4 skipped, the 19 known failures and
+  2 errors by name, and known issue 35's two Hypothesis deadline
+  failures (`test_summary_props.py`); AIOS 907 passed, the 7 known
+  errors. The AIOS set is `tests/modules/memory` (without
+  `test_memory.py`), `tests/modules/syscall`,
+  `tests/modules/llm/test_decoding.py`, `tests/environment` and
+  `tests/modules/scheduler` (this branch has no
+  `test_ollama_context_window.py`).
+- **Open** (Azure answers an authenticated call from this machine with
+  403 "Virtual Network/Firewall rules", through 21:55 EST 2026-11-19):
+  the primary judge's 50-call measurement and calibration, its k, the
+  combined report (both judges, their agreement), its re-judge of the
+  three runs at its k, the direction agreement, Subtask 11's verdict on
+  its LLM score, FULL_GRID's k table; the decision check's Mem0 cells
+  (Azure gpt-4o).
+
 ## Notes for the paper
 
 What the paper must say, collected as found (Subtask 20 on; earlier
@@ -3978,7 +4184,13 @@ These fail on `workshop-postrun` too and are not caused by later work.
   name, and known issue 35's `test_kernel_shared_delta_is_zero`) and
   its mutation run's tests (Cerebrum `7d19bf4`: 1,373 passed, 4
   skipped, the 19 failures and 2 errors, by name, and known issue 35's
-  `test_kernel_shared_delta_is_zero`; AIOS 904 passed, the 7 errors).
+  `test_kernel_shared_delta_is_zero`; AIOS 904 passed, the 7 errors) and
+  Subtask 20 (AIOS `9f7f109`, Cerebrum `fae6ce1`: AIOS 906 passed, the 7
+  errors; Cerebrum 1,448 passed, 4 skipped, the 19 failures and 2
+  errors, by name) and its mutation run's tests (Cerebrum `6e912d1`:
+  1,477 passed, 4 skipped, the 19 failures and 2 errors, by name, and
+  known issue 35's two; AIOS 907 passed, the 7 errors; the AIOS set
+  since Subtask 18 adds `tests/modules/scheduler`).
   The names
   are in the Subtask 4 notes: the 4 `test_kernel_private_unit.py`
   failures test a removed local-Mem0 path.

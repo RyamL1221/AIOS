@@ -448,3 +448,23 @@ def test_the_no_memory_check_runs_every_user_of_users_v2(tmp_path):
     (call,) = args.read_text().splitlines()
     assert "--dataset users_v2 --trials 150 " in call
     assert "--no-judge" in call
+
+
+def test_the_decision_checks_default_phases_hold_its_ns_cells(tmp_path):
+    """MODE=decision without PHASES runs the ``_ns`` phases too, so the
+    no_supersession cells D3 reads are there by default."""
+    aios = tree(tmp_path)
+    result = launch(aios, "", "h0 no_supersession", extra={
+        "MODE": "decision", "TRIALS": "",
+        "METHODS": "kernel_shared replicated_inhouse"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = tmp_path / "Cerebrum" / "results" / "sim" / "qwen"
+    cells = sorted(f"{phase.name}/{cell.name}"
+                   for phase in root.iterdir() if phase.name != "logs"
+                   for cell in phase.iterdir())
+    assert cells == [
+        "agent/h0_replicated_inhouse",
+        "agent_ns/no_supersession_replicated_inhouse",
+        "kinh/h0_kernel_shared", "kinh_ns/no_supersession_kernel_shared",
+        "kmem0/h0_kernel_shared", "kmem0_ns/no_supersession_kernel_shared",
+    ]
