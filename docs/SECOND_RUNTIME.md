@@ -39,12 +39,12 @@ package's modules (`__init__.py:74-88`), recorded on every trial.
 
 **The two loci.** A locus is where that logic runs. In the kernel
 locus one process holds the shared parts for every agent: one barrier,
-one identity resolver over one registry of users, one session
+one registry of users with one set of identity rules, one session
 registry, one quota and one tombstone file
-(`aios/memory/manager.py:146-219`), and it builds a pipeline over them
-for each request (`manager.py:296-311`). In the replicated locus every
-agent builds its own `MemoryPipeline` over the same backend, from a
-copy of the kernel's settings (Cerebrum
+(`aios/memory/manager.py:121-126`, `:146-219`), and it builds a
+pipeline over them for each request (`manager.py:296-311`). In the
+replicated locus every agent builds its own `MemoryPipeline` over the
+same backend, from a copy of the kernel's settings (Cerebrum
 `cerebrum/example/agents/replicated/agents.py:99-163`). By design the
 two differ in three ways and no other: no shared write barrier, no
 shared identity resolution, no single policy instance
@@ -59,7 +59,8 @@ variants (`HETEROGENEITY.md`). Kernel − replicated was a tie at H = 0
 and a gap at H = 2, and the gap grew with H. On the in-house backend
 alone, on the judged metric as `METRICS.md` defines it since Subtask 20
 (the primary judge's LLM score at k = 1, its k by the rule in Cerebrum
-`results/judge_reliability_s20/PROVENANCE.md:88`), kernel − replicated,
+`results/judge_reliability_s20/PROVENANCE.md:88`; `FULL_GRID.md`'s k
+table at `d49afc9` still lists it as open), kernel − replicated,
 mean [95% CI] over the 30 paired users (Cerebrum
 `results/s20_rejudge/pilot_report/llm_gpt-5.4.md:58-74`):
 
@@ -82,9 +83,10 @@ by three writers, then six probes (deletion, privacy, recall, recency,
 contradiction, integration) and, since revision 4, two multiple-choice
 decision items (Amendment 10). At H = 0 the two loci tie by design:
 - In the 30-user smoke (revision 3, Qwen; Cerebrum
-  `results/bench_v2_smoke_s17/analysis.md`), no in-house probe passed
-  in one locus and failed in the other, 180 of 180 in-house blocks were
-  byte-identical, and deletion passed for 30 of 30 users in both.
+  `results/bench_v2_smoke_s17/analysis.md`), none of the five
+  judge-free in-house probes passed in one locus and failed in the
+  other, 180 of 180 in-house blocks were byte-identical, and deletion
+  passed for 30 of 30 users in both.
 - In the 5-user decision check (revision 4, Qwen; Cerebrum
   `results/decision_functional_s20/analysis.md` at `de12cbf`), the
   decision items were 10 of 10 in both loci on both backends, and
@@ -196,6 +198,10 @@ fixes the agent's name and offers these calls and no other:
 | `forget` | `MemoryPipeline.forget` (`facade.py:528-582`) | binds, stamps |
 | `chat` | `MemoryPipeline.inject` (`facade.py:631-708`), then the model | binds, takes the snapshot when the call arrives, calls the one model, then stamps and stores the turn when the cell stores turns (v1; no v2 probe stores one, `BENCHMARK_V2.md`, "Probes") |
 | `chat_json` | none | calls the one model with no block, as the kernel does for a JSON-output call (`aios/syscall/syscall.py:893-895`) |
+
+"Binds" is the session binding of "Identity binding" below,
+canonicalization included; "stamps" and "takes the snapshot" are the
+barrier's acquire and snapshot ("Write before read").
 
 The harness, not an agent, also gets `open_session` and
 `close_session`, an audit of a user's raw rows and a cost read (both
@@ -385,9 +391,10 @@ covers what an edge cannot.
 - In an async graph a sync node is called in the loop's default thread
   pool (R6:598-608; R13:678-712), so the layer blocks a worker there,
   not the loop. An async node that called the layer directly would
-  block the loop, and the commit it waits for might never be run. An
-  async entry would stamp on the loop and run the library call in a
-  worker thread, as `runtime/launch.py` does (`launch.py:1062-1065`;
+  block the loop, and a commit that needs the loop (an async writer's)
+  could not run until the wait timed out. An async entry would stamp
+  on the loop and run the library call in a worker thread, as
+  `runtime/launch.py` does (`launch.py:1062-1065`;
   `aios/utils/request_pool.py:25-33`). LangGraph's own batched store
   refuses a synchronous call made on its event loop: "This can lead to
   deadlocks or performance issues" (R12:33-53). Not built for the
@@ -488,7 +495,7 @@ the layer's, built from the same settings. A replicated cell builds no
    used.
 3. A copy of the settings per agent: a consumer's own k, threshold and
    budget apply (V4), and a flooding writer builds its pipeline without
-   the quota.
+   the quota (Cerebrum `variants/base.py:231-249`).
 
 **What keeps it at parity.**
 1. **One library, one version.** Both loci import
@@ -726,12 +733,13 @@ in AIOS unless open decision 1 says so.
    Each agent they return is an adapter: its `run` starts one graph run
    and returns the node's result. The adapters keep the attributes and
    the seams `apply_variant` patches (Cerebrum
-   `cerebrum/example/agents/variants/base.py:269` on): `user_id`,
-   `share_memory`, `retrieval`, a module-level `create_memory` and
-   `update_memory` for a shared writer (`base.py:156-176`), and
-   `memory.pipeline` for a replicated agent (`base.py:179-201`). The
-   variants and the faults then reach a LangGraph agent through the
-   channels they use today. `apply_variant` knows the loci `kernel`,
+   `cerebrum/example/agents/variants/base.py`, from line 269):
+   `user_id`, `share_memory`, `retrieval`, a module-level
+   `create_memory` and `update_memory` for a shared writer
+   (`base.py:156-176`), and `memory.pipeline` for a replicated agent
+   (`base.py:179-201`). The variants and the faults then reach a
+   LangGraph agent through the channels they use today.
+   `apply_variant` knows the loci `kernel`,
    `replicated` and `native` only (`base.py:38`), so the adapters
    report `kernel` for the shared locus.
 5. **Harness seams.** Four condition names with their loci (Cerebrum
@@ -776,13 +784,16 @@ and deletion probe. At H = 0 the v2 cells are predicted to tie, so on
 their own they show that the library's deletion, supersession and
 selection carry over, not that placement matters. Each option adds a v2
 condition where the loci are predicted to part or a probe to fail:
-- A: the deletion probe can fail on this runtime (the 10 echo users,
-  once the forget is the writer's own list and delete).
+- A: the deletion probe can fail on this runtime: for the 10 echo
+  users of users 0 to 29, whose revoked value another writer also
+  wrote (an echo, `BENCHMARK_V2.md:107-112`), once the revoke is the
+  writer's own list and delete instead of the forget.
 - B: the identity binding, read by `misfiled_rows` (`METRICS.md:322`)
   and by the decision items' `foreign` picks.
 - C: the barrier, read by `late_covered`, `stale_read` and
-  `late_forget`. AIOS's concurrent cells ran at six agents (`s18`), so
-  the pair needs its own sequential cells.
+  `late_forget`. AIOS's concurrent cells ran at six agents (Cerebrum
+  `results/stress_smoke_s18`), so the pair needs its own sequential
+  cells.
 - D: a V2 writer's rows lie outside a forget's reach in replicated
   (`BENCHMARK_V2.md`, Amendment 4: "H = 2 is reported, not required").
   A scored v2 run at H > 0 "needs a v2 schedule", and none exists
@@ -918,8 +929,9 @@ is at or below 0, or F-d fails. Anything else is reported as mixed and
 goes back to the user, as `PILOT.md` does with "no rule outcome".
 
 Under an option, the same prediction as AIOS's:
-- A: the echo users fail deletion in both loci (AIOS, 5 users,
-  in-house: 0 of 2 in both, `decision_functional_s20`).
+- A: the echo users fail deletion in both loci (AIOS, 5 users: 0 of
+  the 2 echo users passed in either locus on in-house, 1 of 2 on Mem0,
+  `decision_functional_s20` at `de12cbf`).
 - B: shared has no misfiled row, `identity_overridden` on every
   request of the faulty writer, and no `foreign` pick. Replicated has
   misfiled rows and at least one such pick (AIOS, 5 users: 0 `foreign`
@@ -966,8 +978,11 @@ agent that attacks the layer.
    it is set (R14:577-581). Its token counts come from another counter.
    Answers and costs are comparable within the runtime, not across.
 7. **Dependencies.** LangGraph is installed nowhere here, and nothing
-   shows it installs beside the pins. A third venv may differ in
-   numerics, as the two do today, which matters for byte-equal blocks.
+   shows it installs beside the pins. A third venv may also differ in
+   numerics: a report's last digits already move with numpy's and
+   scipy's versions (`DEV_STATUS.md:3721-3722`, Subtask 19). Whether
+   that reaches a block's ranking was not checked; byte-equal blocks
+   would show it.
 8. **Variants through new agents.** A variant reaches an agent through
    seams of the agent's module and attributes. If the LangGraph
    adapters miss one, H = 2 means something else. The check on
@@ -1026,14 +1041,16 @@ agent that attacks the layer.
 3. **The one model and its route.**
    (a) Qwen-2.5:7B through `ChatOllama`: no cost, about 3 hours, the
    only model with a no-memory floor for the decision items.
-   (b) GPT-4o through `AzureChatOpenAI`: about 2 USD and under an hour
-   for v1; v2 unmeasured.
+   (b) GPT-4o through `AzureChatOpenAI`: for v1, 0.6 to 0.9 USD and
+   about 0.45 hours before the judges; for v2, about 1.0 USD by a
+   guess, its time unmeasured.
    (c) Either through `ChatLiteLLM`, the client library the kernel's
    adapter uses.
    Bears on: cost and time, risk 6, and P-c's reading.
 4. **One backend or two.**
-   (a) In-house only: verbatim rows, no extraction cost, writes that
-   commit at once.
+   (a) In-house only: verbatim rows, no extraction cost, short writes
+   (under concurrency the kernel's in-house probes waited a median 114
+   ms, `DEV_STATUS.md`, Subtask 18, "Smoke").
    (b) In-house and Mem0: about 28 to 31 USD of extraction for the
    core, Mem0's extraction noise, and writes that take seconds, which
    is where a barrier matters most.
