@@ -1016,8 +1016,10 @@ baseline, for the currency of plans, not for memory policy (S12). See
 For each condition: ours in brief, with where it is defined; each
 instance found, with its kind (P, A, V, T), what happened, in which
 system, the URL, the access date and how close it is to ours; then what
-was searched for and not found. Issue authors are not named. An entry of
-part (a) is cited by its tag.
+was searched for and not found. V1 to V5 are the agent variants of
+`HETEROGENEITY.md`; `wrong_user`, `missing_metadata`, `flood10` and
+`flood50` are the faulty agents of `STRESS_DIMENSIONS.md`. Issue authors
+are not named. An entry of part (a) is cited by its tag.
 
 ## (b) 1. Identity mismatch
 
@@ -1130,8 +1132,10 @@ other loci do and is protected only from the leak
   correctly on the backend"; the list endpoint's filter was at fault,
   and the Platform team fixed it.
   https://github.com/mem0ai/mem0/issues/5224, accessed 2026-11-20. How
-  close: a read that looked like missing identity metadata and was a
-  filter bug. V3's symptom, not its cause.
+  close: rows that looked as if they had lost their identity fields,
+  where the fault was a filter. It shows the symptom of missing metadata
+  (rows not found), for the user field rather than V3's owner and policy
+  fields.
 
 - **T. mcp-memory-ts, rows without a user.** "Security Fix Report - NULL
   user_id in Entities Table", dated 2025-10-14, in the docs of the
@@ -1142,11 +1146,12 @@ other loci do and is protected only from the leak
   creation".
   https://raw.githubusercontent.com/bobmatnyc/mcp-memory-ts/a04ead577ae9ed3342163e5d8266043205beccb5/docs/security/SECURITY_FIX_REPORT_20251014.md,
   accessed 2026-11-20. How close: rows written without the user field
-  were unreachable: the fail-closed miss V3 predicts for our kernel. A
-  small project's own report.
+  were unreachable, the outcome our partition gives a row with no
+  `user_id` (`RETRIEVAL_PATH.md:28`) and the miss V3 predicts for a row
+  with no owner or policy. A small project's own report.
 
-- **Ours.** The kernel's documented limitation: "Legacy unscoped
-  memories are excluded" (`SHARED_MEMORY_SYSTEM.md:473`).
+- **Ours, a known limit.** The kernel's documented limitation: "Legacy
+  unscoped memories are excluded" (`SHARED_MEMORY_SYSTEM.md:473`).
 
 - **Not found.** A published measurement of agents that omit ownership
   or sharing metadata. Searched (2026-11-20): agent memory records
@@ -1326,8 +1331,9 @@ an accepted write still in flight, not a lost update.
   tested on Neo4j or Amazon Neptune."
   https://help.getzep.com/graphiti/core-concepts/concurrent-ingestion,
   accessed 2026-11-20. How close: the backend leaves the order of
-  concurrent writers to the caller. Two agents writing one user's graph
-  would each have to await the other's call.
+  concurrent writers to the caller. The page addresses one caller; it
+  does not say how two agents that write one graph should order their
+  calls.
 
 - **V. Mem0 Platform, an accepted write that is not done.** Mem0 Docs,
   "Add Memory", under "Add with Mem0 Platform": "Expect a `status:
@@ -1366,9 +1372,10 @@ an accepted write still in flight, not a lost update.
   state, bypassing the UPDATE logic and producing duplicate vector
   embeddings." It advises a queue keyed by `user_id`.
   https://github.com/mem0ai/mem0/discussions/7303, accessed 2026-11-20.
-  How close: it asks for a serialization point per user, which our
-  barrier and single write path provide. Not a maintainer's statement as
-  far as read.
+  How close: the remedy it recommends is a point outside the agents that
+  orders one user's writes; ours orders each read after the writes
+  accepted before it (`STRESS_DIMENSIONS.md:266-273`). Not a
+  maintainer's statement as far as read.
 
 - **P. S-Bus, silent overwrites.** S8, §II-A of the v2 HTML: with four
   concurrent agents writing a shared key, "20/20 trials produce silent
@@ -1442,11 +1449,10 @@ tested (`STRESS_DIMENSIONS.md:658-660`).
   wrote generously in a personal scratch namespace starved their writes
   against a shared namespace because the same daily cap applied to
   both." https://docs.rs/crate/ai-memory/0.7.1/source/src/quotas.rs,
-  accessed 2026-11-20. How close: the only per-agent write quota found
-  in an agent memory system. Its key is agent and namespace, per day;
-  ours is writer, user and session (`STRESS_DIMENSIONS.md:477-493`). Its
-  own recorded flaw was a key too coarse for an agent that writes to
-  several scopes.
+  accessed 2026-11-20. How close: the one per-agent write quota read
+  here. Its key is agent and namespace, per day; ours is writer, user
+  and session (`STRESS_DIMENSIONS.md:477-493`). Its own recorded flaw
+  was a key too coarse for an agent that writes to several scopes.
 
 - **P. Governed Shared Memory, a write ceiling.** S1, §8.2: "The server
   caps writes at 10 per second per tenant".
@@ -1466,8 +1472,9 @@ tested (`STRESS_DIMENSIONS.md:658-660`).
   mitigations against prompt injection attacks in Copilot."
   https://www.microsoft.com/en-us/security/blog/2026/02/10/ai-recommendation-poisoning/,
   accessed 2026-11-20. How close: unwanted writes into an assistant's
-  memory, by outsiders, observed in the wild. Adversarial and targeted,
-  where ours is a benign faulty agent bounded by a quota.
+  memory by outsiders, found by reviewing AI-related URLs in email
+  traffic over 60 days. Adversarial and targeted, where ours is a benign
+  faulty agent bounded by a quota.
 
 - **P. MINJA.** "Memory Injection Attacks on LLM Agents via Query-Only
   Interaction". Shen Dong, Shaochen Xu, Pengfei He, Yige Li, Jiliang
@@ -1803,9 +1810,9 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
   again, and it concerns tool access, not agent memory.
 
 - **The pinned backends.** Whether mem0ai 2.0.2 (`requirements.txt:41`)
-  and the pinned graphiti-core have the behaviors of Mem0 #5160, #6515,
-  #4453 or Graphiti #1837 was not checked. A fixed or absent bug does
-  not affect our runs.
+  and graphiti-core 0.31.2 (`requirements.txt:45`) have the behaviors of
+  Mem0 #5160, #6515, #4453 or Graphiti #1837 was not checked. Where a
+  bug is fixed or absent in the pinned version, our runs do not meet it.
 
 - **Issue texts.** What an issue says is its author's report. A behavior
   counts as confirmed here only where a maintainer replied or a fix was
@@ -1835,7 +1842,7 @@ in the block and the answer (`BENCHMARK_V2.md:189`).
    only maintainer-confirmed ones; cite only papers, advisories and
    vendor documents. Bears on how much of part (b) the paper can use.
 
-5. **The pinned backends.** Whether to check mem0ai 2.0.2 and the pinned
-   graphiti-core against the issues of part (b) before citing them as
-   motivation. Bears on whether the paper may say our backends have
-   these failures.
+5. **The pinned backends.** Whether to check mem0ai 2.0.2 and
+   graphiti-core 0.31.2 against the issues of part (b) before citing
+   them as motivation. Bears on whether the paper may say our backends
+   have these failures.
