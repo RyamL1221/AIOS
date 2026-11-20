@@ -25,11 +25,11 @@ LangGraph's source is read at its release tag `1.2.24`;
 the tags `langchain-core==1.8.4` and `langchain==1.5.2` (compared
 with `cmp`). No model, kernel, test or benchmark was run. The counts
 and times below come from stored results files and cell logs, read by
-scripts kept outside the repositories. LangGraph is
-installed in neither venv; both run Python 3.11.15. Names that are not
-in the code today are proposals: `MemoryLayer`, `AgentMemory`, the
-conditions `lg_shared_*` and `lg_replicated_*`, and a `runtime` field
-on the records.
+scripts kept outside the repositories. LangGraph is installed in
+neither venv; both run Python 3.11.15. Names that are not in the code
+today are proposals: `MemoryLayer`, `AgentMemory`, the conditions
+`lg_shared_*` and `lg_replicated_*`, the context field `turn_id`, and
+a `runtime` field on the records.
 
 ## What is reproduced
 
