@@ -152,9 +152,9 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
     rises are overstated: in the kernel logs the judge's call came
     while the scheduler slept (it was taken up about 1.1 s after the
     call before it ended) in every user of every v1 kernel cell, as the
-    in-house calls did. So did 77 to 98% of the probes' calls and 91 to
-    100% of the judge's in each v2 smoke, whose waits were then likely
-    near the in-house v1 ones;
+    in-house calls did. So did 83 to 92% of the probes' calls and 93 to
+    100% of the judge's in the kernel logs of the v2 cells used here,
+    whose waits were then likely near the in-house v1 ones;
   - a grid cell runs with `--no-judge` ("The judge window"): a judged
     stored user loses 3.9 s, its judge call (3.04 s, the mean of the
     2,055 judge calls in the kernel logs of the seven runs the v1 and
