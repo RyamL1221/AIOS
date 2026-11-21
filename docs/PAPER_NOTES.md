@@ -17,8 +17,10 @@ as committed at Cerebrum `3b9c923`; and Cerebrum
 `memory-providers.md` and `CONTRIBUTE.md` were read and hold no count or
 interval. No project code or test was run, and no raw results file was
 opened: where an entry speaks of code, it repeats what a document says
-of it. Where an entry compares stored numbers that no document
-compares, it says so ("this file's reading").
+of it, except that L.9 also reads one Cerebrum script,
+`benchmarks/shared_memory/locus_compare.py`, and its commit. Where an
+entry compares stored numbers that no document compares, it says so
+("this file's reading").
 
 **Subtask 20's last results** (2026-11-20) are committed in both
 repositories: the primary judge's reliability and its k, the agreement
@@ -86,8 +88,11 @@ that is the case for every benchmark v1 result, the pilot included.
 5. On benchmark v2 (30 users, Qwen, H = 0) the kernel and the replicated
    agents delete a revoked fact completely and serve no superseded row;
    native does neither, by its design (C1.7). The judged score there is
-   reported as cell means; the one paired kernel − native test (`s14b`,
-   Mem0) gives 3.33 against 2.93, paired t p = 0.05 (C1.9).
+   reported as cell means. The paired kernel − native differences are
+   `s14b`'s on Mem0 (hybrid: 3.33 against 2.93, paired t p = 0.05; a
+   revision-2 smoke whose probes stored their answers, L.10) and
+   `s17a`'s re-judge on A-MEM, on each judge's own score (primary 0.00
+   [−0.44, +0.44], second −0.10 [−0.44, +0.24]) (C1.9).
 6. Under concurrency, a wrong-user writer and floods the kernel keeps
    its guarantees. Outside the kernel the measured cost of concurrency
    and floods is small, or shows in block measures only; a wrong-user
@@ -111,10 +116,12 @@ that is the case for every benchmark v1 result, the pilot included.
     so its relevance threshold filtered nothing; the workshop's runs
     "span several code states", which the documents do not date (L.13).
 11. The documents call two runs pre-registered (the re-validation and
-    the pilot), and `DEV_STATUS.md` calls the Subtask 8 locus smoke's
-    cell rule pre-registered too; that rule failed in 3 of its 6 model ×
-    backend rows (L.9, L.14). Most other numbers rest on 5 or 30 users
-    and one model, Qwen ("What each finding rests on").
+    the pilot). The Subtask 8 locus smoke reused the re-validation's
+    pre-registered cell rule, with the kernel cell as the reference,
+    and the rule failed in 3 of its 6 model × backend rows; the
+    design's own 0.25 trigger flagged two in-house Llama cells (L.9,
+    L.14, C1.3). Most other numbers rest on 5 or 30 users and one
+    model, Qwen ("What each finding rests on").
 
 ## The claims, as read here
 
@@ -239,8 +246,8 @@ users or wait for the judge.
   restates the value that is later revoked. **Fold.** A Mem0 row of one
   fact into which its extraction wrote another fact's value.
 - **Functional check.** Users 0 to 4, Qwen, no judge. **Smoke.** 30
-  users, Qwen. Neither is pre-registered; the sources disagree on one
-  smoke's rule, the Subtask 8 locus smoke's (L.9).
+  users, Qwen. Neither is pre-registered; the Subtask 8 locus smoke
+  reused the re-validation's pre-registered cell rule (L.9).
 - **Pooled.** Each user's mean of the Mem0 and in-house differences (the
   pilot's primary measure). **DiD.** Per user, the difference at H = 2
   minus the difference at H = 0.
@@ -257,7 +264,7 @@ or the document gives them.
 | provider smoke | `provider_smoke` | 5 | 30 `kernel_shared` trials per cell, 2 backends × 3 models, unpaired | `d7d8682` (Mem0), `9f06018` (in-house) | `c3dc42e` |
 | native smoke | `native_smoke` | 6 | 30 trials per cell, 2 native conditions × 3 models | `0c59a28` | `066bc29` |
 | `cc7` | `cost_check` | 7 | 10 GPT-4o trials × 2 conditions, "run to check the cost instrumentation, not to compare conditions" | `4d89763-dirty` (committed as `5f61bff`) | `52330ff-dirty` (committed as `f0e18ca`) |
-| locus smoke | `locus_smoke` | 8 | 30 trials per cell, 3 models, unpaired; a cell rule `DEV_STATUS.md` calls pre-registered (L.9) | `149aa7d` | `408ceea` |
+| locus smoke | `locus_smoke` | 8 | 30 trials per cell, 3 models, unpaired; the re-validation's pre-registered cell rule, reused (L.9) | `149aa7d` | `408ceea` |
 | `p9` | `pilot_v1` | 9 | 10 cells × 3 models × 30 users, sampled decoding; superseded | `c953fad-dirty` | `f9cf426-dirty` |
 | `p9d` | `pilot_v1_9d`, re-judged in `pilot_v1_9d_greedy` | 9d | 10 cells × 3 models × 30 users, fixed decoding for assistants and writers; Mem0's extraction at temperature 0.1, no seed | `7cc3774` (`7cc3774-dirty` on 27 cells: a `docs/MODELS.md` edit, no code) | `14b3c67`; re-judge `be72d70` |
 | `h10` | `heterogeneity_check` | 10 | 18 cells × 5 users, Qwen, no judge | `709d0b4`, `da25e2c` | `268e270`, `04631f6` |
@@ -348,16 +355,19 @@ decoding.**
   the first kernel draw by +0.47 Profile and +0.53 Integration; the
   Profile gap against both kernel draws (3.50 and 3.57 against 3.97)
   has Welch p = 0.012 against the pooled 60 kernel trials, "Bonferroni
-  p ≈ 0.2". The cell rule that `DEV_STATUS.md` calls pre-registered
-  (`locus_compare.py`) failed in 3 of the 6 model × backend rows: Mem0
-  Llama (integration), in-house Llama (profile, integration) and
-  in-house Qwen (task); "16 of 18 judge cells are within 0.25". The
-  in-house Llama gap was investigated "as the design requires" and is
-  "Not explained". Paired on fixed users in Subtask 9 the Profile
-  difference is +0.03 [−0.43, +0.49] (n = 29). (b) Subtask 9, paired,
-  sampled decoding: Qwen, Mem0, native − kernel, Profile +0.63 [+0.18,
-  +1.09] and Integration +0.53 [+0.13, +0.93]. Under fixed decoding and
-  the shared compact block (9d): Profile −0.10 [−0.54, +0.34].
+  p ≈ 0.2". The re-validation's pre-registered cell rule, reused with
+  the kernel cell as the reference (`locus_compare.py`; L.9), failed in
+  3 of the 6 model × backend rows: Mem0 Llama (integration), in-house
+  Llama (profile, integration) and in-house Qwen (task). The design's
+  separate trigger (`REPLICATED_LOGIC.md`: replicated above the kernel
+  by more than 0.25) flagged only the two in-house Llama cells ("16 of
+  18 judge cells are within 0.25"). They were investigated "as the
+  design requires"; the Profile gap is "Not explained". Paired on fixed
+  users in Subtask 9 the Profile difference is +0.03 [−0.43, +0.49]
+  (n = 29). (b) Subtask 9, paired, sampled decoding: Qwen, Mem0,
+  native − kernel, Profile +0.63 [+0.18, +1.09] and Integration +0.53
+  [+0.13, +0.93]. Under fixed decoding and the shared compact block
+  (9d): Profile −0.10 [−0.54, +0.34].
 - Run: (a) the locus smoke (AIOS `149aa7d`, Cerebrum `408ceea`); (b)
   `p9` (recorded as AIOS `c953fad-dirty`, Cerebrum `f9cf426-dirty`; tag
   `neurips-subtask-09`), then `p9d`.
@@ -1628,19 +1638,34 @@ that varies.**
   Of `f14c`: "the per-cell rates are not comparisons". A 30 of 30 has
   the interval 1.00 [0.89, 1.00].
 - Fixed before running: the documents call two runs pre-registered, the
-  re-validation (Subtask 3) and the pilot (Subtask 11). The sources
-  disagree on a third. `DEV_STATUS.md` calls the Subtask 8 locus smoke's
-  rule "the pre-registered cell rule": `REPLICATED_LOGIC.md`, "Written
-  before any agent code", has a replicated cell that beats the kernel
-  "by more than noise (0.25 on a judge mean)" investigated before
-  moving on. The run's provenance calls it "A smoke, not a verdict"
-  (L.14 gives the rule's outcome). The heterogeneity, stress and
-  ablation specs, with their predictions, were committed before their
-  code; the decision criteria D1 to D5 and the judges' k rule were
-  written before their runs. The v2 smokes have no rule: "A smoke, not a
-  verdict: no rule is pre-registered here." The Graphiti and A-MEM
-  pilots are "reported, not required".
-- Rests on: the documents.
+  re-validation (Subtask 3) and the pilot (Subtask 11). The Subtask 8
+  locus smoke reused the re-validation's cell rule. `DEV_STATUS.md`
+  reports the smoke against "the pre-registered cell rule"
+  (`locus_compare.py`, `summary.csv`): the re-validation's pass rule
+  (`REVALIDATION.md`, "Pass rule", "Committed before any trial ran"),
+  applied with the kernel cell as the reference. `locus_compare.py`
+  says so ("the pre-registered cell rule (``revalidate``)") and gives
+  the rule the kernel cell in place of the workshop baseline. It is not
+  in the run's commit (Cerebrum `408ceea`); it was committed with the
+  smoke's results (`d6dd2d9`), and when it was written is not recorded.
+  The rule is two-sided, so it also fails cells where replicated is
+  below the kernel; it failed in 3 of the 6 model × backend rows (L.14).
+  `REPLICATED_LOGIC.md` ("Written before any agent code") sets a
+  separate trigger: "If replicated beats kernel by more than noise
+  (0.25 on a judge mean)", it "is investigated before moving on". It
+  fired for in-house Llama Profile and Integration, which were
+  investigated (C1.3). `DEV_STATUS.md`'s "16 of 18 judge cells are
+  within 0.25" is this trigger's one-sided count (this file's reading
+  of its table: three Mem0 cells lie more than 0.25 below the kernel,
+  at −0.33, −0.33 and −0.27). The run's provenance: "A smoke, not a
+  verdict". The heterogeneity, stress and ablation specs, with their
+  predictions, were committed before their code; the decision criteria
+  D1 to D5 and the judges' k rule were written before their runs. The
+  v2 smokes have no rule: "A smoke, not a verdict: no rule is
+  pre-registered here." The Graphiti and A-MEM pilots are "reported,
+  not required".
+- Rests on: the documents; for the locus smoke's rule, a reading of
+  `locus_compare.py` and its commit.
 
 **L.10 The datasets.**
 - `users_v1` is skewed (known issue 22): 122 of 150 users prefer Python,
@@ -1811,11 +1836,12 @@ recorded.**
   or model version, so this cannot be confirmed." Under judge prompt v2,
   Spearman's rho against v1 is below the expected 0.8 in 7 of 8
   `kernel_shared` cells (0.571 to 0.870).
-- The Subtask 8 locus smoke (the cell rule `DEV_STATUS.md` calls
-  pre-registered; L.9): the rule failed in Mem0 Llama (integration),
-  in-house Llama (profile, integration) and in-house Qwen (task), 3 of
-  the 6 model × backend rows. The in-house Llama gap was investigated
-  and is "Not explained"; it did not survive pairing (C1.3).
+- The Subtask 8 locus smoke (the re-validation's cell rule, reused with
+  the kernel cell as the reference; L.9): the rule failed in Mem0 Llama
+  (integration), in-house Llama (profile, integration) and in-house
+  Qwen (task), 3 of the 6 model × backend rows. The in-house Llama gap,
+  which the design's 0.25 trigger flagged, was investigated and is "Not
+  explained"; it did not survive pairing (C1.3).
 - `h10` (5 users): the V5 design check "PASS under kernel in-house;
   FINDING in the other five cells"; the V3 consumer had "no leak
   opportunity" in that schedule (known issue 34, fixed by the pilot's
@@ -2227,7 +2253,7 @@ benchmark v1 result (`FULL_GRID.md`).
 |---|---|---|
 | 150 users per cell | L.13 (the re-validation: generated users, three models, pre-registered); L.11 (the no-memory decision check: Qwen) | nothing for L.13; per-model `no_memory` cells are proposed (open decision 8) |
 | 30 users, pre-registered (the pilot, `pv1`) | C1.4, C1.6, C2.1, C3.1, C3.2 (3 users per variant and role), C3.3 (the pilot's part), L.1 | not stated |
-| 30 trials, the Subtask 8 locus smoke (its cell rule called pre-registered in `DEV_STATUS.md`, "A smoke, not a verdict" in its provenance) | C1.3 (a) | not stated |
+| 30 trials, the Subtask 8 locus smoke (the re-validation's pre-registered cell rule, reused with the kernel cell as the reference; "A smoke, not a verdict" in its provenance) | C1.3 (a) | not stated |
 | 30 users, benchmark v1, no rule | C1.2, C1.3 (b), C1.5, C1.11 (v1), C2.2, C2.3, K.1 (`p9d`), K.2, K.3 (the v1 costs), L.20 | not stated |
 | 30 users, benchmark v2 smokes (Qwen, H = 0) | C1.1 (the smoke counts), C1.7, C1.8 (H = 0), C1.9, C2.5, C2.6, L.6, L.8, L.10, K.3 (the v2 costs), K.4 (`s17`) | replaces them; adds native k = 30 on Graphiti |
 | 30 users, stress smoke (in-house, Qwen, judge-free) | C3.4, C3.6, K.6 (concurrency) | the stress cells' "scored runs wait for the grid" |
@@ -2341,15 +2367,20 @@ here.
     11×; report it with its caveat; or take the cost claim from the
     grid's records; and whether to read Azure's prices first. Bears on
     K.1, K.7, K.8.
-14. **The Subtask 8 locus smoke's rule.** `DEV_STATUS.md` calls its
-    cell rule pre-registered, and the rule failed in 3 of 6 model ×
-    backend rows; the run's provenance calls the run "A smoke, not a
-    verdict", and its one investigated gap did not survive pairing
-    (C1.3). Options: report it as a pre-registered rule that failed,
-    with its investigation and the paired re-test; or as a smoke's
-    trigger for an investigation, superseded by `p9d` (C1.2). Bears on
-    C1.3, L.9, L.14 and on how many runs the paper calls
-    pre-registered.
+14. **The Subtask 8 locus smoke's criteria.** The smoke reused the
+    re-validation's pre-registered cell rule, with the kernel cell as
+    the reference, in a script committed with its results; the rule
+    failed in 3 of 6 model × backend rows, on both sides of the kernel.
+    The design's own trigger (`REPLICATED_LOGIC.md`: replicated above
+    the kernel by more than 0.25) flagged the two in-house Llama cells;
+    their Profile gap is "Not explained" and did not survive pairing
+    (C1.3). The run's provenance calls it "A smoke, not a verdict".
+    Options: report the smoke under its design's trigger (two cells
+    flagged, investigated, superseded by `p9d`, C1.2), with the rule's
+    failures beside it; report the rule's failures as a criterion not
+    met, a rule registered for the re-validation and reused here; or
+    cite the locus comparison from `p9d` only. Bears on C1.3, L.9 and
+    L.14.
 15. **The pilot's V1 consumer row.** Qwen's V1 consumer gap (+1.17 /
     +1.00, 3 users, H = 1) is in the stored table and in no document's
     reading. Options: report it beside V2 and V4 as a third variant with
