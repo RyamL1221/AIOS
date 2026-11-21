@@ -612,16 +612,16 @@ What that would need, from the code as it stands:
   parameter in the drivers, and a job per cell. The drivers' variables
   narrow a run to one cell (`PHASES`, `METHODS` and `CONDITIONS`;
   `LEVELS` in `run_pilot_v1_graphiti.sh`; in `run_ablation.sh`,
-  `ABLATE` and `CONDITIONS`, to a switch's pair). A job per phase
-  would run up to 136 hours (Qwen's stress `agent` phase, 36 cells):
-  that bounds the time at any K above about 10, and may exceed a
-  cluster's wall-clock limit.
+  `ABLATE` and `CONDITIONS`, to one switch's cells under one
+  condition). A job per phase would run up to 136 hours (Qwen's stress
+  `agent` phase, 36 cells): that bounds the time at any K above about
+  10, and may exceed a cluster's wall-clock limit.
 - **The models.** Ollama 0.40.11 serving the pinned Qwen, Llama and
   embedding models (`MODELS.md`'s digests): 4.68, 4.92 and 0.27 GB of
   weights (this machine's Ollama manifests), and the cache of a
-  16,384-token context (`llms.context_window`), not measured; one GPU
-  a job for the local-model cells. GPT-4o cells need the embedder
-  only.
+  16,384-token context (the `num_ctx` the stored Qwen cells of
+  Subtasks 17 to 20 record, known issue 29), not measured; one GPU a
+  job for the local-model cells. GPT-4o cells need the embedder only.
 - **The results.** About 14 GB of results and logs for the grid, at
   the stored runs' sizes (30 KB a v1 user-trial in `pilot_v1_hetero`;
   0.21, 0.28 and 0.45 MB a v2, stress and ablation one in
@@ -671,20 +671,21 @@ What that would need, from the code as it stands:
    or the smoke's design (12 in-house cells a model: 37 hours on Qwen);
    or more backends (Graphiti and A-MEM, above). The agent count at
    the check's H 0 and 2, or at H 1 too (`STRESS_DIMENSIONS.md` keeps
-   H's levels {0, 1, 2} at every N: 36 more cells, 90 hours, $1,061).
+   H's levels {0, 1, 2} at every N: 36 more cells for the two models,
+   90 hours, $1,061).
    The load cells at 150 users (12 cells, 28 hours, $342) or at the
    check's 16; and unjudged, or judged (1,800 judgments, $12.49 with
    the second judge).
 4. **The ablations.** Which switches run at 150 users and on which
-   models: GPT-4o is sized on all four judged switches, though the
-   formatting prediction names both models and the budget's names none
-   (its `budget` and `threshold` cells are 1.6 hours and $8); whether
-   Mem0 gets the set; which switch Graphiti and A-MEM get (a `quota`
-   or `barrier` switch needs flood or concurrent cells there, which
-   nothing measures), and whether it is judged (sized judge-free; a
-   judged pair is $2.08 more, and under (b) a judged ablation at 30
-   users); and whether the five full-kernel cells that repeat stress
-   cells (23 hours) run once.
+   models: GPT-4o is sized on all four judged switches, but only the
+   formatting prediction names both models; the budgeted ranking's
+   names none (GPT-4o's `budget` and `threshold` cells are 1.6 hours
+   and $8); whether Mem0 gets the set; which switch Graphiti and A-MEM
+   get (a `quota` or `barrier` switch needs flood or concurrent cells
+   there, which nothing measures), and whether it is judged (sized
+   judge-free; a judged pair is $2.08 more, and under (b) a judged
+   ablation at 30 users); and whether the five full-kernel cells that
+   repeat stress cells (23 hours) run once.
 5. **v1 and v2 at H > 0 on 150 users.** Which schedule: the pilot's
    balanced design extended to 150 users (each H = 1 pairing 15 times,
    for 3), or another rule; and v2's at H = 2. No H > 0 cell can start
