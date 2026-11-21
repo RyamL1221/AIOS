@@ -146,9 +146,15 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
     none: per cell means of 0.86 to 1.03 s in-house and 0.27 to 0.68 s
     on Mem0, Graphiti and A-MEM, where a store write of over a second
     can come before the call. Had all four model calls of a v1 user
-    waited its cell's mean, the in-house v1 rows (and the two R3 rows
-    built on GPT-4o's) would be 0.4 to 0.6 s a user lower, the other
-    four 1.1 to 2.0 s higher, and the v1 block 3.1 hours longer. The
+    waited its cell's mean, the in-house v1 rows would be 0.4 to 0.6 s a
+    user lower, the two Mem0 rows and the Qwen and Llama rows on
+    Graphiti and A-MEM 1.1 to 2.0 s higher, and the two R3 rows 0.6 s
+    (Graphiti) and 1.1 s (A-MEM) higher. An R3 row is GPT-4o's in-house
+    seconds, which would be 0.56 s lower, plus a backend term from
+    Qwen's kernel cells' wall clocks, waits included. Those cells' mean
+    waits are 0.866 s in-house, 0.566 s on Graphiti and 0.440 s on
+    A-MEM, so the term would gain 4 × (0.866 − 0.566) and
+    4 × (0.866 − 0.440) s. The v1 block would be 4.2 hours longer. The
     rises are overstated: in the kernel logs the judge's call came
     while the scheduler slept (it was taken up about 1.1 s after the
     call before it ended) in every user of every v1 kernel cell, as the
