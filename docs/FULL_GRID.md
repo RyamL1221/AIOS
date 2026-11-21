@@ -136,15 +136,31 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
 - **Made the grid's.** A stored cell differs from a grid cell in three
   measured ways, and each row is corrected for them:
   - before the event-driven scheduler (AIOS `c389539`, known issue 15)
-    every model call waited about 0.85 s (`scheduler_check_s18`: median
-    845 ms before, 1.0 ms after). Every v1 and v2 cell used here ran
-    before it, and the stress, ablation and decision cells after;
+    the scheduler slept 1 s, then took up the calls queued (AIOS
+    `7053e0a`, with a 0.1 s wait for more), so a model call waited up
+    to 1.1 s. Each call is taken here to have waited 0.85 s, the median
+    of `scheduler_check_s18` (10 users, kernel in-house, the
+    assistant's call: 845 ms before, 1.0 ms after). Every v1 and v2
+    cell used here ran before it, and the stress, ablation and decision
+    cells after. The v1 cells record the assistant's wait, the v2 cells
+    none: per cell means of 0.86 to 1.03 s in-house and 0.27 to 0.68 s
+    on Mem0, Graphiti and A-MEM, where a store write of over a second
+    can come before the call. Had all four model calls of a v1 user
+    waited its cell's mean, the in-house v1 rows (and the two R3 rows
+    built on GPT-4o's) would be 0.4 to 0.6 s a user lower, the other
+    four 1.1 to 2.0 s higher, and the v1 block 3.1 hours longer. The
+    rises are overstated: in the kernel logs the judge's call came
+    while the scheduler slept (it was taken up about 1.1 s after the
+    call before it ended) in every user of every v1 kernel cell, as the
+    in-house calls did. So did 77 to 98% of the probes' calls and 91 to
+    100% of the judge's in each v2 smoke, whose waits were then likely
+    near the in-house v1 ones;
   - a grid cell runs with `--no-judge` ("The judge window"): a judged
-    stored user loses 3.9 s, its judge call (3.05 s, the mean of the
-    2,325 judge calls in those runs' kernel logs) and the wait before
-    it. A cell run before the new scheduler also loses 0.85 s for each
-    other model call: 3 a v1 user (the assistant and the two writers)
-    and 6 a v2 user (the probes);
+    stored user loses 3.9 s, its judge call (3.04 s, the mean of the
+    2,055 judge calls in the kernel logs of the seven runs the v1 and
+    v2 rows use) and the wait before it. A cell run before the new
+    scheduler also loses 0.85 s for each other model call: 3 a v1 user
+    (the assistant and the two writers) and 6 a v2 user (the probes);
   - a v2-type cell (on `users_v2` or its agent-count versions: the v2,
     stress and ablation cells) run before revision 4 gains its two
     decision turns: 4.9 s a user in-house and 8.3 s on Mem0
@@ -158,8 +174,11 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
   below). The one 150-user cell is Qwen's `no_memory`.
 - **Basis.** `M30`, `M16`, `M5`, `M150`: measured on that many users in
   the run named; the range is over its cells' wall clocks per user,
-  before the corrections. `R1` to `R10`: no cell of its own, sized by
-  the rule named.
+  before the corrections, and "corrected" gives each cell's seconds
+  after them: the loci in the order kernel, replicated, native, and in
+  v1 each locus's cells by H (0, 1, 2, or 0 and 2), separated by
+  semicolons. `R1` to `R10`: no cell of its own, sized by the rule
+  named; a list after an `R2` gives its cells' seconds in that order.
 - **Hours** are cells × users × seconds per user. **Dollars** are cells
   × users × a rate per user; the second judge's users are 45 of 150
   ("The two judges").
@@ -179,7 +198,7 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
   $0.065, Graphiti $0.096 and A-MEM $0.0144 a user. v2, from the
   smokes: Mem0 $0.36 (139,700 tokens in and 1,100 out), Graphiti $0.42
   (153,600 and 3,500) and A-MEM $0.10 (23,200 and 4,400). The decision
-  check's Mem0 cells, at Subtask 20's code, agree: $0.34 to $0.37 a
+  check's Mem0 cells, at Subtask 20's code, agree: $0.34 to $0.36 a
   user with memory (6,982,522 tokens in and 55,668 out over its 65
   trials, $18.01). Under the floods on Mem0, from the 5-user cells of
   `stress_functional_f18b`: kernel $0.40, replicated and native $0.73
@@ -214,8 +233,14 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
   Qwen's completion tokens and two decision turns. What is left of a
   v1 in-house kernel user once the model's own seconds in the kernel
   log are taken out is the same for both models (4.46 s Qwen, 4.48 s
-  GPT-4o), which is what the rule assumes. Concurrent and load rows
-  are sized as sequential ones.
+  GPT-4o), which is what the rule assumes. A concurrent or load row is
+  GPT-4o's sequential row plus the difference between the two Qwen
+  rows, every cell alike: +2.9 s concurrent and +1.9 s load in-house,
+  and −10.3 s for Mem0's load cells, against R7's three v2 cells,
+  though the load cells are kernel only. In-house, Qwen's concurrent
+  cells differ from their locus's sequential cell by −9.2 to +15.9 s,
+  which the records do not split into the model's speed and the
+  concurrency.
 - **R3, GPT-4o on Graphiti and A-MEM in v1.** No such cell. GPT-4o's
   in-house seconds, plus what the backend adds in Qwen's v1 kernel
   cells (wall clock less the model's seconds in the kernel log, against
@@ -250,10 +275,10 @@ logs in `repo-artifacts/Cerebrum/`); no run was made for it.
   cells at H = 0, run at Subtask 20's code (no judge, the new
   scheduler, the decision turns) and so not corrected, took 108.8,
   144.4 and 170.2 s (5 users).
-- **R8, ablation cells outside the smoke.** The smoke ran 10 of the 22
-  cells at 30 users. The other 12 take the mean of the ten. At 5 users
-  (`ablation_functional_f19b`) the 12 took 106.1 s a user on average
-  (63.0 to 141.2), against 103.1 s for the ten.
+- **R8, the ablation cells.** The smoke ran 10 of the 22 cells at 30
+  users, and all 22 take the ten's mean, the ten included. At 5 users
+  (`ablation_functional_f19b`) the other 12 took 106.1 s a user on
+  average (63.0 to 141.2), against 103.1 s for the ten.
 - **R9, native at k = 30.** Its k = 10 cell: the harness has no switch
   for the native k yet ("Cells decided so far").
 - **R10, decision turns on Graphiti and A-MEM.** Not measured: 6.6 s a
@@ -264,12 +289,12 @@ loci × H 0, 1, 2. Every row is judged.
 
 | Cells | n | Users | s per user | Basis | Hours | Assistant $ | Backend $ | Judge $ | Second judge $ |
 |---|---:|---:|---:|---|---:|---:|---:|---:|---:|
-| Qwen and Llama (9 each), in-house | 18 | 150 | 34.9 | M30 `pilot_v1_hetero`: 9 Qwen cells, 34.5 to 49.2 s. Llama R1 | 26.2 | 0 | 0 | 16 | 3 |
-| Qwen and Llama (9 each), Mem0 | 18 | 150 | 38.5 | M30 `pilot_v1_hetero`: 9 Qwen cells, 38.6 to 51.2 s. Llama R1 | 28.9 | 0 | 176 | 16 | 3 |
-| Qwen and Llama (9 each), Graphiti | 18 | 150 | 51.4 | M30 `pilot_v1_graphiti` (native: `pilot_v1_graphiti_native_filter`): 6 Qwen cells at H 0 and 2, 50.1 to 63.5 s; H = 1 R5. Llama R1 | 38.5 | 0 | 259 | 16 | 3 |
-| Qwen and Llama (9 each), A-MEM | 18 | 150 | 31.3 | M30 `pilot_v1_amem`: 6 Qwen cells at H 0 and 2, 34.3 to 41.8 s; H = 1 R5. Llama R1 | 23.5 | 0 | 39 | 16 | 3 |
-| GPT-4o, in-house | 9 | 150 | 6.9 | M30 `pilot_v1_hetero`: 9 cells, 12.3 to 14.0 s | 2.6 | 9 | 0 | 8 | 2 |
-| GPT-4o, Mem0 | 9 | 150 | 10.5 | M30 `pilot_v1_hetero`: 9 cells, 15.9 to 18.8 s | 3.9 | 9 | 88 | 8 | 2 |
+| Qwen and Llama (9 each), in-house | 18 | 150 | 34.9 | M30 `pilot_v1_hetero`: 9 Qwen cells, 34.5 to 49.2 s; corrected 42.8, 41.7, 38.0; 31.9, 29.5, 30.8; 39.3, 32.4, 28.1. Llama R1 | 26.2 | 0 | 0 | 16 | 3 |
+| Qwen and Llama (9 each), Mem0 | 18 | 150 | 38.5 | M30 `pilot_v1_hetero`: 9 Qwen cells, 38.6 to 51.2 s; corrected 44.8, 43.2, 42.8; 40.6, 35.4, 38.0; 34.6, 35.4, 32.2. Llama R1 | 28.9 | 0 | 176 | 16 | 3 |
+| Qwen and Llama (9 each), Graphiti | 18 | 150 | 51.4 | M30 `pilot_v1_graphiti` (native: `pilot_v1_graphiti_native_filter`): 6 Qwen cells at H 0 and 2, 50.1 to 63.5 s; corrected 56.4, 57.1; 53.3, 43.7; 53.9, 43.9; H = 1 R5. Llama R1 | 38.5 | 0 | 259 | 16 | 3 |
+| Qwen and Llama (9 each), A-MEM | 18 | 150 | 31.3 | M30 `pilot_v1_amem`: 6 Qwen cells at H 0 and 2, 34.3 to 41.8 s; corrected 32.5, 28.9; 34.3, 27.9; 35.4, 28.9; H = 1 R5. Llama R1 | 23.5 | 0 | 39 | 16 | 3 |
+| GPT-4o, in-house | 9 | 150 | 6.9 | M30 `pilot_v1_hetero`: 9 cells, 12.3 to 14.0 s; corrected 7.4, 7.6, 7.0; 7.5, 6.7, 6.0; 7.1, 6.5, 5.8 | 2.6 | 9 | 0 | 8 | 2 |
+| GPT-4o, Mem0 | 9 | 150 | 10.5 | M30 `pilot_v1_hetero`: 9 cells, 15.9 to 18.8 s; corrected 10.0, 9.7, 9.4; 12.3, 10.8, 9.9; 11.9, 10.9, 9.8 | 3.9 | 9 | 88 | 8 | 2 |
 | GPT-4o, Graphiti | 9 | 150 | 23.8 | R3: no cell | 8.9 | 9 | 130 | 8 | 2 |
 | GPT-4o, A-MEM | 9 | 150 | 10.2 | R3: no cell | 3.8 | 9 | 19 | 8 | 2 |
 | **Sum** | 108 | | | | 136.3 | 36 | 711 | 96 | 20 |
@@ -280,22 +305,22 @@ integration answer.
 
 | Cells | n | Users | s per user | Basis | Hours | Assistant $ | Backend $ | Judge $ | Second judge $ |
 |---|---:|---:|---:|---|---:|---:|---:|---:|---:|
-| Qwen and Llama (6 each), in-house, H = 0 and 2 | 12 | 150 | 86.4 | M30 at H = 0: 98.9 (kernel), 99.7 (replicated) in `bench_v2_smoke_s17`, 73.0 (native) in `bench_v2_smoke_a4`; H = 2 R4. Llama R1 | 43.2 | 0 | 0 | 10 | 2 |
-| GPT-4o, in-house, H = 0 and 2 | 6 | 150 | 16.2 | R2: no GPT-4o v2 cell | 4.0 | 17 | 0 | 5 | 1 |
+| Qwen and Llama (6 each), in-house, H = 0 and 2 | 12 | 150 | 86.4 | M30 at H = 0: 98.9 (kernel), 99.7 (replicated) in `bench_v2_smoke_s17`, 73.0 (native) in `bench_v2_smoke_a4`; corrected 94.8, 95.6, 68.9; H = 2 R4. Llama R1 | 43.2 | 0 | 0 | 10 | 2 |
+| GPT-4o, in-house, H = 0 and 2 | 6 | 150 | 16.2 | R2: no GPT-4o v2 cell; 17.2, 15.5, 16.1 | 4.0 | 17 | 0 | 5 | 1 |
 | Qwen and Llama (8 each), in-house, controls | 16 | 150 | 88.6 | the same cells, 3 : 3 : 2; R4. Llama R1 | 59.1 | 0 | 0 | 14 | 3 |
-| GPT-4o, in-house, controls | 8 | 150 | 16.3 | R2: no GPT-4o v2 cell | 5.4 | 23 | 0 | 7 | 1 |
-| Qwen and Llama (6 each), Mem0, H = 0 and 2 | 12 | 150 | 110.5 | M30 at H = 0: 132.8 (kernel), 99.3 (replicated) in `bench_v2_smoke_s17`, 101.6 (native) in `bench_v2_smoke_a4`; H = 2 R4. Llama R1 | 55.2 | 0 | 648 | 10 | 2 |
-| GPT-4o, Mem0, H = 0 and 2 | 6 | 150 | 44.1 | R2: no GPT-4o v2 cell | 11.0 | 17 | 324 | 5 | 1 |
+| GPT-4o, in-house, controls | 8 | 150 | 16.3 | R2: no GPT-4o v2 cell; the same cells, 3 : 3 : 2 | 5.4 | 23 | 0 | 7 | 1 |
+| Qwen and Llama (6 each), Mem0, H = 0 and 2 | 12 | 150 | 110.5 | M30 at H = 0: 132.8 (kernel), 99.3 (replicated) in `bench_v2_smoke_s17`, 101.6 (native) in `bench_v2_smoke_a4`; corrected 132.1, 98.6, 100.9; H = 2 R4. Llama R1 | 55.2 | 0 | 648 | 10 | 2 |
+| GPT-4o, Mem0, H = 0 and 2 | 6 | 150 | 44.1 | R2: no GPT-4o v2 cell; 48.6, 40.9, 42.8 | 11.0 | 17 | 324 | 5 | 1 |
 | Qwen and Llama (8 each), Mem0, controls | 16 | 150 | 111.7 | the same cells, 3 : 3 : 2; R4. Llama R1 | 74.5 | 0 | 864 | 14 | 3 |
-| GPT-4o, Mem0, controls | 8 | 150 | 44.3 | R2: no GPT-4o v2 cell | 14.8 | 23 | 432 | 7 | 1 |
-| Qwen and Llama (6 each), Graphiti, H = 0 and 2 | 12 | 150 | 181.2 | M30 at H = 0: 184.5, 186.8, 179.4 (kernel, replicated, native) in `bench_v2_smoke_s17`; H = 2 R4. Llama R1 | 90.6 | 0 | 756 | 10 | 2 |
-| GPT-4o, Graphiti, H = 0 and 2 | 6 | 150 | 132.9 | R2: no GPT-4o v2 cell | 33.2 | 17 | 378 | 5 | 1 |
+| GPT-4o, Mem0, controls | 8 | 150 | 44.3 | R2: no GPT-4o v2 cell; the same cells, 3 : 3 : 2 | 14.8 | 23 | 432 | 7 | 1 |
+| Qwen and Llama (6 each), Graphiti, H = 0 and 2 | 12 | 150 | 181.2 | M30 at H = 0: 184.5, 186.8, 179.4 (kernel, replicated, native) in `bench_v2_smoke_s17`; corrected 182.1, 184.4, 177.0; H = 2 R4. Llama R1 | 90.6 | 0 | 756 | 10 | 2 |
+| GPT-4o, Graphiti, H = 0 and 2 | 6 | 150 | 132.9 | R2: no GPT-4o v2 cell; 129.8, 133.7, 135.3 | 33.2 | 17 | 378 | 5 | 1 |
 | Qwen and Llama (8 each), Graphiti, controls | 16 | 150 | 181.7 | the same cells, 3 : 3 : 2; R4. Llama R1 | 121.1 | 0 | 1,008 | 14 | 3 |
-| GPT-4o, Graphiti, controls | 8 | 150 | 132.6 | R2: no GPT-4o v2 cell | 44.2 | 23 | 504 | 7 | 1 |
-| Qwen and Llama (6 each), A-MEM, H = 0 and 2 | 12 | 150 | 118.2 | M30 at H = 0: 122.9, 121.2, 117.5 (kernel, replicated, native) in `bench_v2_smoke_amem`; H = 2 R4. Llama R1 | 59.1 | 0 | 180 | 10 | 2 |
-| GPT-4o, A-MEM, H = 0 and 2 | 6 | 150 | 74.7 | R2: no GPT-4o v2 cell | 18.7 | 17 | 90 | 5 | 1 |
+| GPT-4o, Graphiti, controls | 8 | 150 | 132.6 | R2: no GPT-4o v2 cell; the same cells, 3 : 3 : 2 | 44.2 | 23 | 504 | 7 | 1 |
+| Qwen and Llama (6 each), A-MEM, H = 0 and 2 | 12 | 150 | 118.2 | M30 at H = 0: 122.9, 121.2, 117.5 (kernel, replicated, native) in `bench_v2_smoke_amem`; corrected 120.5, 118.8, 115.1; H = 2 R4. Llama R1 | 59.1 | 0 | 180 | 10 | 2 |
+| GPT-4o, A-MEM, H = 0 and 2 | 6 | 150 | 74.7 | R2: no GPT-4o v2 cell; 75.4, 74.6, 74.1 | 18.7 | 17 | 90 | 5 | 1 |
 | Qwen and Llama (8 each), A-MEM, controls | 16 | 150 | 118.5 | the same cells, 3 : 3 : 2; R4. Llama R1 | 79.0 | 0 | 240 | 14 | 3 |
-| GPT-4o, A-MEM, controls | 8 | 150 | 74.8 | R2: no GPT-4o v2 cell | 24.9 | 23 | 120 | 7 | 1 |
+| GPT-4o, A-MEM, controls | 8 | 150 | 74.8 | R2: no GPT-4o v2 cell; the same cells, 3 : 3 : 2 | 24.9 | 23 | 120 | 7 | 1 |
 | **Sum** | 168 | | | | 738.0 | 160 | 5,544 | 144 | 28 |
 
 **The stress dimensions**: 150 users of the agent-count datasets
@@ -304,24 +329,24 @@ users each). The load rows are not judged.
 
 | Cells | n | Users | s per user | Basis | Hours | Assistant $ | Backend $ | Judge $ | Second judge $ |
 |---|---:|---:|---:|---|---:|---:|---:|---:|---:|
-| Qwen, in-house, agent count and the two identity faults | 24 | 150 | 70.5 | M30 `stress_smoke_s18`: the N = 6, H = 0 cells, 59.5 to 68.8 s; other levels R6 | 70.5 | 0 | 0 | 21 | 4 |
-| Qwen, in-house, concurrent | 3 | 150 | 73.4 | M30 `stress_smoke_s18`: 59.6 to 75.4 s | 9.2 | 0 | 0 | 3 | 1 |
-| Qwen, in-house, flood10 and flood50 | 6 | 150 | 75.2 | M30 `stress_smoke_s18`: 64.6 to 78.2 s | 18.8 | 0 | 0 | 5 | 1 |
-| Qwen, in-house, load 1, 4, 16 (kernel) | 3 | 150 | 72.4 | M16 `stress_functional_f18b`: 60.1 to 79.8 s | 9.1 | 0 | 0 | 0 | 0 |
-| Qwen, Mem0, agent count, concurrent, the two identity faults | 27 | 150 | 110.5 | R7: the three v2 Mem0 H = 0 cells | 124.3 | 0 | 1,458 | 23 | 5 |
+| Qwen, in-house, agent count and the two identity faults | 24 | 150 | 70.5 | M30 `stress_smoke_s18`: the N = 6, H = 0 cells, 59.5 to 68.8 s; corrected 73.7, 64.4, 73.4; other levels R6 | 70.5 | 0 | 0 | 21 | 4 |
+| Qwen, in-house, concurrent | 3 | 150 | 73.4 | M30 `stress_smoke_s18`: 59.6 to 75.4 s; corrected 64.5, 80.3, 75.6 | 9.2 | 0 | 0 | 3 | 1 |
+| Qwen, in-house, flood10 and flood50 | 6 | 150 | 75.2 | M30 `stress_smoke_s18`: 64.6 to 78.2 s; corrected 83.1, 74.7, 69.5, 72.3, 79.7, 71.9 (F = 10, then F = 50) | 18.8 | 0 | 0 | 5 | 1 |
+| Qwen, in-house, load 1, 4, 16 (kernel) | 3 | 150 | 72.4 | M16 `stress_functional_f18b`: 60.1 to 79.8 s; corrected 84.7, 67.6, 65.0 (M 1, 4, 16) | 9.1 | 0 | 0 | 0 | 0 |
+| Qwen, Mem0, agent count, concurrent, the two identity faults | 27 | 150 | 110.5 | R7: the three v2 Mem0 H = 0 cells; corrected 132.1, 98.6, 100.9 | 124.3 | 0 | 1,458 | 23 | 5 |
 | Qwen, Mem0, floods, kernel | 2 | 150 | 132.1 | R7: the v2 Mem0 kernel cell | 11.0 | 0 | 120 | 2 | 0 |
-| Qwen, Mem0, flood10, replicated and native | 2 | 150 | 99.8 | R7: the v2 Mem0 replicated and native cells | 8.3 | 0 | 219 | 2 | 0 |
-| Qwen, Mem0, flood50, replicated and native | 2 | 150 | 226.2 | M5 `stress_functional_f18b`: 212.4 and 223.4 s | 18.9 | 0 | 666 | 2 | 0 |
-| Qwen, Mem0, load 1, 4, 16 (kernel) | 3 | 150 | 100.2 | M16 `stress_functional_f18b`: 86.6 to 98.5 s | 12.5 | 0 | 162 | 0 | 0 |
-| GPT-4o, in-house, agent count and the two identity faults | 24 | 150 | 16.0 | R2: no GPT-4o cell | 16.0 | 68 | 0 | 21 | 4 |
-| GPT-4o, in-house, concurrent | 3 | 150 | 18.9 | R2: no GPT-4o cell | 2.4 | 9 | 0 | 3 | 1 |
-| GPT-4o, in-house, flood10 and flood50 | 6 | 150 | 17.0 | R2: no GPT-4o cell | 4.2 | 17 | 0 | 5 | 1 |
-| GPT-4o, in-house, load 1, 4, 16 (kernel) | 3 | 150 | 17.9 | R2: no GPT-4o cell | 2.2 | 9 | 0 | 0 | 0 |
-| GPT-4o, Mem0, agent count, concurrent, the two identity faults | 27 | 150 | 44.1 | R2: no GPT-4o cell | 49.6 | 77 | 1,458 | 23 | 5 |
+| Qwen, Mem0, flood10, replicated and native | 2 | 150 | 99.8 | R7: the v2 Mem0 replicated and native cells; corrected 98.6, 100.9 | 8.3 | 0 | 219 | 2 | 0 |
+| Qwen, Mem0, flood50, replicated and native | 2 | 150 | 226.2 | M5 `stress_functional_f18b`: 212.4 and 223.4 s; corrected 220.7, 231.7 | 18.9 | 0 | 666 | 2 | 0 |
+| Qwen, Mem0, load 1, 4, 16 (kernel) | 3 | 150 | 100.2 | M16 `stress_functional_f18b`: 86.6 to 98.5 s; corrected 99.0, 94.9, 106.8 (M 1, 4, 16) | 12.5 | 0 | 162 | 0 | 0 |
+| GPT-4o, in-house, agent count and the two identity faults | 24 | 150 | 16.0 | R2: no GPT-4o cell; 16.5, 15.9, 15.5 | 16.0 | 68 | 0 | 21 | 4 |
+| GPT-4o, in-house, concurrent | 3 | 150 | 18.9 | R2: no GPT-4o cell; its sequential row's 16.0 + 2.9, every cell | 2.4 | 9 | 0 | 3 | 1 |
+| GPT-4o, in-house, flood10 and flood50 | 6 | 150 | 17.0 | R2: no GPT-4o cell; 16.9, 15.8, 15.5, 17.2, 18.6, 17.8 (F = 10, then F = 50) | 4.2 | 17 | 0 | 5 | 1 |
+| GPT-4o, in-house, load 1, 4, 16 (kernel) | 3 | 150 | 17.9 | R2: no GPT-4o cell; its sequential row's 16.0 + 1.9, every cell | 2.2 | 9 | 0 | 0 | 0 |
+| GPT-4o, Mem0, agent count, concurrent, the two identity faults | 27 | 150 | 44.1 | R2: no GPT-4o cell; 48.6, 40.9, 42.8 | 49.6 | 77 | 1,458 | 23 | 5 |
 | GPT-4o, Mem0, floods, kernel | 2 | 150 | 48.6 | R2: no GPT-4o cell | 4.0 | 6 | 120 | 2 | 0 |
-| GPT-4o, Mem0, flood10, replicated and native | 2 | 150 | 41.9 | R2: no GPT-4o cell | 3.5 | 6 | 219 | 2 | 0 |
-| GPT-4o, Mem0, flood50, replicated and native | 2 | 150 | 170.9 | R2: no GPT-4o cell | 14.2 | 6 | 666 | 2 | 0 |
-| GPT-4o, Mem0, load 1, 4, 16 (kernel) | 3 | 150 | 33.8 | R2: no GPT-4o cell | 4.2 | 9 | 162 | 0 | 0 |
+| GPT-4o, Mem0, flood10, replicated and native | 2 | 150 | 41.9 | R2: no GPT-4o cell; 40.9, 42.8 | 3.5 | 6 | 219 | 2 | 0 |
+| GPT-4o, Mem0, flood50, replicated and native | 2 | 150 | 170.9 | R2: no GPT-4o cell; 170.3, 171.5 | 14.2 | 6 | 666 | 2 | 0 |
+| GPT-4o, Mem0, load 1, 4, 16 (kernel) | 3 | 150 | 33.8 | R2: no GPT-4o cell; its sequential row's 44.1 − 10.3, every cell | 4.2 | 9 | 162 | 0 | 0 |
 | **Sum** | 144 | | | | 382.9 | 207 | 5,250 | 116 | 22 |
 
 **The ablations**: 150 users of `agents_n6`, kernel locus. Only the
@@ -329,8 +354,8 @@ rows of the four judged switches are judged.
 
 | Cells | n | Users | s per user | Basis | Hours | Assistant $ | Backend $ | Judge $ | Second judge $ |
 |---|---:|---:|---:|---|---:|---:|---:|---:|---:|
-| Qwen, in-house, the four judged switches and their reference | 5 | 150 | 110.9 | M30 `ablation_smoke_s19`: 10 cells, 97.1 to 116.7 s; cells outside it R8 | 23.1 | 0 | 0 | 4 | 1 |
-| Qwen, in-house, the other seven switches | 17 | 150 | 110.9 | M30 `ablation_smoke_s19`: 10 cells, 97.1 to 116.7 s; cells outside it R8 | 78.6 | 0 | 0 | 0 | 0 |
+| Qwen, in-house, the four judged switches and their reference | 5 | 150 | 110.9 | M30 `ablation_smoke_s19`: 10 cells, 97.1 to 116.7 s; every cell at the ten's corrected mean (R8) | 23.1 | 0 | 0 | 4 | 1 |
+| Qwen, in-house, the other seven switches | 17 | 150 | 110.9 | M30 `ablation_smoke_s19`: 10 cells, 97.1 to 116.7 s; every cell at the ten's corrected mean (R8) | 78.6 | 0 | 0 | 0 | 0 |
 | GPT-4o, in-house, the four judged switches and their reference | 5 | 150 | 18.9 | R2: no GPT-4o cell | 3.9 | 14 | 0 | 4 | 1 |
 | Qwen, Graphiti, one switch and its reference | 2 | 150 | 182.1 | R7: the v2 Graphiti kernel cell | 15.2 | 0 | 126 | 0 | 0 |
 | Qwen, A-MEM, one switch and its reference | 2 | 150 | 120.5 | R7: the v2 A-MEM kernel cell | 10.0 | 0 | 30 | 0 | 0 |
@@ -367,7 +392,7 @@ ablation cells.
   limits allow it: they are not known, and the pass drew about 88,000
   tokens a minute.
 - The second judge's batch runs at Anthropic, not here. The
-  calibration's batch of 1,998 requests was collected 3 minutes 12
+  calibration's batch of 2,000 requests was collected 3 minutes 12
   seconds after its submission, and the re-judge's 1,350 ended 4
   minutes 2 seconds after theirs. 18,855 requests are under the
   Batches API's 100,000 a batch; its 256 MB a batch is not checked
@@ -402,9 +427,9 @@ per completion token) and 102.0 s in `ablation_smoke_s19` on 2026-11-18
 (102.1 ms). As bounds, every local-model row's model time (its
 consumer's and decision turns, and in v1 the writers' generation) is
 rescaled to the fastest and the slowest speed a stored 30-user Qwen cell
-had, the old scheduler's wait taken out: 40.8 and 75.1 ms per completion
-token in v1 (`pilot_v1_amem` replicated, `pilot_v1_hetero` kernel
-in-house, both H = 0), 49.0 and 115.2 ms in the v2-type cells
+had, the old scheduler's 0.85 s a call taken out: 40.8 and 75.1 ms per
+completion token in v1 (`pilot_v1_amem` replicated, `pilot_v1_hetero`
+kernel in-house, both H = 0), 49.0 and 115.2 ms in the v2-type cells
 (`bench_v2_smoke_a4` native Mem0, `ablation_smoke_s19` `quota` at
 F = 50). That gives 1,193 and 1,926 hours for the cells: 50.3 and 80.9
 days with the judge's pass. GPT-4o's rows do not move.
@@ -461,7 +486,11 @@ days with the judge's pass. GPT-4o's rows do not move.
   30-user cell's trials. One of the pilot's 36 cells was re-run, for an
   Azure connection drop. A cell with writer failures in more than 20%
   of its trials reports no scores (`MODELS.md`); Llama's writers fail
-  more often than Qwen's. No allowance is made here.
+  more often than Qwen's. No allowance is made here, nor for the judge
+  window's redos: a pass that overruns its 24 hours or fails its
+  anchors is redone whole (15.0 hours and $367 again), and a cell
+  re-run after the window is judged again with every cell it is
+  compared against ("The judge window", steps 4, 5 and 7).
 - **Prices and limits.** Azure's own prices were not read.
   `prices.yaml` lists regional gpt-4o deployments 10% higher ($2.75 and
   $11), and OpenAI's page prices regional processing of GPT-5.4 10%
@@ -469,13 +498,15 @@ days with the judge's pass. GPT-4o's rows do not move.
   runs ran one cell at a time. By its tokens and seconds a user, a Mem0
   kernel cell on Qwen draws about 64,000 gpt-4o tokens a minute, a
   Graphiti kernel cell 52,000, and a GPT-4o Mem0 cell, being faster,
-  about 192,000.
+  about 198,000: 192,000 for Mem0's extraction and 6,300 for the
+  assistant, both on Azure `gpt-4o` (`MODELS.md`).
 - **The stress dimensions on Graphiti and A-MEM** are not in the grid
   as sized: Subtask 18 ran in-house and Mem0, and its driver has no
   phase for the other two. By the v2 rows, the 27 sequential and
-  concurrent cells a model would be 204 hours and $1,701 on Graphiti
-  and 133 hours and $405 on A-MEM for a local model. Their flood cells
-  cannot be sized: no flooded Graphiti or A-MEM write is measured.
+  concurrent cells a model would be, for a local model, 204 hours and
+  $1,701 of backend calls ($1,729 with both judges) on Graphiti, and
+  133 hours and $405 ($433) on A-MEM. Their flood cells cannot be
+  sized: no flooded Graphiti or A-MEM write is measured.
 - **The ablations on Mem0** are not in it either (`run_ablation.sh`
   takes `BACKEND=mem0`; `ABLATION.md`'s checks are in-house). By R7 its
   22 cells would be 121 hours and at least $1,188 a model.
@@ -491,18 +522,25 @@ re-runs.
   for v1's 150 users (`pilot_v1_schedule.json` covers 30) and a v2
   schedule for H = 2 (`BENCHMARK_V2.md`, "Loci and backends"); the
   harness switch for the native k; drivers for 150 users (the stress
-  and ablation drivers fix `pilot_v2`, the pilot drivers `pilot_v1`),
-  for Llama (no driver knows it) and for GPT-4o where
-  `run_stress_s18.sh` and `run_ablation.sh` know only Qwen;
-  `run_ablation.sh` for Graphiti and A-MEM (it takes `inhouse` and
-  `mem0`); the judge window's tooling ("The judge window"); and the
-  pre-registration.
+  and ablation drivers fix `pilot_v2`, the pilot drivers `pilot_v1`);
+  a v1 driver for in-house and Mem0 at the grid's commit
+  (`run_pilot_v1.sh` runs only at the `pilot-v1-code` tag, and
+  `run_pilot_v1_graphiti.sh` takes only `graphiti` and `amem`), and a
+  `--no-judge` mode in both pilot drivers (each passes `--judge-model`
+  on every cell); Llama in the grid's drivers (none of the pilot, v2,
+  stress or ablation drivers maps it; `run_pilot_baseline.sh`, v1 at
+  H = 0 and judged, does) and GPT-4o where `run_stress_s18.sh` and
+  `run_ablation.sh` know only Qwen; `run_ablation.sh` for Graphiti and
+  A-MEM (it takes `inhouse` and `mem0`); the judge window's tooling
+  ("The judge window"); and the pre-registration.
 - It needs throughout: the laptop awake and on power for two months or
-  more (a clamshell sleep ended a cell of `bench_v2_functional_a4`),
-  and a network Azure accepts for the 1,058 hours (44 days) of cells
-  that call it. Azure refused this machine's calls after a router
-  restart and under a second VPN (Subtasks 18 and 20). The 106
-  in-house cells on local models (340 hours) call nothing outside.
+  more (a cell of `bench_v2_functional_a4` ran through a clamshell
+  sleep only in its dark wakes of 9 to 17 seconds, was stopped after
+  the wake and was run again), and a network Azure accepts for the
+  1,058 hours (44 days) of cells that call it. Azure refused this
+  machine's calls after a router restart and under a second VPN
+  (Subtasks 18 and 20). The 106 in-house cells on local models (340
+  hours) call nothing outside.
 - It gives every cell of the list at 150 users.
 
 **(b) A reduced grid**: (a) with four cuts. Together: 303 cells, 652
@@ -522,9 +560,15 @@ that rule.
   each control rests on 30 users and one model. A rate at 0 or 1
   carries a Wilson interval 0.11 wide where 150 users give 0.025, and
   a control's decision items are 60 a cell, against 300. No control is
-  paired with the GPT-4o cells. In the kernel locus two of them
+  paired with the GPT-4o cells. On these 30 users the decision items'
+  key is uneven (correct letters A 22, B 8, C 22, D 8; one letter
+  throughout scores 0.13 to 0.37; the earlier of the correct and the
+  stale option is the correct one on 0.62 of items), so a control's
+  decision accuracy carries that key ("The decision items"); the other
+  120 users' key is even (A 63, B 58, C 58, D 61), and 30 of them could
+  be chosen to avoid it. In the kernel locus two of the controls
   (`supersession: off`, `forget_scope: writer`) also run among the
-  ablations, at N = 6.
+  ablations, at N = 6, but under (b) at 30 users too.
 - **The stress dimensions on Qwen, and on GPT-4o at N = 6
   in-house.** Qwen keeps every cell but Mem0's nine agent-count cells
   at H = 2; the load cells, on both backends, run at 16 users, as
@@ -532,23 +576,30 @@ that rule.
   reference, `concurrent` and the four faults). 63 cells cut. Saves 149
   hours and $3,469. Costs: the stress predictions, stated per locus,
   are shown on an API model at N = 6 in-house only (no GPT-4o cell on
-  Mem0 or at N = 3 or 12); the agent count at H = 2 on in-house only
-  (v2 keeps Mem0 at H = 2, with N = 4); the load mode on one model and
-  at 16 users.
+  Mem0, at H = 2, or at N = 3 or 12); the agent count at H = 2 on
+  in-house only (v2 keeps Mem0 at H = 2, with N = 4); the load mode on
+  one model and at 16 users.
 - **The judge-free ablation cells at 30 users** (the seven other
   switches' 17 cells and the two pairs on Graphiti and A-MEM; the four
   judged switches stay at 150 users on both models). Saves 83 hours and
-  $125. Costs: those switches keep intervals of the width Subtask 19's
-  smoke had (every primary interval excluded 0 there), on a re-run at
-  the grid's commit.
-- Kept whole: v1 (10% of the cell hours); v2's 48 cells at H = 0 and
-  2 on Qwen and GPT-4o; Qwen's stress cells but nine; the k = 30 cell;
-  both judges. So every prediction the documents state keeps a test at
-  150 users, but the controls and the judge-free ablations (at 30
-  users) and the load mode (at 16). Not cut, though it could be: Llama
-  in v1 (36 cells, 59 hours, $274), the workshop's third model
-  (`MODELS.md`). The claims document `ABLATION.md` cites was not read
-  for this: it is not among either repository's tracked files.
+  $125. Costs: the four switches the smoke ran (`barrier`, `identity`
+  under `wrong_user`, `quota`, `forget_scope`) keep intervals of the
+  smoke's width, on a re-run at the grid's commit (each primary
+  interval excluded 0 there). `visibility`, `supersession`,
+  `consumer_config` and `identity` under V2, with their references,
+  have no run at 30 users (5 users in `ablation_functional_f19b`,
+  where three predicted primary intervals included 0 and the V2 rule
+  did not hold), and no ablation has run on Graphiti or A-MEM: whether
+  30 users suffice for them is not known.
+- Kept whole: v1 (136 hours: 10% of (a)'s cell hours, 21% of (b)'s);
+  v2's 48 cells at H = 0 and 2 on Qwen and GPT-4o; Qwen's stress cells
+  but nine; the k = 30 cell; both judges. So every prediction the
+  documents state keeps a test at 150 users, but the controls and the
+  judge-free ablations (at 30 users) and the load mode (at 16). Not
+  cut, though it could be: Llama in v1 (36 cells, 59 hours, $274), the
+  workshop's third model (`MODELS.md`). The claims document
+  `ABLATION.md` cites was not read for this: it is not among either
+  repository's tracked files.
 
 **(c) Run it elsewhere** (a university cluster, or other machines).
 What that would need, from the code as it stands:
@@ -558,15 +609,34 @@ What that would need, from the code as it stands:
   own kernel port, its own Ollama and, for Graphiti, its own Neo4j or
   its own groups in a shared one. The drivers fix port 8000; the
   harness reads its kernel from `CEREBRUM_KERNEL_URL`. So: a port
-  parameter in the drivers, and a job per phase.
-- **The models.** Ollama serving the pinned Qwen, Llama and embedding
-  models (`MODELS.md`'s digests), one GPU a job for the local-model
-  cells. GPT-4o cells need the embedder only.
-- **Azure from there.** The resource admits listed networks only: it
-  refused this machine's calls whenever they left from another address
-  (DEV_STATUS, Subtask 20). The cluster's addresses must be admitted,
-  or the cells that call Azure stay here: all but the 106 in-house
-  local-model cells.
+  parameter in the drivers, and a job per cell. The drivers' variables
+  narrow a run to one cell (`PHASES`, `METHODS` and `CONDITIONS`;
+  `LEVELS` in `run_pilot_v1_graphiti.sh`; in `run_ablation.sh`,
+  `ABLATE` and `CONDITIONS`, to a switch's pair). A job per phase
+  would run up to 136 hours (Qwen's stress `agent` phase, 36 cells):
+  that bounds the time at any K above about 10, and may exceed a
+  cluster's wall-clock limit.
+- **The models.** Ollama 0.40.11 serving the pinned Qwen, Llama and
+  embedding models (`MODELS.md`'s digests): 4.68, 4.92 and 0.27 GB of
+  weights (this machine's Ollama manifests), and the cache of a
+  16,384-token context (`llms.context_window`), not measured; one GPU
+  a job for the local-model cells. GPT-4o cells need the embedder
+  only.
+- **The results.** About 14 GB of results and logs for the grid, at
+  the stored runs' sizes (30 KB a v1 user-trial in `pilot_v1_hetero`;
+  0.21, 0.28 and 0.45 MB a v2, stress and ablation one in
+  `bench_v2_smoke_s17`, `stress_smoke_s18` and `ablation_smoke_s19`),
+  to come back here for the judge window and pass
+  `archive_artifacts.py`'s key scan before they are archived.
+- **Azure from there.** The resource admits listed networks: it
+  refused this machine's calls when they left from an address outside
+  them, after a router restart and under a second VPN that held the
+  route while the university tunnel carried nothing (DEV_STATUS,
+  Subtasks 18 and 20). A node of that university may already be
+  admitted; the check is one authenticated call from a node (a keyless
+  request gets 401 either way). Otherwise the cluster's addresses must
+  be admitted, or the cells that call Azure stay here: all but the 106
+  in-house local-model cells.
 - **Secrets on shared storage**: the Azure variables and the Neo4j
   credentials, kept in `AIOS/.env` (DEV_STATUS, Subtasks 6 and 16).
   The second judge's token is fetched on this machine at call time,
@@ -582,10 +652,10 @@ What that would need, from the code as it stands:
   H = 0 on Qwen at 30 users are 12.4 hours on one worker and $79 of
   backend calls, and the in-house cells' blocks can be compared with
   the stored ones probe by probe.
-- **What it buys**: with K jobs at once, about 1,398 / K hours of cells
-  (175 at 8, 87 at 16) plus the judge's pass, if the cluster's speed
-  matches this laptop's. The longest cell is 9.4 hours. K jobs multiply
-  the load on Azure (above).
+- **What it buys**: with K one-cell jobs at once, about 1,398 / K
+  hours of cells (175 at 8, 87 at 16), never less than the longest
+  cell's 9.4 hours, plus the judge's pass, if the cluster's speed
+  matches this laptop's. K jobs multiply the load on Azure (above).
 - **Not known**: the cluster's GPUs, queue and storage, whether its
   nodes may call Azure, and whether it runs containers.
 
@@ -599,13 +669,22 @@ What that would need, from the code as it stands:
 3. **The stress dimensions' cells.** The functional check's 72 cells a
    model on in-house and Mem0 for Qwen and GPT-4o (383 hours, $5,595);
    or the smoke's design (12 in-house cells a model: 37 hours on Qwen);
-   or more backends (Graphiti and A-MEM, above). The load cells at 150
-   users (12 cells, 28 hours, $342) or at the check's 16.
+   or more backends (Graphiti and A-MEM, above). The agent count at
+   the check's H 0 and 2, or at H 1 too (`STRESS_DIMENSIONS.md` keeps
+   H's levels {0, 1, 2} at every N: 36 more cells, 90 hours, $1,061).
+   The load cells at 150 users (12 cells, 28 hours, $342) or at the
+   check's 16; and unjudged, or judged (1,800 judgments, $12.49 with
+   the second judge).
 4. **The ablations.** Which switches run at 150 users and on which
-   models; whether Mem0 gets the set; which switch Graphiti and A-MEM
-   get (a `quota` or `barrier` switch needs flood or concurrent cells
-   there, which nothing measures); and whether the five full-kernel
-   cells that repeat stress cells (23 hours) run once.
+   models: GPT-4o is sized on all four judged switches, though the
+   formatting prediction names both models and the budget's names none
+   (its `budget` and `threshold` cells are 1.6 hours and $8); whether
+   Mem0 gets the set; which switch Graphiti and A-MEM get (a `quota`
+   or `barrier` switch needs flood or concurrent cells there, which
+   nothing measures), and whether it is judged (sized judge-free; a
+   judged pair is $2.08 more, and under (b) a judged ablation at 30
+   users); and whether the five full-kernel cells that repeat stress
+   cells (23 hours) run once.
 5. **v1 and v2 at H > 0 on 150 users.** Which schedule: the pilot's
    balanced design extended to 150 users (each H = 1 pairing 15 times,
    for 3), or another rule; and v2's at H = 2. No H > 0 cell can start
@@ -627,6 +706,17 @@ What that would need, from the code as it stands:
    backend extraction is $11,724 at `prices.yaml`'s price.
 10. **Re-runs.** No allowance is made; one could be budgeted once the
     failure rate at 150 users is known.
+11. **v1's users at 150.** `users_v1`, all 150 (`pilot_v1` is its
+    first 30), as sized; its attributes are skewed (known issue 22:
+    fine for paired locus comparisons, a limit on any claim about
+    attribute coverage). Or another set.
+12. **Native Mem0's install** (DEV_STATUS open decision 1). Sized on
+    the default install, which the agents run (`mem0ai` 2.0.2 without
+    its `[nlp]` extra); the full one, with spaCy, is not measured.
+13. **The judge pass's concurrency** ("The judge window" leaves it
+    open). Sized at the calibration's 8 workers (0.85 s a judgment,
+    15.0 hours); another is not measured, and Azure's limits are not
+    known.
 
 ## The two judges (Subtask 20)
 
