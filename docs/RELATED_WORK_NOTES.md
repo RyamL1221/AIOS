@@ -1035,8 +1035,7 @@ with a filter at the store, for revoked facts (B13). See "Not found".
   comments: "36 pages, 10 figures, 5 tables".
   https://arxiv.org/abs/2507.03724 and
   https://arxiv.org/html/2507.03724v4. Accessed 2026-11-20. Read:
-  abstract; full text (HTML v4), §5.4.2 and §5.5.1-5.5.2 read, §6
-  searched.
+  abstract; full text (HTML v4), §5 read, §6 searched.
 
   Does: "we propose MemOS, a memory operating system that treats memory
   as a manageable system resource", unifying plaintext, activation and
@@ -1052,13 +1051,21 @@ with a filter at the store, for revoked facts (B13). See "Not found".
   MemGovernance, which enforces user-role boundaries, rate limits, and
   lifecycle policies" (§5.4.2). Differs: our placement, one module that
   every memory request passes, naming visibility, identity
-  authentication and a rate limit. As read, §5 describes these only in
-  the sentences quoted; nothing found on ordering a read after other
-  writers' writes or on a delete that removes every carrier of a fact.
-  §6, the evaluation, has no occurrence of "permission", "access
-  control", "MemGovernance", "governance", "privacy", "private" or
-  "shared": it evaluates none of the governance. Its tracker's deletion
-  bug is an instance in part (b), condition 8.
+  authentication and a rate limit. §5 says more on access control and
+  isolation than the sentences quoted. For example, in the archiving
+  phase each memory unit "is assigned a set of access control
+  strategies", among them an "Access Control List (ACL)", "that
+  determine its availability based on user roles and task context"
+  (§5.2). Structured retrieval "applies rule-based filtering over tags,
+  time spans, Boolean conditions, and access control policies" (§5.4.1).
+  The dispatch governance quoted above "ensures proper memory isolation
+  and secure usage across users, models, and tasks" (§5.4.2). As read,
+  nothing found on ordering a read after other writers' writes or on a
+  delete that removes every carrier of a fact. §6, the evaluation, has
+  no occurrence of "permission", "access control", "MemGovernance",
+  "governance", "privacy", "private" or "shared": it evaluates none of
+  the governance. Its tracker's deletion bug is an instance in part (b),
+  condition 8.
 
 - **O7. MemoryOS.** "Memory OS of AI Agent". Jiazheng Kang, Mingming Ji,
   Zhe Zhao, Ting Bai. arXiv:2506.06326, v1 30 May 2025, cs.AI; in the
