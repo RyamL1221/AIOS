@@ -144,26 +144,44 @@ write memory or identity, with the operations `/query` serves:
 | A3 | `POST /core/cleanup` | `launch.py:919-952` | the event loop |
 | A4 | `POST /agents/submit` | `launch.py:828-870`; `aios/hooks/modules/agent.py:18-60` | a factory thread |
 | S1 | Storage: `POST /query`, `storage`, any `operation_type` (`StorageQuery.operation_type` is a free string: installed Cerebrum `cerebrum/storage/apis.py:35`); and `llm` with action `operate_file`, whose model call names the storage operation and its parameters | `launch.py:1023-1028`; `syscall.py:341-381`, `:911-912`, `:962-963`; `aios/storage/storage.py:20-21`; `lsfs.py:189-269` | the scheduler's storage thread (`fifo_scheduler.py:277-297`), while the handler waits on the event loop |
-| T1 | Tools: `POST /query`, `tool`; and `llm` with action `call_tool`, whose model call names the tools | `launch.py:1029-1034`; `syscall.py:897-909`, `:913-914`; `aios/tool/manager.py:85-118` | the scheduler's tool thread (`fifo_scheduler.py:303-325`), while the handler waits on the event loop |
+| T1 | Tools: `POST /query`, `llm` with action `call_tool`, whose model call names the tools. The direct `tool` route fails at `launch.py:1030-1033`, before `execute_request`: `ToolQuery` has no `params` or `operation_type` and needs `tool_calls` (installed Cerebrum `cerebrum/tool/apis.py:46-47`; "Storage and tools") | `launch.py:958-1021` (binding `:984`); `syscall.py:897-909`; `aios/tool/manager.py:85-118` | the scheduler's tool thread (`fifo_scheduler.py:303-325`), while a request-pool thread waits (`launch.py:1015-1019`) |
 
 **Storage and tools.** Neither route goes through the memory library:
 no module under `aios/storage/`, `aios/tool/`, `aios/llm_core/`,
 `aios/context/` or `aios/terminal/` names `aios.memory`,
 `MemoryManager`, `mem0` or a tombstone (grep at `d49afc9`). Both are
-still paths to memory, through the kernel's own permissions, with no
-session check (`launch.py:1023-1034`). LSFS writes or creates a file
-at any path a request names: an absolute path is kept, and a relative
-one is joined to its root (`root` unless configured: `launch.py:217`),
-so `..` escapes it (`lsfs.py:271-279`, `:319-331`). With a Redis
-server answering at startup (`lsfs.py:43-58`), `share` reads any file
-the kernel can read and puts its bytes to `https://transfer.sh/`,
+still paths to memory, through the kernel's own permissions, and
+neither reads a session's user. The `storage` route binds no session
+(`launch.py:1023-1028`). The `operate_file` and `call_tool` chats
+take the `llm` branch, which binds a token the request carries
+(`launch.py:984-986`), but only the two chat actions read the bound
+user (`syscall.py:788`, `:817-819`; `git grep _request_user_id` finds
+no other reader in `aios/` or `runtime/` but a debug log,
+`launch.py:987-990`). LSFS writes or creates a file at any path a
+request names: an absolute path is kept, and a relative one is joined
+to its root (`root` unless configured: `launch.py:217`), so `..`
+escapes it (`lsfs.py:271-279`, `:319-331`). With a Redis server
+answering at startup (`lsfs.py:43-58`), `share` reads any file the
+kernel can read and puts its bytes to `https://transfer.sh/`,
 returning the link (`lsfs.py:393-447`, `:449-476`). `/memory/config`
 names the tombstone file and Mem0's history file
-(`launch.py:566-568`). A tool call runs code the tool hub serves by
-name, in the kernel's process (`aios/tool/manager.py:98-101`,
-`:116-118`; installed Cerebrum `cerebrum/interface/__init__.py:33-55`).
-Gap G25 says what follows. Whether Redis runs in the deployment was
-not checked.
+(`launch.py:566-568`). Over HTTP, a tool is reached only through a
+`call_tool` chat: the model's tool calls become a `ToolQuery` for
+`execute_tool_syscall` (`syscall.py:897-909`). The direct `tool`
+route never reaches `execute_request`. The handler builds a
+`ToolQuery` from the request's `params` and `operation_type`
+(`launch.py:1030-1033`), but `ToolQuery` has neither field and
+requires `tool_calls` (installed Cerebrum
+`cerebrum/tool/apis.py:46-47`, the same in the Cerebrum checkout).
+Building it raises, an `AttributeError` or a validation error, and
+the handler answers HTTP 500 (`launch.py:1071-1072`). So no route
+reaches `execute_request`'s `ToolQuery` branch (`syscall.py:913-914`):
+the only other `ToolQuery` in `aios/` or `runtime/` (`:904-907`) goes
+to `execute_tool_syscall` directly (`:908`). By reading; not executed.
+A tool call runs code the tool hub serves by name, in the kernel's
+process (`aios/tool/manager.py:98-101`, `:116-118`; installed
+Cerebrum `cerebrum/interface/__init__.py:33-55`). Gap G25 says what
+follows. Whether Redis runs in the deployment was not checked.
 
 **Not paths to memory.** LLM actions other than the two chat actions
 inject nothing (`syscall.py:893-912`). The agentic path's own model
@@ -459,8 +477,8 @@ token while `auto_inject` is off.
 **Bypasses.** A request without a token, and anyone opening a session
 (G6); the audit and cost routes, which take a bare `user_id` (G2); the
 conversation turn when injection is off or raised (G7); the storage
-and tool routes, which take no token (G25); `identity: claim`
-(`launch.py:612-622`).
+and tool routes, whose operations read no session's user (G25);
+`identity: claim` (`launch.py:612-622`).
 
 The agentic path is bound only in part. Its final add is bound,
 through `metadata.user_id` (`manager.py:420-425`). Its R3 is bound only
@@ -957,7 +975,7 @@ rows S1 and T1).
 | R6 audit | does not hold, by design (G2) | does not hold, by design (G2): any user | does not hold, by design (G2): no session | holds under assumption (G11): waits even under `barrier: off` | does not hold, by design (G2): returns carriers | does not hold, by design (G2): returns retired rows | n/a |
 | R7 cost | n/a (no rows) | n/a | does not hold, by design (G2): no session | holds under assumption (G11): waits even under `barrier: off` | n/a | n/a | n/a |
 | W1 add | holds under assumption (G1): the owner is claimed | holds | holds (G6) | holds under assumption (G11); does not hold naming no user (G10) | holds under assumption (G20): sweeps before release; does not hold for a carrier it files outside U's partition (G28) | holds under assumption (G20): marks before release, in write order (G19) | holds under assumption (G21, G22, G26) |
-| W2 update | holds (owner-only) | does not hold on Mem0 (G4); holds under assumption elsewhere (G5) | holds (G6) | holds under assumption (G11); does not hold naming no user (G10) | holds under assumption (G5, G20): sweeps before release | n/a: retires nothing, by design | does not hold: not counted (G23) |
+| W2 update | holds (owner-only) | does not hold on Mem0 (G4); holds under assumption elsewhere (G5) | holds (G6) | holds under assumption (G11); does not hold naming no user (G10) | holds under assumption (G5, G20): sweeps before release; does not hold for a carrier it writes outside U's partition (G28) | n/a: retires nothing, by design | does not hold: not counted (G23) |
 | W3 remove | holds (owner-only) | does not hold on Mem0 (G4); holds under assumption elsewhere (G5) | holds (G6) | does not hold (G8) | n/a: not a forget | n/a | n/a |
 | W4 forget | holds (ids and owners only) | holds | holds (G6) | holds under assumption (G11, G27): it waits for earlier writes, and later reads wait for it | holds under assumption (G13 to G15, G18, G20); does not hold across a restart without a tombstone path (G17), or for a carrier outside U's partition (G28) | n/a: deletes retired rows too | n/a |
 | W5 conversation turn | holds (private to the assistant) | holds | holds under assumption (G7): injection on and returned without raising | holds under assumption (G11) | holds under assumption (G13, G20): sweeps before release; does not hold under G7, which files U's text outside U's partition (G28) | n/a (no slot) | holds under assumption (G21, G23) |
@@ -1074,7 +1092,7 @@ More checks:
 | G22 | Quota | W1 on Mem0 with `infer`, on Graphiti | does not hold for rows: one write can store several; holds for writes, as `STRESS_DIMENSIONS.md:499-500` states the bound | `mem0.py:773-815`; `graphiti.py:265-276`; `STRESS_DIMENSIONS.md:499-500` | claim "`max_writes` writes per bucket" |
 | G23 | Quota | W2; W5; a restart | does not hold for updates, which are not counted, nor across a restart or a refresh, which empty the buckets; holds for adds within one process | updates are not counted (`facade.py:351-405`); buckets live in memory (`quota.py:76-80`); a quota-rejected or suppressed turn is logged as stored, since the extractor checks only `success` (`conversation_extractor.py:162-176`) | claim "adds, per process"; log a rejected turn as rejected |
 | G24 | Visibility | R1's diagnostics; W1, W2, W4 replies | holds for rows; the statement does not cover counts and ids, and those of other agents' rows are disclosed, by design | `own_fetched`, `shared_fetched` and `after_partition` are counted before visibility (`selector.py:256-268`) and reach the chat caller (`syscall.py:856-862`); `swept`, `retired` and a forget's `deleted` name other agents' ids and owners (`deletion.py:176-181`, `:351-354`) | claim visibility "of row text and metadata", or drop the pre-visibility counts from replies |
-| G25 | Visibility; partition; deletion; supersession | S1 (storage, and `operate_file` chats); T1 (tools, and `call_tool` chats) | holds under assumption: no client's storage or tool request touches the stores' files or the kernel's objects. Against a client that sends one, the properties do not hold: the routes take no session and check no path | `launch.py:1023-1034` (no binding); LSFS keeps an absolute path and joins a relative one to its root, so `..` escapes it (`lsfs.py:271-279`, `:319-331`; `launch.py:217`); `/memory/config` names the tombstone file and Mem0's history file (`launch.py:566-568`); a `write` of `""` to the tombstone file empties it, after which every tombstone read raises (the table is read on every call, `tombstones.py:224-230`), and after a restart the store makes empty tables (`tombstones.py:144-146`), so every forgotten value is unguarded and a later write of it is not swept; with Redis answering at startup (`lsfs.py:43-58`), `share` puts any readable file's bytes (a Chroma file, Mem0's history file, the tombstone file) to `https://transfer.sh/` and returns the link (`lsfs.py:404`, `:415-421`, `:449-476`); a tool call runs hub-loaded code in the kernel's process (`aios/tool/manager.py:98-101`, `:116-118`); by reading; not executed; whether Redis runs in the deployment was not checked; no test | confine LSFS paths to its root and remove or gate `share`; serve tools out of the kernel's process; or state the assumption |
+| G25 | Visibility; partition; deletion; supersession | S1 (storage, and `operate_file` chats); T1 (`call_tool` chats; the direct `tool` route fails before `execute_request`) | holds under assumption: no client's storage or tool request touches the stores' files or the kernel's objects. Against a client that sends one, the properties do not hold: the routes read no session's user and check no path | the `storage` route binds no session (`launch.py:1023-1028`); the `operate_file` and `call_tool` chats bind the session a request names (`launch.py:984`), whose user only the two chat actions read (`syscall.py:788`, `:817-819`); LSFS keeps an absolute path and joins a relative one to its root, so `..` escapes it (`lsfs.py:271-279`, `:319-331`; `launch.py:217`); `/memory/config` names the tombstone file and Mem0's history file (`launch.py:566-568`); a `write` of `""` to the tombstone file empties it, after which every tombstone read raises (the table is read on every call, `tombstones.py:224-230`), and after a restart the store makes empty tables (`tombstones.py:144-146`), so every forgotten value is unguarded and a later write of it is not swept; with Redis answering at startup (`lsfs.py:43-58`), `share` puts any readable file's bytes (a Chroma file, Mem0's history file, the tombstone file) to `https://transfer.sh/` and returns the link (`lsfs.py:404`, `:415-421`, `:449-476`); a `call_tool` chat runs the tools its model call names, hub-loaded code in the kernel's process (`syscall.py:897-909`; `aios/tool/manager.py:98-101`, `:116-118`); the direct `tool` route raises at `launch.py:1030-1033` (`ToolQuery` has no `params` or `operation_type` and needs `tool_calls`: installed Cerebrum `cerebrum/tool/apis.py:46-47`) and is answered with HTTP 500 (`launch.py:1071-1072`); by reading; not executed; whether Redis runs in the deployment was not checked; no test | confine LSFS paths to its root and remove or gate `share`; serve tools out of the kernel's process; or state the assumption |
 | G26 | Quota; the replies of a forget and a remove | every memory request served through `_execute_syscall` (W1 to W4, R2, R4, R5, and W6's sub-requests) | holds under assumption: each accepted request is served once. Otherwise a retried write counts twice or is rejected as its own duplicate, and a retried forget or remove answers wrongly | the scheduler sets the event before the status (`fifo_scheduler.py:141-142`; `rr_scheduler.py:98-99`), the syscall's thread only waits on the event (`aios/syscall/__init__.py:340-354`), and the waiting thread resubmits any syscall not marked done (`syscall.py:199-211`): the same query is stamped, queued and served again, on a request-pool thread, without its token (`syscall.py:202`, `:110`), and the first reply is discarded; a retried add is stored again (in-house gives every add a new id: `chroma_inhouse.py:156`) and, with the quota on, counts in the bucket of `metadata.session`: with a token, a second bucket whose duplicate check does not see the first write; without one, the same bucket, where `dedupe` rejects it as a duplicate (reply `""`, though the first write is stored); a retried forget answers with the second run's report, which leaves out the rows the first run deleted; a retried remove answers "Memory not found" after deleting; the model calls set the status first (`aios/llm_core/adapter.py:577-583`); by reading; not executed; how often the two statements interleave was not measured; no test | set the status before the event in both schedulers, never resubmit a memory syscall, or keep its token on resubmission; or state the assumption |
 | G27 | Read-after-write | W6's final add, and every retry (G26), stamped and queued on a request-pool thread, against a read of the same user accepted on the event loop | does not hold in a window: a read accepted between such a write's stamp and its enqueue (R2 or R5 naming the user, or a forget's wait) is queued first, waits on the memory thread for a sequence only that thread can serve, stalls every memory request for `timeout_ms`, then proceeds without the write | `syscall.py:113` then `:123`, with no common lock; `syscall.py:153-154` and `launch.py:1062-1065` (the loop accepts plain requests; `add_agentic_memory` is served off it); `syscall.py:202`, `:916-932`; the waits run on the memory thread (`manager.py:734-736`, `:770-772`, `:915-917`; `selector.py:220-222`; `facade.py:566-567`; `barrier.py:333-365`); v2 kernel runs set `timeout_ms` to at least 60,000 (`BENCHMARK_V2.md:534`); by reading; not executed; the window is the few statements between `syscall.py:113` and `:123`; no test | stamp and enqueue under one lock, or submit sub-requests and retries through `accept_memory` on the loop; or claim read-after-write "for requests accepted on the event loop" |
 | G28 | Deletion | a carrier of U's fact filed outside U's partition: W1, W2 or W6 naming no user (the agent's own scope) or another user; W5 under G7; then a read in that scope (R1, R2, R4, R5 naming no user or that user) | does not hold: U's forget and the sweeps after U's writes list only U's partition, and each guard checks the tombstones of the read's own scope or of the row's own user, so a read in that scope returns the carrier | `deletion.py:54-66`, `:109`, `:335`; `selector.py:318-321`; `facade.py:467`, `:477`, `:515-516`; tombstones are stored per user (`tombstones.py:220-230`); a write that names no user is filed under the agent's name (`facade.py:252-255`; `manager.py:651-652`); without a session a write can name any user (G6); no test | claim deletion "within the user's partition"; bind writes to sessions (G6) and the turn to the chat's user (G7) |
