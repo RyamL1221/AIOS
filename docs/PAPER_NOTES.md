@@ -338,7 +338,9 @@ judge's own score one per-backend difference excludes 0.**
 - Caveat: not differing is not equivalence. `DEV_STATUS.md`: "Not shown
   equivalent at n = 30: the in-house and Qwen comparisons are
   inconclusive, with wide CIs." The one H = 0 interval that excludes 0
-  agrees in sign with the primary judge's (C2.4).
+  agrees in sign with the primary judge's (C2.4). In `p9d` the fixed
+  decoding covered the assistants and writers, not Mem0's extraction,
+  which ran at temperature 0.1 with no seed (L.17).
 
 **C1.3 Two earlier locus differences did not survive pairing and fixed
 decoding.**
