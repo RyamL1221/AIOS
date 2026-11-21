@@ -21,9 +21,13 @@ every name and quote used here was searched for in them ("Sources").
 LangGraph's source is read at its release tag `1.2.24`;
 `langchain-ollama`'s at its tag `langchain-ollama==1.1.0`, since its
 `master` is ahead of that release; `langchain-core`'s and
-`langchain`'s on `master`, whose files read here are byte-identical to
-the tags `langchain-core==1.8.4` and `langchain==1.5.2` (compared
-with `cmp`). No model, kernel, test or benchmark was run. The counts
+`langchain`'s on `master`, whose source files read here (R13, R15,
+R16) are byte-identical to the tags `langchain-core==1.8.4` and
+`langchain==1.5.2` (compared with `cmp`). `langchain`'s
+`pyproject.toml` on `master` (R17) is not: at line 27 it needs
+`langgraph` 1.2.16 or later, where the release needs 1.2.12 or later
+(P2). From it only the version line (23) is used; the `langgraph`
+range is P2's. No model, kernel, test or benchmark was run. The counts
 and times below come from stored results files and cell logs, read by
 scripts kept outside the repositories. LangGraph is installed in
 neither venv; both run Python 3.11.15. Names that are not in the code
@@ -284,29 +288,47 @@ So the answer is construction and checks, not a wall:
    `langchain_litellm`, `langchain_community`, `langchain.chat_models`,
    `langchain.agents`, `litellm`, `ollama`, `openai`); and
    `langgraph.store`. That scan reads a file's own statements only
-   (`test_pipeline_imports.py:12-14`), so a fresh interpreter also
-   imports the agents' modules, builds each agent over a stub handle
-   whose calls return fixed replies, runs one turn of each, with no
-   layer, and lists the loaded modules, as
-   `tests/modules/memory/test_pipeline_library.py:391-417` does: none
-   of the list may be loaded. `langchain.agents` is on the
-   list because `create_agent` also takes its model as a string and
-   then builds the client itself (R15:74, :828, :1050-1051), as the
-   docs' first agent example does (D11:26). Under open decision 2(b)
-   the agents need it; it and `langchain.chat_models` then leave the
-   list, each agent is built with the layer's placeholder model, and
-   the layer's hook fails the cell when a request's model is not that
-   placeholder. The kernel agents' modules import the SDK's clients
+   (`test_pipeline_imports.py:12-14`), so a load check follows the
+   imports: a fresh interpreter imports the agents' modules, builds
+   each agent over a stub handle whose calls return fixed replies,
+   with no layer, runs one turn of each through the compiled graph, as
+   a cell runs it, and lists the loaded modules, matched by prefix as
+   `tests/modules/memory/test_pipeline_library.py:391-417` does
+   (`:403-406`). None of the scan's list may be loaded but
+   `langgraph.store`, which LangGraph loads itself: `graph/state.py`
+   and `runtime.py` import `langgraph.store.base` at their top (R10:31,
+   R7:7), as five more of its modules read here do (R1:36, R2:53,
+   R5:32, R6:54, R8:7). Its presence is expected and says nothing of
+   an agent. The store's absence is shown by the compile with no
+   `store=` (item 1; R7:203), and an agent module's own import of it
+   by the scan. No other module of the list is imported at the top of
+   the LangGraph files read here. `langchain.agents` is on both lists
+   because `create_agent` also takes its model as a string and then
+   builds the client itself (R15:74, :828, :1050-1051), as the docs'
+   first agent example does (D11:26). Under open decision 2(b) the
+   agents need it, so it leaves both lists, and
+   `langchain.chat_models`, which `create_agent`'s module imports at
+   its top (R15:74), leaves the load check's (R15 and R16 import no
+   other module of the list at their top); each agent is then built
+   with the layer's placeholder model, and the layer's hook fails the
+   cell when a request's model is not that placeholder. Whether the
+   modules that LangGraph and LangChain load beyond the files read
+   here import one of the list is not known: neither venv holds either
+   package. The kernel agents' modules import the SDK's clients
    (Cerebrum `cerebrum/example/agents/profile_agent/agent.py:6-17`,
    `task_agent/agent.py:6-17`), so the LangGraph agents do not import
    them. Their system prompts are the agents' `config.json`
    descriptions (`profile_agent/agent.py:169`,
    `task_agent/agent.py:169`, `assistant_agent/agent.py:63`), read as
-   data; the writers' response formats are code
+   data. The writers' response formats
    (`profile_agent/agent.py:175-200`, `task_agent/agent.py` from
-   `:175`) and move to a module that imports no SDK client.
-   `shared_memory_utils.py` imports the standard library only (`:9`,
-   `:131-133`, `:331`).
+   `:175`) and the reply parser they call, `parse_json_reply`
+   (`profile_agent/agent.py:211`, `task_agent/agent.py:219`), are
+   code. The parser lives in the SDK's client module (Cerebrum
+   `cerebrum/llm/apis.py:15-27`, which imports `send_request` at
+   `:7`). The formats and the parser move to a module that imports no
+   SDK client. `shared_memory_utils.py` imports the standard library
+   only (`:9`, `:131-133`, `:331`).
 4. **A runtime count.** A shared cell constructs one provider client
    and one chat model, both inside the layer, and the layer counts
    every call it makes to each. Each trial records those counts beside
@@ -906,14 +928,14 @@ in AIOS unless open decision 1 says so.
 
 **What is reused, unchanged.** The library, the providers and
 `provider_config`; `ReplicatedMemory`; `run_v2_session`,
-`extract_validated` and the agents' prompts (their response formats
-moved, not changed); the datasets (`pilot_v1`;
-`pilot_v2`, the first 30 users of `users_v2` revision 4; `agents_n6`
-for option C) and `pilot_v1_schedule.json`; the variants and the
-faults; `run_history` and the trial records; the scorer (`probes.py`,
-`judge_free.py`, `metrics.py`) and the analyses (`pilot_analysis.py`,
-`bench_v2_analysis.py`, `stress_report.py`); `rejudge.py` for the
-judged scores.
+`extract_validated`, `parse_json_reply` and the agents' prompts (the
+response formats and the parser moved, not changed); the datasets
+(`pilot_v1`; `pilot_v2`, the first 30 users of `users_v2` revision 4;
+`agents_n6` for option C) and `pilot_v1_schedule.json`; the variants
+and the faults; `run_history` and the trial records; the scorer
+(`probes.py`, `judge_free.py`, `metrics.py`) and the analyses
+(`pilot_analysis.py`, `bench_v2_analysis.py`, `stress_report.py`);
+`rejudge.py` for the judged scores.
 
 **The cells.** Per backend; "shared" is the layer's locus.
 
