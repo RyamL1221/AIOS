@@ -109,7 +109,7 @@ that is the case for every benchmark v1 result, the pilot included.
     met on the way, the paper's motivation (M.1). From 2026-06-28 until
     Subtask 5 the kernel's retrieval returned no score and no ranking,
     so its relevance threshold filtered nothing; the workshop's runs
-    span that change and earlier code states (L.13).
+    "span several code states", which the documents do not date (L.13).
 11. The documents call two runs pre-registered (the re-validation and
     the pilot), and `DEV_STATUS.md` calls the Subtask 8 locus smoke's
     cell rule pre-registered too; that rule failed in 3 of its 6 model ×
@@ -239,7 +239,8 @@ users or wait for the judge.
   restates the value that is later revoked. **Fold.** A Mem0 row of one
   fact into which its extraction wrote another fact's value.
 - **Functional check.** Users 0 to 4, Qwen, no judge. **Smoke.** 30
-  users, Qwen. Neither is pre-registered.
+  users, Qwen. Neither is pre-registered; the sources disagree on one
+  smoke's rule, the Subtask 8 locus smoke's (L.9).
 - **Pooled.** Each user's mean of the Mem0 and in-house differences (the
   pilot's primary measure). **DiD.** Per user, the difference at H = 2
   minus the difference at H = 0.
@@ -256,7 +257,7 @@ or the document gives them.
 | provider smoke | `provider_smoke` | 5 | 30 `kernel_shared` trials per cell, 2 backends × 3 models, unpaired | `d7d8682` (Mem0), `9f06018` (in-house) | `c3dc42e` |
 | native smoke | `native_smoke` | 6 | 30 trials per cell, 2 native conditions × 3 models | `0c59a28` | `066bc29` |
 | `cc7` | `cost_check` | 7 | 10 GPT-4o trials × 2 conditions, "run to check the cost instrumentation, not to compare conditions" | `4d89763-dirty` (committed as `5f61bff`) | `52330ff-dirty` (committed as `f0e18ca`) |
-| locus smoke | `locus_smoke` | 8 | 30 trials per cell, 3 models, unpaired | `149aa7d` | `408ceea` |
+| locus smoke | `locus_smoke` | 8 | 30 trials per cell, 3 models, unpaired; a cell rule `DEV_STATUS.md` calls pre-registered (L.9) | `149aa7d` | `408ceea` |
 | `p9` | `pilot_v1` | 9 | 10 cells × 3 models × 30 users, sampled decoding; superseded | `c953fad-dirty` | `f9cf426-dirty` |
 | `p9d` | `pilot_v1_9d`, re-judged in `pilot_v1_9d_greedy` | 9d | 10 cells × 3 models × 30 users, fixed decoding for assistants and writers; Mem0's extraction at temperature 0.1, no seed | `7cc3774` (`7cc3774-dirty` on 27 cells: a `docs/MODELS.md` edit, no code) | `14b3c67`; re-judge `be72d70` |
 | `h10` | `heterogeneity_check` | 10 | 18 cells × 5 users, Qwen, no judge | `709d0b4`, `da25e2c` | `268e270`, `04631f6` |
@@ -310,7 +311,8 @@ in-house backend the two loci build identical blocks.**
   every judge-free outcome agrees.
 
 **C1.2 On benchmark v1 with reference agents (H = 0), kernel, replicated
-and native are not told apart.**
+and native are not told apart on the hybrid score; on the second
+judge's own score one per-backend difference excludes 0.**
 - Numbers: paired, other − kernel, 30 users, greedy judge, 12
   comparisons × 3 dimensions: no 95% interval excludes 0. The largest
   mean differences are −0.27 [−0.59, +0.06] (Qwen, Mem0, replicated,
@@ -380,13 +382,14 @@ pre-registered primary measure).**
   `PILOT.md`, committed and tagged before the first scored trial.
 - Rests on: 30 users (`pilot_v1`), Qwen and GPT-4o, hybrid judge scores.
   Grid: not stated.
-- Caveat: two variants carry the gap, one by construction (C3.2). The
-  score is the hybrid; the verdict is GO on the keyword score and on
-  each judge's own score too (L.1). The kernel's own Task and
-  Integration means are lower at H = 2 than at H = 0 in each model ×
-  backend cell, and its Profile in three of the four (C3.3; no test
-  stated). One cell was re-run whole (Qwen `native_mem0` at H = 0, not
-  a cell of this difference).
+- Caveat: the pilot names two variants as carrying the gap, one by
+  construction; for Qwen the stored table shows a third, the V1
+  consumer (C3.2). The score is the hybrid; the verdict is GO on the
+  keyword score and on each judge's own score too (L.1). The kernel's
+  own Task and Integration means are lower at H = 2 than at H = 0 in
+  each model × backend cell, and its Profile in three of the four
+  (C3.3; no test stated). One cell was re-run whole (Qwen `native_mem0`
+  at H = 0, not a cell of this difference).
 
 **C1.5 Under heterogeneity the kernel also scores above native
 (reported, not part of the rule).**
@@ -417,9 +420,9 @@ pre-registered primary measure).**
   smallest, the second judge's Profile, +0.60 [+0.14, +1.06]). So on
   Qwen the kernel − native gap at H = 2 holds on Integration under every
   score and on Profile under all but the keyword score, with lower ends
-  near 0. Its growth with H (the DiD) holds 0 on the keyword and the
-  primary judge's Profile, and reaches 0 on the second judge's
-  Integration.
+  near 0. Its growth with H (the DiD) has an interval that holds 0 for
+  Profile on the keyword score and on the primary judge's, and one that
+  reaches 0 for Integration on the second judge's.
 
 **C1.6 Judge-free, the kernel loses no shared memory and leaks nothing;
 replicated and native lose shared rows, and only native leaks.**
@@ -465,11 +468,11 @@ neither.**
   in-house recency 30 of 30 (20 of its answers named both values) and
   contradiction 20 of 30; native Mem0 0 of 30 on both. In the four
   kernel and replicated cells no audit kept a carrier of a revoked
-  value (120
-  revokes), and no block of their 720 probes held a retired row;
-  native's blocks held one in 168 of 180 probes in-house and 131 on
-  Mem0. Trials whose revoked value showed in any block or answer: kernel
-  and replicated 0 of 30 per cell; native in-house 10, native Mem0 11.
+  value (120 revokes), and no block of their 720 probes held a retired
+  row; native's blocks held one in 168 of 180 probes in-house and 131
+  on Mem0. Trials whose revoked value showed in any block or answer:
+  kernel and replicated 0 of 30 per cell; native in-house 10, native
+  Mem0 11.
 - Run: `s15b` (AIOS `ef3fdc9`, Cerebrum `64da5f7`), 180 user-trials, 0
   failed. The same holds for kernel and replicated on Graphiti (`s16`)
   and A-MEM (`s17a`): C2.5.
@@ -531,9 +534,9 @@ neither.**
 **C1.9 For the judged v2 score at H = 0 the documents give cell means;
 the paired locus differences they give are `s14b`'s kernel − native on
 Mem0 (p = 0.05) and `s17a`'s re-judge, where no interval excludes 0.**
-- Numbers (cell mean [95% t interval], 30 users, Qwen, hybrid). At k =
-  10 (`s15b`): in-house kernel 2.87 [2.50, 3.23], replicated 2.87 [2.50,
-  3.23], native 3.10 [2.73, 3.47]; Mem0 kernel 3.57 [3.25, 3.89],
+- Numbers (cell mean [95% t interval], 30 users, Qwen, hybrid). At
+  k = 10 (`s15b`): in-house kernel 2.87 [2.50, 3.23], replicated 2.87
+  [2.50, 3.23], native 3.10 [2.73, 3.47]; Mem0 kernel 3.57 [3.25, 3.89],
   replicated 3.60 [3.31, 3.89], native 3.00 [2.62, 3.38]. Graphiti
   (`s16`): 2.20 [1.99, 2.41], 1.97 [1.74, 2.20] and 2.00 [1.74, 2.26].
   With k = 30 for kernel and replicated (`s17`, `s17a`): in-house 2.57
@@ -734,13 +737,12 @@ pass the judge-free probes on four backends; the misses are on Mem0.**
   `f6d2646`).
 - Rests on: 30 users, Qwen, H = 0, judge-free. The grid replaces it.
 - Caveat: the Mem0 misses are two recall targets that the forget
-  deleted along with a Mem0 fold row (the fold is Mem0's, the
-  whole-row deletion the kernel's and the library's rule: L.6, "Open
-  decisions" 5), and recency rows written as transitions, whose answers
-  named the new value (C1.7). Under k = 30 (`s17`) the
-  rates are as at k = 10 but for recency on Mem0 (kernel 22 to 23,
-  replicated 23 to 21 of 30) and one kernel Graphiti recency probe (30
-  to 29).
+  deleted along with a Mem0 fold row (the fold is Mem0's, the whole-row
+  deletion the kernel's and the library's rule: L.6, "Open decisions"
+  5), and recency rows written as transitions, whose answers named the
+  new value (C1.7). Under k = 30 (`s17`) the rates are as at k = 10 but
+  for recency on Mem0 (kernel 22 to 23, replicated 23 to 21 of 30) and
+  one kernel Graphiti recency probe (30 to 29).
 
 **C2.6 How far native falls behind the kernel on v2 depends on the
 backend.**
@@ -766,16 +768,16 @@ backend.**
   on recency: a backend mechanism does there what the kernel's
   supersession does. Graphiti "marked invalid 52 of the kernel's 60
   retired rows, and 1 to 3 latest statements per cell" (`DEV_STATUS.md`,
-  Subtask 16), which native's filter would drop; in the exploration it
-  "went the wrong way" and invalidated the newer fact
-  (`GRAPHITI_BACKEND.md`, open risk 4). What remains on Graphiti is
-  deletion, 23 of 30, every failure an echo row. The filter itself is
-  the project's reading of Graphiti's documentation, adopted after the
-  smoke (L.4). Native's lenient recency is 1.00 in-house, 0.83 on
-  Graphiti without the filter and 0.93 on A-MEM, against 0.33, 0.37 and
-  0.57 strict, so the choice of rule bears on this contrast ("Open
-  decisions" 9). Native Mem0's numbers reflect Mem0's ranking, not the
-  locus (L.4).
+  Subtask 16); a filter on those marks drops such a latest statement.
+  In the exploration Graphiti "went the wrong way" and invalidated the
+  newer fact (`GRAPHITI_BACKEND.md`; its open risk 4). What remains on
+  Graphiti is deletion, 23 of 30, every failure an echo row. The filter
+  itself is the project's reading of Graphiti's documentation, adopted
+  after the smoke (L.4). Native's lenient recency is 1.00 in-house,
+  0.83 on Graphiti without the filter and 0.93 on A-MEM, against 0.33,
+  0.37 and 0.57 strict, so the choice of rule bears on this contrast
+  ("Open decisions" 9). Native Mem0's numbers reflect Mem0's ranking,
+  not the locus (L.4).
 
 **C2.7 Models: three at H = 0 on v1, two under heterogeneity, one
 everywhere else.**
@@ -857,8 +859,8 @@ deviating writer keeps private.**
   this file's reading of the stored cell table, no test stated): Task
   and Integration are lower at H = 2 than at H = 0 in all four model ×
   backend cells, and Profile in three; Qwen in-house Profile is 3.07 at
-  H = 0 and at H = 2 (3.13 at H = 1). For example GPT-4o in-house, 4.70
-  / 5.00 / 4.63 at H = 0 and 3.67 / 4.00 / 3.10 at H = 2. Under the
+  H = 0 and at H = 2 (3.13 at H = 1). For example GPT-4o in-house:
+  4.70 / 5.00 / 4.63 at H = 0 and 3.67 / 4.00 / 3.10 at H = 2. Under the
   `missing_metadata` fault (5 users) the kernel's `memories_missing`
   changes by +0.40 [−0.28, +1.08], as replicated's does, in-house and
   on Mem0: an interval that holds 0 at n = 5 (C3.10).
@@ -1022,10 +1024,9 @@ rows; the kernel's and replicated's none (5 users).**
 - Caveat: predicted by `STRESS_DIMENSIONS.md` ("As `HETEROGENEITY.md`
   predicts for V3, and a control: the kernel is not immune"): a V3
   writer's rows "default to private in every locus", and a V3 consumer
-  "changes
-  nothing in the kernel and replicated loci (visibility is enforced for
-  it)". Every `memories_missing` interval holds 0 at n = 5.
-  `DEV_STATUS.md` reads it as "As Subtask 10's V3".
+  "changes nothing in the kernel and replicated loci (visibility is
+  enforced for it)". Every `memories_missing` interval holds 0 at
+  n = 5. `DEV_STATUS.md` reads it as "As Subtask 10's V3".
 
 ## C4: mechanism
 
@@ -1169,8 +1170,8 @@ consumer): what the V4 construction is worth.**
   Profile (+0.03 and +0.00); together +0.27 [−0.05, +0.58], and
   Integration +0.30 [+0.04, +0.56]. The pilot's V1 consumer row (C3.2:
   H = 1, 3 users per model, no interval stated), where the replicated
-  and native consumers print the legacy block and the kernel's does not
-  apply: kernel − replicated Qwen +1.17 / +1.00, GPT-4o −0.17 / −0.17,
+  and native consumers print the legacy block and the kernel builds its
+  own: kernel − replicated Qwen +1.17 / +1.00, GPT-4o −0.17 / −0.17,
   with no memory missing in any locus; no document reads it, and it is
   not an ablation of the kernel. Earlier, unpaired: in the Subtask 5
   provider smoke the injected set stayed the same but the order changed
@@ -1283,12 +1284,11 @@ building the benchmark:
 - Before Subtask 1 (`RETRIEVAL_PATH.md`, "Behavior changes"): not
   every provider returned a `memory_id`, so the agents' upsert checks
   "found a match with no id and did neither an update nor a create"; a
-  row stored
-  without an `owner_agent` was hidden "from its own author", and "Rows
-  already stored without one stay hidden"; and "A shared row with the
-  same text as another agent's private row used to be dropped as a
-  duplicate, and then the private row was dropped too." No count is
-  stated.
+  row stored without an `owner_agent` was hidden "from its own author",
+  and "Rows already stored without one stay hidden"; and "A shared row
+  with the same text as another agent's private row used to be dropped
+  as a duplicate, and then the private row was dropped too." No count
+  is stated.
 - iCloud's conflict copies split `f17`'s library version: its `kamem`
   cells record `PIPELINE_VERSION` `565e7d5b…`, the later cells
   `138e9bd8…`, "for the same code" (fixed in AIOS `34833e7`); pytest
@@ -1479,14 +1479,16 @@ limits.**
   row still takes a slot": in 42 of the 90 replayed Mem0 fetches, and on
   Graphiti in 117 of the 180 probes of `s16`.
 - Graphiti's `search()` returns facts Graphiti has itself invalidated,
-  as documented: "Facts Graphiti has invalidated come back, as
-  `search()` returns them" (`GRAPHITI_BACKEND.md`). In `s16`, 32 of
-  native's 36 recency and contradiction failures held the stale value in
-  such a fact. Native Graphiti's validity filter (use only the facts
-  Graphiti holds true now) is "our reading of this documented intent,
-  not a documented call". It was decided after the smoke, and it raised
-  native's recency from 11 to 30 of 30 and its contradiction from 13 to
-  26 of 30 (exact McNemar p < 0.001 for both).
+  by design: Graphiti "invalidates a fact it reads as no longer true
+  rather than deleting it" (`NATIVE_USAGE.md`, "Validity"), and "Facts
+  Graphiti has invalidated come back, as `search()` returns them"
+  (`GRAPHITI_BACKEND.md`). In `s16`, 32 of native's 36 recency and
+  contradiction failures held the stale value in such a fact. Native
+  Graphiti's validity filter (use only the facts Graphiti holds true
+  now) is "our reading of this documented intent, not a documented
+  call". It was decided after the smoke, and it raised native's recency
+  from 11 to 30 of 30 and its contradiction from 13 to 26 of 30 (exact
+  McNemar p < 0.001 for both).
 - A V4 consumer applies its 0.5 threshold to whatever its backend
   returns as a score. On native Mem0 and native A-MEM that is a
   distance, so it keeps the farther rows. Documented, not changed.
@@ -1631,11 +1633,11 @@ that varies.**
   "by more than noise (0.25 on a judge mean)" investigated before
   moving on. The run's provenance calls it "A smoke, not a verdict"
   (L.14 gives the rule's outcome). The heterogeneity, stress and
-  ablation specs, with their predictions, were
-  committed before their code; the decision criteria D1 to D5 and the
-  judges' k rule were written before their runs. The v2 smokes have no
-  rule: "A smoke, not a verdict: no rule is pre-registered here." The
-  Graphiti and A-MEM pilots are "reported, not required".
+  ablation specs, with their predictions, were committed before their
+  code; the decision criteria D1 to D5 and the judges' k rule were
+  written before their runs. The v2 smokes have no rule: "A smoke, not a
+  verdict: no rule is pre-registered here." The Graphiti and A-MEM
+  pilots are "reported, not required".
 - Rests on: the documents.
 
 **L.10 The datasets.**
@@ -1715,11 +1717,10 @@ the pilot's answer key is uneven.**
   is read against it on the same users"; "a cell can fall below it"
   (every error of the functional check's in-house cells with memory was
   of a value the block held, 26 of 26); native Mem0 under `wrong_user`
-  "scored 1 of 10: below the 150-user 0.18, above its five users' own 0
-  of 10". No other model's lean is measured.
-  `METRICS.md`, "Known limits": decision accuracy is not comparable
-  between models, or with 0.25, without each model's letters and its
-  accuracy without memory.
+  "scored 1 of 10: below the 150-user 0.18, above its five users' own
+  0 of 10". No other model's lean is measured. `METRICS.md`, "Known
+  limits": decision accuracy is not comparable between models, or with
+  0.25, without each model's letters and its accuracy without memory.
 
 **L.12 The decision items' no-memory criterion (D2) was not met, and is
 recorded as a deviation.**
@@ -1737,10 +1738,9 @@ recorded as a deviation.**
   0 of 10 at 0.18 has probability 0.14, so the functional check's 0 of
   10 fits the five users' draw. D2 stays recorded as not met; this check
   does not replace it." D1, D3, D4 and D5 were met on both backends
-  (C1.10). "Qwen
-  answered alike wherever the prompt was the same": over the 26 cells,
-  the 236 pairs of answers to one item with the same block text name the
-  same letter.
+  (C1.10). "Qwen answered alike wherever the prompt was the same": over
+  the 26 cells, the 236 pairs of answers to one item with the same block
+  text name the same letter.
 
 **L.13 From 2026-06-28 until Subtask 5 the kernel's retrieval had no
 score and no ranking, so its threshold filtered nothing; in the
@@ -1916,9 +1916,8 @@ the memory system served.**
   "`backend_llm` Azure gpt-4o, temperature 0.1, no seed (Mem0's own
   extraction is not under the fixed decoding)", before Subtask 10's fix
   (C1.2). `MODELS.md` also lists neither the second judge nor the
-  backend LLM of
-  Graphiti and A-MEM, though it says "Changing an entry here needs a new
-  baseline."
+  backend LLM of Graphiti and A-MEM, though it says "Changing an entry
+  here needs a new baseline."
 - What native stores. Known issue 13: the native conditions differ "in
   what they store, not only in who stores it: natural-language
   renderings (and, for Mem0, gpt-4o-extracted facts) rather than the
@@ -1960,7 +1959,7 @@ the memory system served.**
   provenance" (`DEV_STATUS.md`, Subtask 18).
 - Known issue 48: Qwen's speed on this laptop "moves more than twofold"
   (48 to 131 ms per completion token in the `s17` run), so a cell's time
-  per user is not comparable across runs (K.4, K.6).
+  per user is not comparable across runs (K.3, K.4, K.6).
 - Known issue 52: embedding scores of the same row and query differ by
   up to 1.1e-6 between runs (254 of 5,646 rows); "no in-house block
   compared in Subtask 18 differed for it".
@@ -2069,7 +2068,8 @@ Subtask 9 every Mem0 locus pays it.**
   about 0.007 USD". The pilot: "Mem0 extraction is 0.05-0.07 USD per
   Mem0 trial in every locus".
 - Run: `cc7` (AIOS `4d89763-dirty`, Cerebrum `52330ff-dirty`); `p9d`
-  (AIOS `7cc3774`, Cerebrum `14b3c67`, re-judge `be72d70`); `pv1`.
+  (AIOS `7cc3774`, `-dirty` on 27 cells, a docs edit; Cerebrum
+  `14b3c67`, re-judge `be72d70`); `pv1`.
 - Rests on: 10 trials (Subtask 7); 30 users per cell (v1).
 - Caveat: the 11× is not a kernel − native cost of the system as later
   run. In Subtask 7 the kernel's Mem0 stored verbatim (`infer=False`, 0
@@ -2108,8 +2108,8 @@ least of the extracting backends.**
   5.0 calls (`DEV_STATUS.md`: "5 a user") and $0.012 to $0.014
   (`pa17`); Graphiti (`pg16e`) 15.7 to 19.3 calls and $0.085 to $0.10
   at H = 0 and 2 with its H = 2 agent cells left out (`AMEM_BACKEND.md`,
-  `DEV_STATUS.md`), or 17.7 to 19.3 calls and 0.094 to 0.101 USD at H =
-  0 (`GRAPHITI_BACKEND.md`); Mem0 3.0 calls and $0.064 to $0.065
+  `DEV_STATUS.md`), or 17.7 to 19.3 calls and 0.094 to 0.101 USD at
+  H = 0 (`GRAPHITI_BACKEND.md`); Mem0 3.0 calls and $0.064 to $0.065
   (`pv1`).
 - Run: `s16` (AIOS `d9ca01f`, Cerebrum `c3f5ade`); `s15b` (AIOS
   `ef3fdc9`, Cerebrum `64da5f7`); `s17` (AIOS `612c989`, Cerebrum
@@ -2130,7 +2130,8 @@ least of the extracting backends.**
   probe; legacy formatting +3.43 [−21.34, +28.21], not told from 0
   (`f19b`).
 - Run: `s17`; `f19b`.
-- Rests on: 30 users (`s17`); 5 users (`f19b`).
+- Rests on: 30 users (`s17`); 5 users (`f19b`). The grid replaces the
+  `s17` part and scores the `f19b` rows.
 - Caveat: "Time per user did not measure k": the kernel cells took 99
   and 133 s a user against 77 and 95 because Qwen generated more slowly
   that afternoon.
@@ -2274,7 +2275,7 @@ here.
 4. **Native's place in the locus claim.** Kernel − native was never part
    of a rule; native differs by design in what it retrieves (k, order,
    no budget) and in what it does (no forget across agents, no
-   supersession) (L.4), several of its results hold by construction
+   supersession; L.4), several of its results hold by construction
    (L.5), and known issue 13 is stale (L.17). Options: report kernel −
    native as the secondary contrast, as `PILOT.md` does; or report
    native as the deployment reference only, with its judge-free failures
@@ -2328,10 +2329,9 @@ here.
     backend LLM), known issue 13, `SHARED_MEMORY_SYSTEM.md`,
     `PILOT.md`'s and `DEV_STATUS.md`'s "about 0" for the other variants
     against the stored V1 consumer row, and where Ollama cut a prompt
-    (L.17).
-    Options: correct them; or cite `DEV_STATUS.md` and the run records
-    in their place. Bears on the paper's methods section, C3.2, C4.8
-    and L.17.
+    (L.17). Options: correct them; or cite `DEV_STATUS.md` and the run
+    records in their place. Bears on the paper's methods section, C3.2,
+    C4.8 and L.17.
 13. **Cost claims.** The 11× of Subtask 7 compares verbatim storage with
     extraction on 10 trials of a check "not to compare conditions", and
     since Subtask 9 every Mem0 locus extracts (K.1). Prices come from
