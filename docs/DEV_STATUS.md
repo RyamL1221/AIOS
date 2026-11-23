@@ -4240,6 +4240,191 @@ notes stay where they were written, listed here):
    which Subtask 23 would add to the report; (c) both. Recommended:
    (c).
 
+## Spend to date
+
+API spend of the NeurIPS-2027 work to 2026-11-23 (Subtasks 3 to 20),
+from the token counts the runs recorded; no run was made for it. In
+all $667.83: $615.08 from runs archived in `repo-artifacts` (both
+repos), $52.75 from runs recorded in Cerebrum `results/` and never
+archived (marked \* below). By model: gpt-4o $590.40 (of which the
+memory backends' extraction $574.12), GPT-5.4 $64.71, Claude Sonnet
+5.5 $12.71. The runs under "Not priced" spent more, by amounts not
+recorded.
+
+**Method.**
+- Sources, each counted once across every copy: the trials' token
+  fields (`token_usage`, `writer_tokens`, `backend_llm_tokens` from
+  Subtask 7; `judges[*].token_usage` from Subtask 20); the kernel
+  logs' usage line for every call the kernel's LLM adapter served,
+  tied to its model by its batch and to the judge, the harness or the
+  agents by who queued it; the judge study's judgment files; and
+  `graphiti_risks.json`.
+- The assistant's, the writers' and the judge's calls are taken from
+  the kernel logs. Where the trial records hold them too they agree
+  exactly (`pilot_v1`, `pilot_v1_9d`, `pilot_v1_hetero`,
+  `s9d_determinism`; the Subtask 20 judge log's 3,400 calls equal the
+  judgment files and the re-judge records). The memory backends call
+  LiteLLM directly, so their extraction is taken from the records.
+- "User generation" is the harness's own synthetic users (`synth.py`,
+  through the kernel), before the fixed dataset of Subtask 9.
+- Stopped, failed and superseded runs are included, as far as their
+  records or logs were kept. Local models (Ollama) cost 0. The
+  mutation runs made no Azure or Anthropic call.
+- Prices per million tokens in / out, the ones used above: gpt-4o
+  $2.50 / $10 (`prices.yaml`), GPT-5.4 $2.50 / $15 (OpenAI's list;
+  Azure's own not read), Claude Sonnet 5.5 $1 / $5 (the Batch API).
+  No cached-input discount is applied.
+
+| Subtask | Run (results folder; run-id prefixes) | Model, use | Tokens in | Tokens out | Cost |
+|---|---|---|--:|--:|--:|
+| 3 | `revalidation` | gpt-4o assistant, writers | 200,440 | 203,097 | $2.53 |
+| 3 | `revalidation` | gpt-4o user generation | 357,773 | 160,361 | $2.50 |
+| 3 | `revalidation` | GPT-5.4 judge | 999,374 | 204,674 | $5.57 |
+| 4 | AIOS `subtask04` (a) | gpt-4o assistant, writers | 8 | 10 | $0.00 |
+| 4 | AIOS `subtask04` (a) | GPT-5.4 judge | 817,413 | 176,871 | $4.70 |
+| 5 | `provider_smoke` | gpt-4o assistant, writers | 36,541 | 44,097 | $0.53 |
+| 5 | `provider_smoke` | gpt-4o user generation | 47,413 | 19,749 | $0.32 |
+| 5 | `provider_smoke` | GPT-5.4 judge | 185,419 | 40,271 | $1.07 |
+| 6 | `native_smoke` | gpt-4o assistant, writers | 34,941 | 45,192 | $0.54 |
+| 6 | `native_smoke` | gpt-4o user generation | 47,239 | 19,658 | $0.31 |
+| 6 | `native_smoke` | GPT-5.4 judge | 191,504 | 40,608 | $1.09 |
+| 7 | `cost_check` | gpt-4o assistant, writers | 12,082 | 13,643 | $0.17 |
+| 7 | `cost_check` | gpt-4o extraction | 235,801 | 6,912 | $0.66 |
+| 7 | `cost_check` | gpt-4o user generation | 15,765 | 6,541 | $0.10 |
+| 7 | `cost_check` | GPT-5.4 judge | 22,842 | 4,540 | $0.13 |
+| 8 | `locus_smoke` | gpt-4o assistant, writers | 72,287 | 88,656 | $1.07 |
+| 8 | `locus_smoke` | gpt-4o user generation | 94,437 | 38,636 | $0.62 |
+| 8 | `locus_smoke` | GPT-5.4 judge | 394,074 | 86,612 | $2.28 |
+| 8 | `locus_dry` \* | gpt-4o assistant, writers | 1,776 | 2,135 | $0.03 |
+| 8 | `locus_dry` \* | gpt-4o user generation | 2,339 | 990 | $0.02 |
+| 8 | `locus_dry` \* | GPT-5.4 judge | 8,880 | 1,908 | $0.05 |
+| 9 | `fact_check_s9_first` (f) | gpt-4o assistant, writers | 5,150 | 6,376 | $0.08 |
+| 9 | `fact_check_s9_first` (f) | gpt-4o extraction | 81,706 | 2,946 | $0.23 |
+| 9 | `pilot_v1` | gpt-4o assistant, writers | 139,706 | 145,237 | $1.80 |
+| 9 | `pilot_v1` | gpt-4o extraction | 8,412,528 | 197,962 | $23.01 |
+| 9 | `pilot_v1` | GPT-5.4 judge | 839,473 | 188,546 | $4.93 |
+| 9 | `fact_check_s9` \* (d) | gpt-4o assistant, writers | 18,203 | 17,780 | $0.22 |
+| 9 | `fact_check_s9` \* (d) | gpt-4o extraction | 468,393 | 10,301 | $1.27 |
+| 9 | `fact_check_s9` \* (d) | GPT-5.4 judge | 33,387 | 7,378 | $0.19 |
+| 9d | AIOS `s9d` (f) | gpt-4o assistant, writers | 16 | 20 | $0.00 |
+| 9d | `pilot_v1_9d` | gpt-4o assistant, writers | 133,311 | 146,122 | $1.79 |
+| 9d | `pilot_v1_9d` | gpt-4o extraction | 8,440,395 | 200,328 | $23.10 |
+| 9d | `pilot_v1_9d` | GPT-5.4 judge | 825,723 | 180,877 | $4.78 |
+| 9d | `pilot_v1_9d_contaminated` (b) | gpt-4o extraction | 707,674 | 17,822 | $1.95 |
+| 9d | `pilot_v1_9d_contaminated` (b) | GPT-5.4 agents | 2,843 | 749 | $0.02 |
+| 9d | `pilot_v1_9d_contaminated` (b) | GPT-5.4 judge | 52,156 | 11,253 | $0.30 |
+| 9d | `pilot_v1_9d_greedy` (c) | GPT-5.4 judge | 1,006,301 | 219,023 | $5.80 |
+| 9d | `s9d_determinism` \* | gpt-4o assistant, writers | 5,184 | 5,706 | $0.07 |
+| 9d | `s9d_determinism` \* | GPT-5.4 judge | 20,068 | 4,201 | $0.11 |
+| 10 | `heterogeneity_check` | gpt-4o extraction | 876,258 | 19,400 | $2.38 |
+| 10 | `heterogeneity_check_interrupted` (f) | gpt-4o extraction | 23,602 | 513 | $0.06 |
+| 11 | `pilot_v1_hetero` | gpt-4o assistant, writers | 273,987 | 289,685 | $3.58 |
+| 11 | `pilot_v1_hetero` | gpt-4o extraction | 12,634,672 | 320,977 | $34.80 |
+| 11 | `pilot_v1_hetero` | GPT-5.4 judge | 1,125,795 | 234,883 | $6.34 |
+| 14 | `bench_v2_functional`; f14, f14b, f14c | gpt-4o extraction | 20,552,785 | 192,913 | $53.31 |
+| 14 | `bench_v2_smoke`; s14b | gpt-4o extraction | 17,012,678 | 163,156 | $44.16 |
+| 14 | `bench_v2_smoke`; s14b | GPT-5.4 judge | 224,945 | 45,433 | $1.24 |
+| 15 | `bench_v2_functional_a3`; f15a | gpt-4o extraction | 7,066,646 | 54,413 | $18.21 |
+| 15 | `bench_v2_functional_a4`; f15b, f15b2 | gpt-4o extraction | 9,892,269 | 76,552 | $25.50 |
+| 15 | `bench_v2_smoke_a4`; s15b | gpt-4o extraction | 12,573,830 | 99,582 | $32.43 |
+| 15 | `bench_v2_smoke_a4`; s15b | GPT-5.4 judge | 193,735 | 40,039 | $1.08 |
+| 15 | `bench_v2_smoke_a4_s15`; s15 | gpt-4o extraction | 4,191,376 | 33,152 | $10.81 |
+| 15 | `bench_v2_smoke_a4_s15`; s15 | GPT-5.4 judge | 32,660 | 6,738 | $0.18 |
+| 15 | `bench_v2_try` \*; f15b | gpt-4o extraction | 447,639 | 3,412 | $1.15 |
+| 16 | AIOS `s16` | gpt-4o extraction | 46,808 | 1,116 | $0.13 |
+| 16 | `bench_v2_functional_graphiti_attempt1`; f16 | gpt-4o extraction | 1,487,231 | 31,536 | $4.03 |
+| 16 | `bench_v2_functional_graphiti_failed_cell`; f16b | gpt-4o extraction | 748,325 | 16,015 | $2.03 |
+| 16 | `bench_v2_functional_graphiti_failed_cell2`; f16c | gpt-4o extraction | 749,482 | 15,943 | $2.03 |
+| 16 | `bench_v2_smoke_graphiti`; s16 | gpt-4o extraction | 13,831,749 | 314,191 | $37.72 |
+| 16 | `bench_v2_smoke_graphiti`; s16 | GPT-5.4 judge | 100,392 | 20,176 | $0.55 |
+| 16 | `pilot_v1_graphiti_aborted_pg16` (f) | GPT-5.4 judge | 25,473 | 5,199 | $0.14 |
+| 16 | `pilot_v1_graphiti_aborted_pg16b` (f) | GPT-5.4 judge | 13,449 | 2,630 | $0.07 |
+| 16 | `pilot_v1_graphiti_costcheck`; pg16c | gpt-4o extraction | 31,912 | 1,693 | $0.10 |
+| 16 | `pilot_v1_graphiti_costcheck`; pg16c | GPT-5.4 judge | 1,160 | 292 | $0.01 |
+| 16 | `pilot_v1_graphiti_try`; pg16t | gpt-4o extraction | 198,626 | 11,943 | $0.62 |
+| 16 | `pilot_v1_graphiti_try`; pg16t | GPT-5.4 judge | 6,825 | 1,446 | $0.04 |
+| 16 | `s16_try`; g16try1 | gpt-4o extraction | 484,771 | 10,356 | $1.32 |
+| 16 | `bench_v2_functional_graphiti` \*; f16b, f16c | gpt-4o extraction | 4,604,266 | 100,475 | $12.52 |
+| 16 | `bench_v2_functional_graphiti_a5` \*; f16d | gpt-4o extraction | 6,087,107 | 132,028 | $16.54 |
+| 16 | `bench_v2_functional_graphiti_a5b` \*; f16e | gpt-4o extraction | 1,512,106 | 33,531 | $4.12 |
+| 16 | `pilot_v1_graphiti` \*; pg16e | gpt-4o extraction | 5,127,720 | 255,831 | $15.38 |
+| 16 | `pilot_v1_graphiti` \*; pg16e | GPT-5.4 judge | 195,542 | 39,469 | $1.08 |
+| 17 | `bench_v2_functional_amem`; f17 | gpt-4o extraction | 1,636,642 | 311,170 | $7.20 |
+| 17 | `bench_v2_smoke_amem`; s17a | gpt-4o extraction | 2,089,295 | 399,641 | $9.22 |
+| 17 | `bench_v2_smoke_amem`; s17a | GPT-5.4 judge | 93,212 | 19,236 | $0.52 |
+| 17 | `bench_v2_smoke_s17`; s17, s17b | gpt-4o extraction | 22,210,572 | 381,265 | $59.34 |
+| 17 | `bench_v2_smoke_s17`; s17, s17b | GPT-5.4 judge | 239,407 | 49,223 | $1.34 |
+| 17 | `pilot_v1_amem`; pa17 | gpt-4o extraction | 608,117 | 93,832 | $2.46 |
+| 17 | `pilot_v1_amem`; pa17 | GPT-5.4 judge | 182,285 | 37,032 | $1.01 |
+| 17 | `pilot_v1_graphiti_native_filter`; pg17n | gpt-4o extraction | 1,707,706 | 86,678 | $5.14 |
+| 17 | `pilot_v1_graphiti_native_filter`; pg17n | GPT-5.4 judge | 64,246 | 12,978 | $0.36 |
+| 18 | `scheduler_check_s18`; s18sched | GPT-5.4 judge | 19,998 | 4,187 | $0.11 |
+| 18 | `stress_functional_f18b`; f18b to f18e, f18r1 to f18r31 | gpt-4o extraction | 40,148,211 | 280,649 | $103.18 |
+| 20 | `decision_functional_s20_mem0`; d20a, d20m | gpt-4o extraction | 6,982,522 | 55,668 | $18.01 |
+| 20 | `judge_reliability_s20` (e) | Claude second judge | 3,505,382 | 850,628 | $7.76 |
+| 20 | `judge_reliability_s20` (e) | GPT-5.4 judge | 2,125,847 | 440,848 | $11.93 |
+| 20 | `s20_rejudge` (e); pa17, s17a | Claude second judge | 2,261,458 | 538,502 | $4.95 |
+| 20 | `s20_rejudge` (e); pa17, s17a | GPT-5.4 judge | 1,370,502 | 284,410 | $7.69 |
+
+(a) The re-judge of Subtask 3's 900 responses (Cerebrum
+`revalidation_v2`, whose folder holds no kernel log).
+(b) Its kernel log also holds `pilot_v1_9d`'s kmem0 `kernel_private`
+Qwen cell (30 judge calls), whose log in `pilot_v1_9d` the rerun
+replaced. The GPT-5.4 agents' calls are the contamination (4 of them
+batched with the judge).
+(c) The greedy judge's re-judge and retest of `pilot_v1_9d`.
+(d) The agents' calls are from the trial records (100 calls; the
+kernel logs hold 65).
+(e) From the judgment files (`judge_reliability_s20`) and the trial
+records (`s20_rejudge`).
+(f) Incomplete: see "Not priced".
+
+**Totals** (from the unrounded row costs; the rounded rows above
+sum to $667.82).
+
+| Model, use | Tokens in | Tokens out | Archived | Not archived | Cost |
+|---|--:|--:|--:|--:|--:|
+| gpt-4o extraction | 213,911,420 | 3,933,902 | $523.14 | $50.97 | $574.12 |
+| gpt-4o assistant, writers | 933,632 | 1,007,756 | $12.09 | $0.32 | $12.41 |
+| gpt-4o user generation | 564,966 | 245,935 | $3.86 | $0.02 | $3.87 |
+| **gpt-4o, all uses** | 215,410,018 | 5,187,593 | $539.09 | $51.31 | $590.40 |
+| GPT-5.4 judge | 11,412,087 | 2,410,981 | $63.26 | $1.44 | $64.69 |
+| GPT-5.4 agents | 2,843 | 749 | $0.02 | $0.00 | $0.02 |
+| **GPT-5.4, all uses** | 11,414,930 | 2,411,730 | $63.27 | $1.44 | $64.71 |
+| **Claude Sonnet 5.5** | 5,766,840 | 1,389,130 | $12.71 | $0.00 | $12.71 |
+| **Overall** | 232,591,788 | 8,988,453 | $615.08 | $52.75 | $667.83 |
+
+**Not priced** (no usage recorded, or records incomplete; not
+estimated). Call counts are from the LiteLLM log, two lines per call.
+- `users_v1` generation (Subtask 9, `users_v1_generate.log`): 623
+  gpt-4o calls, no usage logged.
+- `users_v2` revisions 1 to 3 (Subtasks 14 and 15,
+  `users_v2_revisions/`): 179 gpt-4o calls (r2), 304 (r3 draft) and
+  344 (r3); r1's log was not archived. Revision 4 made no LLM call.
+- `bench_v2_functional_a4_killed_f15b` (15): 73 Mem0 gpt-4o calls,
+  killed before a trial was written.
+- `pilot_v1_graphiti_aborted_pg16` and `_pg16b` (16): 452 and 230
+  Graphiti gpt-4o calls; their 23 and 12 judge calls are priced.
+- AIOS `s9d` (9d): 39 Mem0 gpt-4o calls in the kernel smokes; its 2
+  assistant calls are priced.
+- `heterogeneity_check_interrupted` (10): 15 gpt-4o calls in its log,
+  3 of them in finished trials' records and priced.
+- `fact_check_s9_first` (9): the judge calls of its 15 judged trials
+  (no kernel log archived); its agents' and extraction calls are
+  priced from the records.
+- `fact_check_s9` \* (9): 5 of its 40 judge calls are missing from its
+  kernel logs.
+- `pilot_v1_9d_contaminated` (9d): 12 calls in batches that mixed
+  GPT-5.4 and Qwen (1,647 in, 1,257 out), not tied to one model.
+- Subtask 9c (`s9c/`): its scripts' direct GPT-5.4 judge calls (240
+  ablation answers and the top-5 re-judges), no usage recorded.
+- Subtask 20: the Claude one-token check, the two-request batch and
+  the Azure probes have no record in the archive.
+- A cell killed and rerun is counted only as far as its partial
+  results or logs were archived.
+- Subtasks 1, 2 and 4b archived no run; Subtask 19's runs called only
+  local models.
+
 ## Test baselines
 
 These fail on `workshop-postrun` too and are not caused by later work.
